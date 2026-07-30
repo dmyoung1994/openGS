@@ -19,7 +19,7 @@ import { surface } from '../physics/groundInteraction.js';
 // TURF DATA texture (muted color + blade-height code) on the GPU. Density and
 // height fall off with distance from the camera (LOD); off-turf cells collapse.
 export class Grass {
-  constructor({ terrain, camera, tileSize = 8, gridPerTile = 112, radius = 60 }) {
+  constructor({ terrain, camera, tileSize = 8, gridPerTile = 192, radius = 60 }) {
     this.terrain = terrain;
     this.camera = camera;
     this.tileSize = tileSize;
