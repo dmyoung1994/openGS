@@ -157,7 +157,7 @@ export class Grass {
     const wcz = origin.z.div(C.cell).add(czi);
     const cellv = vec2(wcx, wcz);
     const hA = hash2(cellv, 0.0), hB = hash2(cellv, 1.7), hC = hash2(cellv, 3.3);
-    const hD = hash2(cellv, 5.1), hE = hash2(cellv, 7.7);
+    const hD = hash2(cellv, 5.1), hE = hash2(cellv, 7.7), hF = hash2(cellv, 9.3);
 
     const worldX = wcx.add(0.5).mul(C.cell).add(hA.sub(0.5).mul(C.cell * 0.9));
     const worldZ = wcz.add(0.5).mul(C.cell).add(hB.sub(0.5).mul(C.cell * 0.9));
@@ -171,6 +171,18 @@ export class Grass {
     const baseColor = data.xyz;
     const hMax = data.w.mul(MAX_H);
 
+    // Two-tier mown canopy. Short upright blades are 2D slivers you can see the
+    // ground between; real mown turf interweaves. On mown surfaces (fairway / tee
+    // / green, small hMax) ~half the blades become a WIDE, short, laid-over "mat"
+    // layer (random orientation -> overlaps and closes the canopy), and the rest
+    // are wider, gently laid-over uprights. Rough/deepRough keep tall wispy blades.
+    const isMown = hMax.lessThan(0.07);
+    const isMat = hF.lessThan(0.55);
+    const matSel = isMown.and(isMat);
+    const widthMul = matSel.select(3.4, isMown.select(1.6, 1.0));
+    const heightMul = matSel.select(0.5, 1.0);
+    const leanAmt = matSel.select(0.95, isMown.select(0.30, smoothstep(0.05, 0.25, hMax).mul(0.5)));
+
     // Distance LOD (from the actual camera) + liveness.
     const dx = worldX.sub(cameraPosition.x), dz = worldZ.sub(cameraPosition.z);
     const dist = dx.mul(dx).add(dz.mul(dz)).sqrt();
@@ -181,20 +193,20 @@ export class Grass {
     const t = positionLocal.y;
     const side = positionLocal.x;
     const distShort = float(1.0).sub(smoothstep(C.radius * 0.4, C.radius, dist).mul(0.4));
-    const H = hMax.mul(float(0.6).add(hD.mul(0.5))).mul(distShort).mul(aliveF);
+    const H = hMax.mul(float(0.6).add(hD.mul(0.5))).mul(distShort).mul(aliveF).mul(heightMul);
 
     // Blade width taper + grazing-angle widening.
     const orient = hA.mul(6.2831853);
     const cA = orient.cos(), sA = orient.sin();
-    const wInst = mix(0.008, 0.013, hE);
+    const wInst = mix(0.008, 0.013, hE).mul(widthMul);
     const wBase = wInst.mul(float(1.0).sub(smoothstep(0.55, 1.0, t)));
     const facing = vec2(sA.negate(), cA);
     const viewDir = vec2(dx.negate(), dz.negate()).div(dist.max(0.001));
     const edge = float(1.0).sub(facing.dot(viewDir).abs());
     const w = wBase.mul(float(1.0).add(edge.mul(edge).mul(2.0)));
 
-    // Lean + wind.
-    const lean = smoothstep(0.05, 0.25, hMax).mul(0.5);
+    // Lean + wind. (leanAmt lays mown blades over so they overlap/interweave.)
+    const lean = leanAmt;
     const la = hB.mul(6.2831853);
     const leanV = vec2(la.cos(), la.sin()).mul(lean.mul(float(0.5).add(hD)));
     const stiff = float(0.7).add(hE.mul(0.6));
