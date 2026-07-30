@@ -65,6 +65,8 @@ export class SceneManager {
     const bloomPass = bloom(aa, 0.11, 0.6, 0.9);
     let rgb = aa.rgb.add(bloomPass);
     rgb = saturation(rgb, 0.97);
+    // Gentle contrast around linear mid-grey for a filmic, less-flat look.
+    rgb = rgb.sub(0.18).mul(1.08).add(0.18).max(0.0);
     const d = screenUV.sub(0.5);
     const vignette = d.dot(d).mul(2.4 * 0.3).oneMinus();
     rgb = rgb.mul(vignette);
@@ -80,7 +82,9 @@ export class SceneManager {
     const hdr = await new HDRLoader().loadAsync(url);
     hdr.mapping = EquirectangularReflectionMapping;
     this.scene.environment = hdr;
-    this.scene.environmentIntensity = 1.0;
+    // Pull the IBL fill down so the warm directional key and its shadows dominate
+    // — deeper, more contrasty light (less flat/overcast).
+    this.scene.environmentIntensity = 0.82;
     if (asBackground) {
       this.scene.background = hdr;
       this.scene.backgroundBlurriness = 0.0;

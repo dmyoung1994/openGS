@@ -10,7 +10,8 @@ import { makeEnv } from './physics/ballistics.js';
 import { airDensity } from './physics/constants.js';
 import { MPH_TO_MS, DEG_TO_RAD, mph as toMph, M_TO_YARD } from './util/units.js';
 
-const SUN = new Vector3(-0.5, 0.9, 0.35).normalize();
+// Lower, warmer afternoon sun angle -> long shadows and terrain modeling.
+const SUN = new Vector3(-0.55, 0.5, 0.32).normalize();
 
 const app = document.getElementById('app');
 const sm = new SceneManager(app);
