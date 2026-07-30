@@ -1,7 +1,7 @@
 import {
   InstancedBufferGeometry, BufferAttribute, Mesh, Group, MeshBasicNodeMaterial,
   DataTexture, RedFormat, RGBAFormat, FloatType, UnsignedByteType, NearestFilter,
-  Color, Vector2, Vector3, DoubleSide, Sphere, SRGBColorSpace,
+  Color, Vector2, Vector3, DoubleSide, Sphere, Frustum, Matrix4, SRGBColorSpace,
 } from 'three';
 import {
   instanceIndex, positionLocal, cameraPosition, modelWorldMatrix, uniform, varying,
@@ -19,7 +19,7 @@ import { surface } from '../physics/groundInteraction.js';
 // TURF DATA texture (muted color + blade-height code) on the GPU. Density and
 // height fall off with distance from the camera (LOD); off-turf cells collapse.
 export class Grass {
-  constructor({ terrain, camera, tileSize = 8, gridPerTile = 64, radius = 60 }) {
+  constructor({ terrain, camera, tileSize = 8, gridPerTile = 96, radius = 60 }) {
     this.terrain = terrain;
     this.camera = camera;
     this.tileSize = tileSize;
@@ -46,6 +46,8 @@ export class Grass {
       heightTex, dataTex,
     };
 
+    this._frustum = new Frustum();
+    this._pm = new Matrix4();
     this.mesh = new Group();
     this.mesh.name = 'grass';
     this.tiles = [];
@@ -90,7 +92,7 @@ export class Grass {
   // grass turf. Meshes share geometry/material; only their position differs.
   _buildTiles() {
     const C = this._const;
-    const SEG = 4, rows = SEG + 1;
+    const SEG = 3, rows = SEG + 1;
     const basePos = [];
     for (let r = 0; r < rows; r++) { const y = r / SEG; basePos.push(-0.5, y, 0, 0.5, y, 0); }
     const idx = [];
@@ -119,10 +121,11 @@ export class Grass {
         if (!this._tileHasGrass(tx, tz, S)) continue;
         const m = new Mesh(geo, mat);
         m.position.set(tx, 0, tz);
-        m.frustumCulled = true;
+        m.frustumCulled = false;   // we cull manually (distance + frustum) in update()
         m.matrixAutoUpdate = false;
         m.updateMatrix();
         m.updateMatrixWorld(true);
+        m._sphere = new Sphere(new Vector3(tx + S / 2, 2.5, tz + S / 2), S * 0.71 + 6);
         this.mesh.add(m);
         this.tiles.push(m);
       }
@@ -234,16 +237,13 @@ export class Grass {
     return mat;
   }
 
+  // Nearest height fetch (one texel). The grid is 2 m; blades are short and
+  // dense, so nearest is cheap and the terracing is imperceptible under canopy.
   _sampleHeight(uvx, uvz) {
     const C = this._const;
-    const gx = uvx.mul(C.nx - 1).clamp(0.0, C.nx - 1.001);
-    const gz = uvz.mul(C.nz - 1).clamp(0.0, C.nz - 1.001);
-    const ix = gx.floor(), iz = gz.floor();
-    const fx = gx.sub(ix), fz = gz.sub(iz);
-    const load = (a, b) => textureLoad(C.heightTex, ivec2(int(a), int(b))).x;
-    const h00 = load(ix, iz), h10 = load(ix.add(1), iz);
-    const h01 = load(ix, iz.add(1)), h11 = load(ix.add(1), iz.add(1));
-    return mix(mix(h00, h10, fx), mix(h01, h11, fx), fz);
+    const ix = int(uvx.mul(C.nx - 1).add(0.5).clamp(0.0, C.nx - 1));
+    const iz = int(uvz.mul(C.nz - 1).add(0.5).clamp(0.0, C.nz - 1));
+    return textureLoad(C.heightTex, ivec2(ix, iz)).x;
   }
 
   _sampleData(uvx, uvz) {
@@ -256,16 +256,18 @@ export class Grass {
   update(t, camera) {
     this.uTime.value = t;
     this.uGust.value = 0.5 + 0.5 * Math.sin(t * 0.35);
-    // Distance cull: hide tiles beyond the LOD radius so far tiles inside the
-    // frustum don't draw (the textured ground carries the distance). The engine
-    // handles view-frustum culling of the remaining near tiles for free.
+    // Cull manually = distance (LOD radius) AND view frustum. The engine's own
+    // per-object cull wasn't reducing these tiles, so we own it: only tiles the
+    // camera is actually looking at (and within range) stay visible.
     const cam = camera || this.camera;
+    cam.updateMatrixWorld();
+    this._pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    this._frustum.setFromProjectionMatrix(this._pm);
     const cx = cam.position.x, cz = cam.position.z;
-    const S = this.tileSize, R = this.radius + S;
+    const R = this.radius + this.tileSize;
     for (const m of this.tiles) {
-      const dx = m.position.x + S / 2 - cx;
-      const dz = m.position.z + S / 2 - cz;
-      m.visible = dx * dx + dz * dz < R * R;
+      const dx = m._sphere.center.x - cx, dz = m._sphere.center.z - cz;
+      m.visible = (dx * dx + dz * dz < R * R) && this._frustum.intersectsSphere(m._sphere);
     }
   }
 }
