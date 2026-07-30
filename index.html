@@ -29,14 +29,9 @@
         <div class="title">Warming up the range…</div>
       </div>
     </div>
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "/vendor/three.module.js",
-          "three/addons/": "/vendor/jsm/"
-        }
-      }
-    </script>
+    <!-- Bare specifiers ("three", "three/webgpu", "three/tsl", "three/addons/*")
+         are resolved by Vite from node_modules; the three->three/webgpu alias in
+         vite.config.js gives every module the WebGPU superset build. -->
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

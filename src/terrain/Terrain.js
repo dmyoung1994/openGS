@@ -1,10 +1,9 @@
 import {
-  BufferGeometry, BufferAttribute, Mesh, MeshStandardMaterial,
+  BufferGeometry, BufferAttribute, Mesh, MeshStandardNodeMaterial,
   Vector2, Vector3, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
 } from 'three';
-import { SURFACES, surface } from '../physics/groundInteraction.js';
-
-const WHITE = new Color(0xffffff);
+import { attribute, positionWorld, mx_noise_float, float, vec3, smoothstep } from 'three/tsl';
+import { surface } from '../physics/groundInteraction.js';
 
 // Shared, tiled PBR turf maps (loaded once). Vertex colors still tint each
 // zone (fairway vs rough vs green), multiplied over this photographic detail.
@@ -100,6 +99,10 @@ export class Terrain {
     const positions = new Float32Array(vcount * 3);
     const colors = new Float32Array(vcount * 3);
     const uvs = new Float32Array(vcount * 2);
+    // Per-vertex "how mown is this" mask: 1 on fairway/tee, partial on fringe,
+    // 0 on green/rough/hazards. Drives where the shader paints mow stripes so
+    // the rough and greens don't get striped like a fairway.
+    const stripeMask = new Float32Array(vcount);
 
     const c = new Color();
     const base = new Color();
@@ -115,19 +118,24 @@ export class Terrain {
         uvs[k * 2] = i / (nx - 1);
         uvs[k * 2 + 1] = j / (nz - 1);
 
-        // Per-vertex base color from the surface, with subtle variation so the
-        // turf never looks flat. Interpolation across the grid softens the seams
-        // between zones (fairway->rough->green) for free.
-        // The photographic turf map carries the detail; the vertex color is a
-        // gentle *tint* (pushed toward white) so zones read without darkening
-        // the texture into mud.
-        const surf = surface(this.surfaceFn(x, z));
-        base.set(surf.color).lerp(WHITE, 0.08);
-        const v = 0.90 + 0.12 * hash2(i * 0.37, j * 0.53);
+        // Per-vertex base color, muted from the gameplay surface color the exact
+        // same way the grass blades are (see turfBase). This is what makes the
+        // ground and the canopy one continuous turf instead of a bright carpet
+        // showing through darker blades. Interpolation across the grid softens
+        // the zone seams (fairway->rough->green) for free.
+        const surfName = this.surfaceFn(x, z);
+        // Slightly darkened so the IBL/sun-lit ground meets the analytically-lit
+        // grass canopy at the same luminance — otherwise the brighter ground
+        // shows through the blades as a mismatched pale patch.
+        turfBase(surfName, base).multiplyScalar(0.82);
+        const v = 0.92 + 0.10 * hash2(i * 0.37, j * 0.53);
         c.copy(base).multiplyScalar(v);
         colors[k * 3] = c.r;
         colors[k * 3 + 1] = c.g;
         colors[k * 3 + 2] = c.b;
+
+        stripeMask[k] = surfName === 'fairway' || surfName === 'tee' ? 1.0
+                      : surfName === 'fringe' ? 0.4 : 0.0;
       }
     }
 
@@ -147,6 +155,7 @@ export class Terrain {
     geo.setAttribute('position', new BufferAttribute(positions, 3));
     geo.setAttribute('color', new BufferAttribute(colors, 3));
     geo.setAttribute('uv', new BufferAttribute(uvs, 2));
+    geo.setAttribute('stripeMask', new BufferAttribute(stripeMask, 1));
     geo.setIndex(indices);
     geo.computeVertexNormals();
 
@@ -155,15 +164,15 @@ export class Terrain {
     const rx = (this.bounds.maxX - this.bounds.minX) / tile;
     const ry = (this.bounds.maxZ - this.bounds.minZ) / tile;
     const maps = loadTurfMaps(rx, ry);
-    const mat = new MeshStandardMaterial({
-      vertexColors: true,
+    const mat = new MeshStandardNodeMaterial({
       roughness: 1.0,
       metalness: 0.0,
       side: DoubleSide,
       ...maps,
       normalScale: new Vector2(0.35, 0.35),
     });
-    injectTurfShader(mat, spacing);
+    // The zone tint (vertex `color`) times the procedural mow/detail node.
+    mat.colorNode = turfColorNode();
 
     const mesh = new Mesh(geo, mat);
     mesh.receiveShadow = true;
@@ -179,34 +188,51 @@ function hash2(x, y) {
   return s - Math.floor(s);
 }
 
-// Inject mowing stripes + fine procedural detail into a standard material,
-// keeping PBR lighting and shadows. All of this runs in the fragment shader.
-function injectTurfShader(mat, spacing) {
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uStripeDir = { value: 22.0 }; // stripe width in meters-ish
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n varying vec3 vWorldPos;`)
-      .replace(
-        '#include <worldpos_vertex>',
-        `#include <worldpos_vertex>\n vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
-      );
+// Mowing-stripe band width in meters. Shared conceptually with Grass.js so the
+// ground bands and the blade lean line up in world Z.
+const STRIPE_M = 6.0;
+const _hsl = { h: 0, s: 0, l: 0 };
 
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n varying vec3 vWorldPos;\n uniform float uStripeDir;
-        float hnoise(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233)))*43758.5453); }
-      `)
-      .replace(
-        '#include <color_fragment>',
-        `#include <color_fragment>
-        // Subtle mowing stripes over the photographic turf. The texture already
-        // supplies blade-scale detail, so this is just a faint mow pattern plus
-        // large-scale color drift to break up tiling.
-        float stripe = sin(vWorldPos.z / uStripeDir * 3.14159);
-        float mow = 1.0 + 0.035 * sign(stripe) * smoothstep(0.0, 0.3, abs(stripe));
-        float macro = 0.93 + 0.14 * hnoise(floor(vWorldPos.xz * 0.05));
-        diffuseColor.rgb *= mow * macro;
-        `,
-      );
-  };
-  mat.userData.turf = true;
+// Turn the gameplay surface colors into natural sun-lit turf: pull the hue
+// toward true green (cooler, less lime), desaturate to kill the neon, and drop
+// the value. Grass.js runs the IDENTICAL transform on the same SURFACES color,
+// which is what keeps the ground color-matched to the blades on top of it.
+function turfBase(name, out) {
+  out.set(surface(name).color);
+  out.getHSL(_hsl, SRGBColorSpace);
+  out.setHSL(
+    _hsl.h + (0.31 - _hsl.h) * 0.32,
+    _hsl.s * 0.68,
+    _hsl.l * 0.82,
+    SRGBColorSpace,
+  );
+  return out;
+}
+
+// TSL colorNode: the per-vertex zone tint (`color`) multiplied by soft-edged
+// mowing stripes plus multi-scale procedural detail, so the GROUND itself reads
+// as tight mown turf even where the blades thin out (not flat paint). Ported
+// from the old GLSL onBeforeCompile injection to run natively under WebGPU.
+function turfColorNode() {
+  const wx = positionWorld.x;
+  const wz = positionWorld.z;
+  const stripeMask = attribute('stripeMask', 'float');
+  const baseCol = attribute('color', 'vec3');
+
+  // Soft-edged mow bands alternating down world Z, only where the turf is mown.
+  const sp = wz.mul(Math.PI / STRIPE_M).sin();
+  const band = sp.sign().mul(smoothstep(0.0, 0.5, sp.abs()));
+  const mow = float(1.0).add(band.mul(0.16).mul(stripeMask));
+
+  // Smooth MaterialX noise sampled at several scales, remapped to [0,1].
+  const n = (f) => mx_noise_float(vec3(wx.mul(f), wz.mul(f), 0.0)).mul(0.5).add(0.5);
+  const micro = n(16.0).mul(0.20).add(0.90);   // blade-scale grain
+  const mottle = n(1.6).mul(0.24).add(0.88);   // turf color unevenness
+  const clump = n(0.7).mul(0.14).add(0.93);    // tufts/clumps
+  const wear = float(1.0).sub(smoothstep(0.5, 1.0, n(0.3)).mul(0.10));
+  const divot = float(1.0).sub(smoothstep(0.92, 1.0, n(1.3)).mul(0.14));
+  const macro = n(0.045).mul(0.16).add(0.92);  // large drift, hides tiling
+
+  const detail = mow.mul(micro).mul(mottle).mul(clump).mul(wear).mul(divot).mul(macro);
+  return baseCol.mul(detail);
 }

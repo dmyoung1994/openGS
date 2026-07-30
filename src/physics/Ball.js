@@ -17,6 +17,16 @@ import { M_TO_YARD } from '../util/units.js';
 // 'carry' (first ground contact), 'bounce', 'hazard', 'rest'.
 const FIXED_DT = 0.002; // s, physics substep
 
+// Scratch vectors reused by the rolling solver (avoids per-substep allocation).
+const _r0 = new Vector3();
+const _r1 = new Vector3();
+const _r2 = new Vector3();
+const _r3 = new Vector3();
+const _r4 = new Vector3();
+const _r5 = new Vector3();
+const _r6 = new Vector3();
+const _r7 = new Vector3();
+
 export class Ball {
   constructor(terrain, env) {
     this.terrain = terrain;
@@ -76,6 +86,7 @@ export class Ball {
     this.totalYards = 0;
     this._apexReported = false;
     this._carryReported = false;
+    this._grounded = false;
     this.trail = [this.position.clone()];
     this._emit('launch', { position: start.clone(), velocity: this.velocity.clone() });
   }
@@ -109,7 +120,15 @@ export class Ball {
     const prev = this.position.clone();
     const st = { position: this.position, velocity: this.velocity };
     stepRK4(st, dt, this.time, this._omega0, this.spin.axis, this.env);
-    this.spin.omega = this._omega0 * Math.exp(-this.time / 24);
+    // Pre-contact: spin follows the calibrated launch decay exactly (flight
+    // aero must not change). During post-contact hops the spin has already been
+    // reshaped by the bounce impulse, so just let it decay from its current
+    // value rather than resetting it back to the launch curve.
+    if (!this._grounded) {
+      this.spin.omega = this._omega0 * Math.exp(-this.time / 24);
+    } else {
+      this.spin.omega *= Math.exp(-dt / 24);
+    }
     this.time += dt;
 
     if (this.position.y > this.apexHeight) this.apexHeight = this.position.y;
@@ -131,6 +150,7 @@ export class Ball {
   }
 
   _land() {
+    this._grounded = true;
     if (!this._carryReported) {
       this._carryReported = true;
       this.carryYards = this._groundDist() * M_TO_YARD;
@@ -164,32 +184,80 @@ export class Ball {
     const n = this.terrain.normalAt(this.position.x, this.position.z);
     const name = this.terrain.surfaceAt(this.position.x, this.position.z);
     const surf = surface(name);
+    const radius = this.radius;
 
     // Gravity split into slope-tangent (drives downhill) and normal parts.
-    const gVec = new Vector3(0, -GRAVITY, 0);
+    const gVec = _r0.set(0, -GRAVITY, 0);
     const gN = gVec.dot(n);
-    const gTangent = gVec.clone().addScaledVector(n, -gN); // downhill accel vector
+    const gTangent = _r1.copy(gVec).addScaledVector(n, -gN); // downhill accel vector
     const cosT = Math.abs(n.y);
 
-    const speed = this.velocity.length();
-    const accel = gTangent.clone();
-    if (speed > 1e-4) {
-      // Rolling resistance opposes motion, scaled by the normal load.
-      const fric = surf.rollResistance * GRAVITY * cosT;
-      accel.addScaledVector(this.velocity, -fric / speed);
+    // Keep the linear velocity tangent to the surface before we reason about it.
+    this.velocity.addScaledVector(n, -this.velocity.dot(n));
+
+    // Contact-point slip = linear velocity + spin surface velocity (omega x r),
+    // r = -n * radius. A ball that just checked still carries BACKSPIN, whose
+    // contact point slips forward, so it is not really rolling yet - it skids,
+    // and kinetic friction keeps scrubbing (and can even reverse) it until the
+    // spin bleeds down to the rolling condition v = omega x r. A pure putt has
+    // no spin, so it rolls freely from the start. This single mechanism is what
+    // makes approach shots CHECK and high-spin wedges ZIP BACK on a green while
+    // a driver (little spin left) just releases.
+    const omegaVec = _r2.copy(this.spin.axis).multiplyScalar(this.spin.omega);
+    const rVec = _r3.copy(n).multiplyScalar(-radius);
+    const vSpin = _r4.copy(omegaVec).cross(rVec);
+    vSpin.addScaledVector(n, -vSpin.dot(n));           // tangential part only
+    const slip = _r5.copy(this.velocity).add(vSpin);
+    const slipMag = slip.length();
+
+    const SLIP_EPS = 0.06; // m/s below which the contact is effectively rolling
+
+    if (slipMag > SLIP_EPS) {
+      // --- Skidding: Coulomb kinetic friction opposes the slip ------------
+      const slipHat = _r6.copy(slip).multiplyScalar(1 / slipMag);
+      const fricA = surf.friction * GRAVITY * cosT;
+      // Impulse (per mass) this step, capped so it cannot overshoot rolling
+      // (the linear+angular response nulls a slip of s with impulse 2/7 s).
+      let jFric = fricA * dt;
+      const jCap = (2 / 7) * slipMag;
+      if (jFric > jCap) jFric = jCap;
+      // Linear: friction decelerates (opposes slip direction).
+      this.velocity.addScaledVector(slipHat, -jFric);
+      // Angular: torque bleeds the spin toward the rolling state.
+      const dOmega = _r7.copy(n).cross(slipHat).multiplyScalar((5 * jFric) / (2 * radius));
+      omegaVec.add(dOmega);
+      this.spin.omega = omegaVec.length();
+      if (this.spin.omega > 1e-4) this.spin.axis.copy(omegaVec).multiplyScalar(1 / this.spin.omega);
+    } else {
+      // --- Rolling: constant rolling resistance + speed-squared grass drag,
+      // and lock the spin to the rolling state so no spurious slip reappears.
+      const speed = this.velocity.length();
+      if (speed > 1e-4) {
+        const fricDecel = surf.rollResistance * GRAVITY * cosT;
+        const dragDecel = (surf.rollDrag || 0) * speed * speed * cosT;
+        this.velocity.addScaledVector(this.velocity, -(fricDecel + dragDecel) * dt / speed);
+      }
+      // omega_roll = (n x v)/radius  (topspin consistent with pure rolling).
+      omegaVec.copy(n).cross(this.velocity).multiplyScalar(1 / radius);
+      this.spin.omega = omegaVec.length();
+      if (this.spin.omega > 1e-4) this.spin.axis.copy(omegaVec).multiplyScalar(1 / this.spin.omega);
     }
-    this.velocity.addScaledVector(accel, dt);
+
+    // Slope drive applies in both regimes.
+    this.velocity.addScaledVector(gTangent, dt);
+
     this.position.addScaledVector(this.velocity, dt);
 
     // Re-seat on the surface and keep velocity tangent to it.
     this.position.y = this.terrain.heightAt(this.position.x, this.position.z) + this.radius;
-    const vn = this.velocity.dot(n);
-    this.velocity.addScaledVector(n, -vn);
+    this.velocity.addScaledVector(n, -this.velocity.dot(n));
 
-    // Stop when slow and the slope can't sustain rolling against resistance.
+    // Stop only once it is genuinely crawling AND essentially rolling (not
+    // mid-check or mid-zip), and the slope can't keep it going.
     const slopeTan = Math.hypot(n.x, n.z) / Math.max(cosT, 1e-4);
-    if (this.velocity.length() < surf.stopSpeed && slopeTan < surf.rollResistance) {
+    if (this.velocity.length() < surf.stopSpeed && slipMag < 0.4 && slopeTan < surf.rollResistance) {
       this.velocity.set(0, 0, 0);
+      this.spin.omega = 0;
       this.state = 'rest';
       this._finish();
     }

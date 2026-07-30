@@ -1,22 +1,16 @@
-// Makes the vendored Three.js resolvable as the bare specifier "three" under
-// Node (for tests), mirroring what the browser import map does at runtime.
-// Runs automatically before `npm test`. Safe to re-run.
+// Obsolete under the Vite + npm-`three` toolchain: `three` is now a real
+// dependency in node_modules, so Node resolves bare `three` imports natively and
+// no vendored shim is needed. Kept as a guarded no-op so any stale reference
+// (older npm scripts, an in-flight agent) doesn't clobber the installed package.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// scripts/link-three.js -> project root is two levels up from this file.
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const dir = path.join(root, 'node_modules', 'three');
-fs.mkdirSync(dir, { recursive: true });
+const installed = path.join(root, 'node_modules', 'three', 'build', 'three.module.js');
 
-fs.writeFileSync(
-  path.join(dir, 'package.json'),
-  JSON.stringify({ name: 'three', version: '0.169.0', type: 'module', exports: './three.module.js' }, null, 2),
-);
-
-const link = path.join(dir, 'three.module.js');
-const target = path.join(root, 'vendor', 'three.module.js');
-try { fs.unlinkSync(link); } catch {}
-fs.symlinkSync(path.relative(dir, target), link);
-console.log('linked three ->', path.relative(root, target));
+if (fs.existsSync(installed)) {
+  console.log('three is installed via npm — link-three shim is a no-op.');
+} else {
+  console.warn('three not installed. Run: npm install');
+}
