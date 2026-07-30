@@ -16,8 +16,9 @@ const _tex = new TextureLoader();
 // target greens at marked yardages, framed by rough and a tree line. Also owns
 // the ball mesh. Everything that scales (grass, trees) is GPU-instanced.
 export class Range {
-  constructor(scene) {
+  constructor(scene, camera) {
     this.scene = scene;
+    this.camera = camera;
     this.group = new Group();
     scene.add(this.group);
 
@@ -44,15 +45,11 @@ export class Range {
     });
     this.group.add(this.terrain.mesh);
 
-    // Near-field grass (WebGPU / TSL NodeMaterial). Dense where the camera lives
-    // at address; the textured ground carries the distance.
-    this.grass = new Grass({
-      terrain: this.terrain,
-      region: { minX: -48, maxX: 48, minZ: -95, maxZ: 18 },
-      count: 900000,
-      allow: (s) => s === 'fairway' || s === 'tee' || s === 'rough' || s === 'fringe' || s === 'green',
-      height: [0.055, 0.12],
-    });
+    // Camera-relative grass (WebGPU / TSL). A world-cell-anchored field of ~1M
+    // blades follows the camera every frame, sampling terrain height + surface
+    // from GPU textures, with density/height LOD falling off with distance. So
+    // wherever you look — tee, mid-fairway, a green after a shot — there's turf.
+    this.grass = new Grass({ terrain: this.terrain, camera: this.camera });
     this.group.add(this.grass.mesh);
 
     this._buildTee();
@@ -395,7 +392,7 @@ export class Range {
   }
 
   update(t) {
-    if (this.grass) this.grass.update(t);
+    if (this.grass) this.grass.update(t, this.camera);
   }
 }
 

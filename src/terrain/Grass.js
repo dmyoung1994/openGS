@@ -1,325 +1,293 @@
 import {
-  InstancedBufferGeometry, InstancedBufferAttribute, BufferAttribute,
-  Mesh, MeshBasicNodeMaterial, Color, Vector2, Vector3, DoubleSide, Sphere,
-  SRGBColorSpace,
+  InstancedBufferGeometry, BufferAttribute, Mesh, Group, MeshBasicNodeMaterial,
+  DataTexture, RedFormat, RGBAFormat, FloatType, UnsignedByteType, NearestFilter,
+  Color, Vector2, Vector3, DoubleSide, Sphere, SRGBColorSpace,
 } from 'three';
 import {
-  attribute, positionLocal, cameraPosition, uniform, vec2, vec3, float,
-  smoothstep, mix, varying,
+  instanceIndex, positionLocal, cameraPosition, modelWorldMatrix, uniform, varying,
+  textureLoad, vec2, vec3, vec4, float, int, ivec2, mix, smoothstep,
 } from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
 
-// GPU-instanced grass (WebGPU / TSL). Every blade is one instance of a shared
-// few-segment strip; all bend, wind, distance-LOD, grazing-angle widening, and
-// shading happen in a TSL NodeMaterial driven by uniform nodes. The CPU only
-// runs once, at build time, to scatter the blades onto the terrain. This is the
-// heavy visual layer and it must stay entirely GPU-animated.
-//
-// options:
-//   terrain    Terrain (for height + surface filtering)
-//   region     { minX, maxX, minZ, maxZ }
-//   count      number of blades to attempt
-//   allow      (surfaceName) => bool   which surfaces get grass
-//   height     [min, max] blade height meters (used as a global scale knob;
-//              the real per-blade height comes from the surface it lands on)
+// Static, frustum-culled grass (WebGPU / TSL) in the Ghost-of-Tsushima /
+// GodotGrass spirit. The play area is a fixed grid of ~8 m TILES, all sharing one
+// blade geometry and one material. The engine frustum-culls each tile by its
+// bounding sphere, and we distance-cull the rest each frame, so ONLY the tiles
+// you're actually looking at ever reach the vertex shader — everything else
+// costs nothing. Within a visible tile, blades are generated procedurally from
+// the tile's world origin (modelWorldMatrix), sampling terrain HEIGHT and a baked
+// TURF DATA texture (muted color + blade-height code) on the GPU. Density and
+// height fall off with distance from the camera (LOD); off-turf cells collapse.
 export class Grass {
-  constructor({ terrain, region, count = 160000, allow, height = [0.06, 0.16] }) {
+  constructor({ terrain, camera, tileSize = 8, gridPerTile = 64, radius = 60 }) {
     this.terrain = terrain;
-    // Warm sun / cool sky fill, tuned so the blade canopy sits at the same
-    // luminance as the HDRI-lit PBR ground beneath it — ground and blades must
-    // read as one turf, or the brighter ground shows through as a mismatched
-    // patch where blades thin out.
-    const sunColor = new Color(0xffefd2).multiplyScalar(1.9);
-    const ambient = new Color(0x7c9db0).multiplyScalar(1.05);
+    this.camera = camera;
+    this.tileSize = tileSize;
+    this.radius = radius;
+
+    const { heightTex, dataTex } = this._bakeTextures(terrain);
+
     this.uTime = uniform(0);
     this.uGust = uniform(0);
     this.uWindDir = uniform(new Vector2(0.8, 0.6).normalize());
     this.uWindStrength = uniform(0.11);
+    const sun = new Color(0xffefd2).multiplyScalar(1.9);
+    const amb = new Color(0x7c9db0).multiplyScalar(1.05);
     this.uSunDir = uniform(new Vector3(-0.5, 0.9, 0.35).normalize());
-    this.uSunColor = uniform(new Vector3(sunColor.r, sunColor.g, sunColor.b));
-    this.uAmbient = uniform(new Vector3(ambient.r, ambient.g, ambient.b));
-    this.mesh = this._build(region, count, allow || (() => true), height);
+    this.uSunColor = uniform(new Vector3(sun.r, sun.g, sun.b));
+    this.uAmbient = uniform(new Vector3(amb.r, amb.g, amb.b));
+
+    this._const = {
+      tileSize, gridPerTile, cell: tileSize / gridPerTile, radius,
+      nx: terrain.nx, nz: terrain.nz,
+      bMinX: terrain.bounds.minX, bMinZ: terrain.bounds.minZ,
+      bSizeX: terrain.bounds.maxX - terrain.bounds.minX,
+      bSizeZ: terrain.bounds.maxZ - terrain.bounds.minZ,
+      heightTex, dataTex,
+    };
+
+    this.mesh = new Group();
+    this.mesh.name = 'grass';
+    this.tiles = [];
+    this._buildTiles();
+    // Cull once up front so the very FIRST rendered frame is already light
+    // (otherwise every tile is visible-by-default and the first draw would try to
+    // render the entire course of grass at once).
+    this.update(0, camera);
   }
 
-  _build(region, count, allow, [, hmax]) {
-    const SEG = 4; // height segments -> smooth bezier curve (fewer = cheaper)
-    const rows = SEG + 1;
-    // Base blade strip: x in {-0.5, 0.5}, y = t in [0,1]. All width tapering,
-    // curvature, and rounded-normal shading happen in the vertex shader.
-    // y == t (0..1 up the blade), so positionLocal.y doubles as the uvY the
-    // shader needs — no separate uvY attribute (WebGPU caps vertex buffers at 8).
-    const basePos = [];
-    for (let r = 0; r < rows; r++) {
-      const y = r / SEG;
-      basePos.push(-0.5, y, 0, 0.5, y, 0);
+  _bakeTextures(terrain) {
+    const { nx, nz } = terrain;
+    const heightTex = new DataTexture(terrain.heights, nx, nz, RedFormat, FloatType);
+    heightTex.minFilter = heightTex.magFilter = NearestFilter;
+    heightTex.generateMipmaps = false;
+    heightTex.needsUpdate = true;
+
+    const data = new Uint8Array(nx * nz * 4);
+    const col = new Color();
+    const { minX, minZ } = terrain.bounds;
+    for (let j = 0; j < nz; j++) {
+      for (let i = 0; i < nx; i++) {
+        const x = minX + i * terrain.spacing;
+        const z = minZ + j * terrain.spacing;
+        const name = terrain.surfaceAt(x, z);
+        turfBase(name, col);
+        const k = (j * nx + i) * 4;
+        data[k] = Math.round(Math.min(1, col.r) * 255);
+        data[k + 1] = Math.round(Math.min(1, col.g) * 255);
+        data[k + 2] = Math.round(Math.min(1, col.b) * 255);
+        data[k + 3] = Math.round((bladeHeight(name) / MAX_H) * 255);
+      }
     }
+    const dataTex = new DataTexture(data, nx, nz, RGBAFormat, UnsignedByteType);
+    dataTex.minFilter = dataTex.magFilter = NearestFilter;
+    dataTex.generateMipmaps = false;
+    dataTex.needsUpdate = true;
+    return { heightTex, dataTex };
+  }
+
+  // Shared blade geometry + one tile mesh per grid cell that actually contains
+  // grass turf. Meshes share geometry/material; only their position differs.
+  _buildTiles() {
+    const C = this._const;
+    const SEG = 4, rows = SEG + 1;
+    const basePos = [];
+    for (let r = 0; r < rows; r++) { const y = r / SEG; basePos.push(-0.5, y, 0, 0.5, y, 0); }
     const idx = [];
     for (let r = 0; r < SEG; r++) {
       const a = r * 2, b = r * 2 + 1, c = r * 2 + 2, d = r * 2 + 3;
       idx.push(a, c, b, b, c, d);
     }
-
     const geo = new InstancedBufferGeometry();
     geo.setAttribute('position', new BufferAttribute(new Float32Array(basePos), 3));
     geo.setIndex(idx);
+    geo.instanceCount = C.gridPerTile * C.gridPerTile;
+    // Local-space bounding sphere covering one tile's blades (X/Z in [0,tile],
+    // Y ~ the tile's terrain height plus blades); transformed per mesh -> correct
+    // per-tile world sphere for the engine's frustum cull.
+    geo.boundingSphere = new Sphere(new Vector3(C.tileSize / 2, 2.5, C.tileSize / 2), C.tileSize * 0.71 + 6);
+    this._geo = geo;
 
-    // Scatter instances. Per-blade scalars are packed into one vec4 (aMisc) to
-    // stay within WebGPU's 8-vertex-buffer limit.
-    const offsets = [];
-    const scale = [];
-    const colorv = [];
-    const lean = [];
-    const misc = []; // vec4 per instance: [orient, phase, stiff, stripe]
-    const col = new Color();
-    // Global height knob so the constructor's `height` still means something:
-    // everything scales relative to a 12cm reference without touching the
-    // carefully-tuned per-surface ratios below.
-    const gscale = hmax / 0.12;
-    let placed = 0;
-    for (let i = 0; i < count; i++) {
-      const x = region.minX + Math.random() * (region.maxX - region.minX);
-      // Importance-sample toward the near field (large z, right under the
-      // address camera) so the fixed blade budget concentrates where the
-      // camera actually looks. The far turf is carried by the textured ground,
-      // so spending blades out there is wasted; skewing the sample instead
-      // makes the immediate foreground dense for free.
-      const zu = Math.pow(Math.random(), 0.6);   // skew toward 1 -> toward maxZ
-      const z = region.minZ + zu * (region.maxZ - region.minZ);
-      const surf = this.terrain.surfaceAt(x, z);
-      if (!allow(surf)) continue;
-      const spec = bladeSpec(surf);
-      if (!spec) continue;                       // sand / water / path / hardpan
-
-      // Distance thinning: keep the near field (where the camera sits at
-      // address) dense enough that no ground shows between blades, and let the
-      // textured ground carry the far field. This is also the main perf lever
-      // for a ~900k request — far blades are culled outright.
-      const dref = Math.hypot(x, z - 6);         // ~tee reference point
-      const far = smooth(30, 95, dref);
-      let keep = spec.keep * (1 - 0.45 * far);    // gentle; sampling bias does the rest
-
-      // Low-frequency clumping -> tufts and bare patches. Fairway/green stay
-      // mown-even; rough and deep rough clump hard (bare dirt between tufts).
-      const clump = 0.5 + 0.5 * Math.sin(x * 0.35 + 1.3) * Math.cos(z * 0.31 - 0.7)
-                        + 0.25 * Math.sin(x * 0.11 - z * 0.13);
-      const clumpC = Math.max(0, Math.min(1, clump));
-      if (spec.wispy > 0) keep *= (1 - spec.wispy * 0.5) + spec.wispy * clumpC;
-      if (Math.random() > keep) continue;
-
-      const y = this.terrain.heightAt(x, z);
-      offsets.push(x, y, z);
-      const orientV = Math.random() * Math.PI * 2;
-
-      let h, w;
-      if (surf === 'fairway' || surf === 'tee') {
-        // Two-tier mown turf: a dense, very-short, WIDE ground-hugging under-
-        // layer that closes the gaps between blades (so no bare soil shows in
-        // the first ~20m), plus taller upright mown blades for texture. Real
-        // tight fairway reads as a solid mat, not scattered spikes.
-        if (Math.random() < 0.55) {
-          h = (0.010 + Math.random() * 0.016) * gscale;   // ~1-2.6cm cover
-          w = 0.010 + Math.random() * 0.006;              // wide -> overlaps
-        } else {
-          h = (0.030 + Math.random() * 0.026) * gscale;   // ~3-5.6cm upright
-          w = 0.007 + Math.random() * 0.005;
-        }
-      } else {
-        h = (spec.h[0] + Math.random() * (spec.h[1] - spec.h[0])) * gscale;
-        if (spec.wispy > 0) h *= 0.7 + 0.6 * clumpC;   // taller inside a tuft
-        w = spec.w[0] + Math.random() * (spec.w[1] - spec.w[0]);
+    const mat = this._material();
+    const t = this.terrain;
+    const { minX, maxX, minZ, maxZ } = t.bounds;
+    const S = C.tileSize;
+    for (let tz = minZ; tz < maxZ; tz += S) {
+      for (let tx = minX; tx < maxX; tx += S) {
+        // Keep a tile only if its area actually holds grass turf (sample a few
+        // points), so we don't spawn thousands of empty tiles over sand/water.
+        if (!this._tileHasGrass(tx, tz, S)) continue;
+        const m = new Mesh(geo, mat);
+        m.position.set(tx, 0, tz);
+        m.frustumCulled = true;
+        m.matrixAutoUpdate = false;
+        m.updateMatrix();
+        m.updateMatrixWorld(true);
+        this.mesh.add(m);
+        this.tiles.push(m);
       }
-      scale.push(w, h);
-
-      // Colour: start from the SAME muted surface base the turf ground uses, so
-      // the canopy and the ground it sits on are one family and there is never a
-      // bright bald seam where blades thin out.
-      turfBase(surf, col);
-      // Large patches of lighter/darker turf (low-freq), plus per-blade jitter.
-      const drift = 0.86 + 0.22 * (0.5 + 0.5 * Math.sin(x * 0.15 + z * 0.13 + 2.0));
-      const jit = 0.82 + Math.random() * 0.32;
-      col.multiplyScalar(drift * jit);
-      const rr = Math.random();
-      if (spec.wispy > 0 && rr < 0.05) col.lerp(DRY, 0.45); // sparse sun-bleach (rough only)
-      else if (rr < 0.15) col.multiplyScalar(0.82);          // shaded/darker blades
-
-      // Mowing stripes: alternating down-range bands. The band sign both tints
-      // the blade and (in the vertex shader) lays it toward or away from the
-      // viewer — classic golf striping is really the light catching grass that
-      // leans in opposite directions.
-      let stripe = 0;
-      if (surf === 'fairway' || surf === 'tee') {
-        const band = Math.floor(z / STRIPE_M);
-        stripe = (band & 1) ? -1 : 1;
-        col.multiplyScalar(1 + 0.05 * stripe);
-      }
-      colorv.push(col.r, col.g, col.b);
-
-      // Rest lean: a gentle per-blade curve so nothing is a straight spike;
-      // wispier surfaces flop over further.
-      const la = Math.random() * Math.PI * 2;
-      const lm = spec.lean * (0.5 + Math.random());
-      lean.push(Math.cos(la) * lm, Math.sin(la) * lm);
-
-      const phaseV = Math.random() * Math.PI * 2;
-      const stiffV = (spec.wispy > 0.5 ? 0.6 : 0.95) + Math.random() * 0.55;
-      misc.push(orientV, phaseV, stiffV, stripe);
-      placed++;
     }
-
-    geo.setAttribute('aOffset', new InstancedBufferAttribute(new Float32Array(offsets), 3));
-    geo.setAttribute('aScale', new InstancedBufferAttribute(new Float32Array(scale), 2));
-    geo.setAttribute('aColor', new InstancedBufferAttribute(new Float32Array(colorv), 3));
-    geo.setAttribute('aLean', new InstancedBufferAttribute(new Float32Array(lean), 2));
-    geo.setAttribute('aMisc', new InstancedBufferAttribute(new Float32Array(misc), 4));
-    geo.instanceCount = placed;
-
-    // Bounding sphere so frustum culling doesn't drop the whole field.
-    const cx = (region.minX + region.maxX) / 2;
-    const cz = (region.minZ + region.maxZ) / 2;
-    geo.boundingSphere = new Sphere(
-      new Vector3(cx, 0, cz),
-      Math.hypot(region.maxX - region.minX, region.maxZ - region.minZ),
-    );
-
-    const mesh = new Mesh(geo, this._material());
-    mesh.frustumCulled = true;
-    mesh.name = 'grass';
-    this._placed = placed;
-    return mesh;
   }
 
-  // TSL NodeMaterial: the Ghost-of-Tsushima blade in a WebGPU node graph. Each
-  // blade is a curved strip (rest lean + mow lay-over + wind, quadratic in
-  // height) that carries a rounded cross-section normal so it shades like a
-  // rounded surface, widens at grazing angles so it never vanishes edge-on, and
-  // lies shorter with distance (LOD). Lit with soft wrap + back-lit translucency
-  // + root AO, deliberately matched to the HDRI-lit ground.
+  _tileHasGrass(tx, tz, S) {
+    for (let a = 0.15; a < 1; a += 0.35) {
+      for (let b = 0.15; b < 1; b += 0.35) {
+        if (bladeHeight(this.terrain.surfaceAt(tx + a * S, tz + b * S)) > 0) return true;
+      }
+    }
+    return false;
+  }
+
   _material() {
-    const t = positionLocal.y;                        // 0..1 up the blade (== uvY)
-    const side = positionLocal.x;                     // -0.5 / +0.5 across width
-    const aScale = attribute('aScale', 'vec2');
-    const aOffset = attribute('aOffset', 'vec3');
-    const aLean = attribute('aLean', 'vec2');
-    const aColor = attribute('aColor', 'vec3');
-    const aMisc = attribute('aMisc', 'vec4');         // [orient, phase, stiff, stripe]
-    const aOrient = aMisc.x;
-    const aPhase = aMisc.y;
-    const aStiff = aMisc.z;
-    const aStripe = aMisc.w;
+    const C = this._const;
+    const hash2 = (v, s) => v.x.mul(12.9898).add(v.y.mul(78.233)).add(s).sin().mul(43758.5453).fract();
 
-    const cA = aOrient.cos();
-    const sA = aOrient.sin();
+    // Tile world origin from the model matrix (pure XZ translation; y = 0).
+    const origin = modelWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
 
-    // Distance LOD: far blades lie shorter so the color-matched ground carries
-    // the far field and the silhouette doesn't shimmer.
-    const toCam = cameraPosition.xz.sub(aOffset.xz);
-    const camDist = toCam.length();
-    const H = aScale.y.mul(float(1).sub(smoothstep(35.0, 95.0, camDist).mul(0.5)));
+    // Per-blade cell within the tile, hashed by WORLD cell index (world-anchored,
+    // so identical wherever it's rendered — no swim).
+    const iidF = float(instanceIndex);
+    const cxi = iidF.mod(C.gridPerTile);
+    const czi = iidF.div(C.gridPerTile).floor();
+    const wcx = origin.x.div(C.cell).add(cxi);   // integer world cell index
+    const wcz = origin.z.div(C.cell).add(czi);
+    const cellv = vec2(wcx, wcz);
+    const hA = hash2(cellv, 0.0), hB = hash2(cellv, 1.7), hC = hash2(cellv, 3.3);
+    const hD = hash2(cellv, 5.1), hE = hash2(cellv, 7.7);
 
-    // Width taper to a point + grazing-angle widening (the key GoT coverage/perf
-    // trick): a blade seen edge-on fattens so it stays visible instead of
-    // aliasing away.
-    const wBase = aScale.x.mul(float(1).sub(smoothstep(0.55, 1.0, t)));
+    const worldX = wcx.add(0.5).mul(C.cell).add(hA.sub(0.5).mul(C.cell * 0.9));
+    const worldZ = wcz.add(0.5).mul(C.cell).add(hB.sub(0.5).mul(C.cell * 0.9));
+
+    // Sample terrain from GPU textures.
+    const uvx = worldX.sub(C.bMinX).div(C.bSizeX);
+    const uvz = worldZ.sub(C.bMinZ).div(C.bSizeZ);
+    const inB = uvx.greaterThan(0.0).and(uvx.lessThan(1.0)).and(uvz.greaterThan(0.0)).and(uvz.lessThan(1.0));
+    const groundY = this._sampleHeight(uvx, uvz);
+    const data = this._sampleData(uvx, uvz);
+    const baseColor = data.xyz;
+    const hMax = data.w.mul(MAX_H);
+
+    // Distance LOD (from the actual camera) + liveness.
+    const dx = worldX.sub(cameraPosition.x), dz = worldZ.sub(cameraPosition.z);
+    const dist = dx.mul(dx).add(dz.mul(dz)).sqrt();
+    const keepProb = float(1.0).sub(smoothstep(C.radius * 0.35, C.radius, dist).mul(0.75));
+    const alive = inB.and(hMax.greaterThan(0.002)).and(dist.lessThan(C.radius)).and(hC.lessThan(keepProb));
+    const aliveF = alive.select(float(1.0), float(0.0));
+
+    const t = positionLocal.y;
+    const side = positionLocal.x;
+    const distShort = float(1.0).sub(smoothstep(C.radius * 0.4, C.radius, dist).mul(0.4));
+    const H = hMax.mul(float(0.6).add(hD.mul(0.5))).mul(distShort).mul(aliveF);
+
+    // Blade width taper + grazing-angle widening.
+    const orient = hA.mul(6.2831853);
+    const cA = orient.cos(), sA = orient.sin();
+    const wInst = mix(0.006, 0.011, hE);
+    const wBase = wInst.mul(float(1.0).sub(smoothstep(0.55, 1.0, t)));
     const facing = vec2(sA.negate(), cA);
-    const viewDir = toCam.normalize();
-    const edge = float(1).sub(facing.dot(viewDir).abs());
-    const w = wBase.mul(float(1).add(edge.mul(edge).mul(2.0)));
+    const viewDir = vec2(dx.negate(), dz.negate()).div(dist.max(0.001));
+    const edge = float(1.0).sub(facing.dot(viewDir).abs());
+    const w = wBase.mul(float(1.0).add(edge.mul(edge).mul(2.0)));
 
-    // Wind sway + rest lean + per-band mowing lay-over, curving quadratically.
-    const wave = this.uTime.mul(1.6).add(aOffset.xz.dot(this.uWindDir).mul(0.35)).add(aPhase).sin();
-    const wind = this.uWindStrength.mul(float(0.6).add(this.uGust.mul(0.6))).mul(wave).div(aStiff);
-    const flow = aLean.add(vec2(0.0, aStripe.mul(0.5))).add(this.uWindDir.mul(wind).mul(2.2));
+    // Lean + wind.
+    const lean = smoothstep(0.05, 0.25, hMax).mul(0.5);
+    const la = hB.mul(6.2831853);
+    const leanV = vec2(la.cos(), la.sin()).mul(lean.mul(float(0.5).add(hD)));
+    const stiff = float(0.7).add(hE.mul(0.6));
+    const wave = this.uTime.mul(1.6)
+      .add(worldX.mul(this.uWindDir.x).add(worldZ.mul(this.uWindDir.y)).mul(0.35))
+      .add(orient).sin();
+    const wind = this.uWindStrength.mul(float(0.6).add(this.uGust.mul(0.6))).mul(wave).div(stiff);
+    const flow = leanV.add(this.uWindDir.mul(wind).mul(2.2));
     const bend = flow.mul(t.mul(t)).mul(H);
 
-    // Blade vertex position. Mesh sits at identity, aOffset is world, so object
-    // space == world space here.
+    // Local position (relative to the tile origin the model matrix will re-add).
+    const localX = worldX.sub(origin.x);
+    const localZ = worldZ.sub(origin.z);
     const px = side.mul(w);
     const py = t.mul(H);
-    const X = px.mul(cA).add(bend.x);
-    const Z = px.mul(sA).add(bend.y);
-    const worldP = aOffset.add(vec3(X, py, Z));
+    const outX = localX.add(px.mul(cA)).add(bend.x);
+    const outZ = localZ.add(px.mul(sA)).add(bend.y);
+    const localP = vec3(outX, groundY.add(py), outZ);
 
-    // Rounded cross-section normal, oriented then tilted up as the blade leans.
+    // Rounded normal + lighting (matched to the HDRI-lit ground).
     const round = 0.7;
     const n0x = side.mul(2.0 * round);
     const nx = n0x.mul(cA).sub(sA);
     const nz = n0x.mul(sA).add(cA);
     const slope = flow.length().mul(t);
     const N = vec3(nx, slope.mul(1.4), nz).normalize();
-
-    // Lighting: soft wrap, back-lit translucency, gentle root-to-tip AO, plus the
-    // striping tint and a faint tip sheen.
     const ndl = N.dot(this.uSunDir).max(0.0);
     const wrap = ndl.mul(0.6).add(0.4);
     const trans = N.negate().dot(this.uSunDir).max(0.0).pow(2.0).mul(0.4);
     const ao = mix(0.7, 1.0, t);
+    const colJit = float(0.82).add(hD.mul(0.34));
+    const col = baseColor.mul(colJit);
     const lightN = this.uAmbient.add(this.uSunColor.mul(wrap)).add(this.uSunColor.mul(trans));
-    let c = aColor.mul(lightN).mul(ao);
-    c = c.mul(float(1.0).add(aStripe.mul(0.15)));
-    c = c.add(aColor.mul(t.pow(4.0).mul(0.10)));
+    let lit = col.mul(lightN).mul(ao);
+    lit = lit.add(col.mul(t.pow(4.0).mul(0.10)));
 
     const mat = new MeshBasicNodeMaterial({ side: DoubleSide });
-    mat.positionNode = worldP;
-    // Compute the lit blade color per-vertex and interpolate (one varying) — this
-    // keeps the color graph in the vertex stage where the instanced attributes
-    // live, which the WebGPU node compiler is happiest with.
-    mat.colorNode = varying(c);
+    mat.positionNode = localP;
+    mat.colorNode = varying(lit);
     return mat;
   }
 
-  update(t) {
+  _sampleHeight(uvx, uvz) {
+    const C = this._const;
+    const gx = uvx.mul(C.nx - 1).clamp(0.0, C.nx - 1.001);
+    const gz = uvz.mul(C.nz - 1).clamp(0.0, C.nz - 1.001);
+    const ix = gx.floor(), iz = gz.floor();
+    const fx = gx.sub(ix), fz = gz.sub(iz);
+    const load = (a, b) => textureLoad(C.heightTex, ivec2(int(a), int(b))).x;
+    const h00 = load(ix, iz), h10 = load(ix.add(1), iz);
+    const h01 = load(ix, iz.add(1)), h11 = load(ix.add(1), iz.add(1));
+    return mix(mix(h00, h10, fx), mix(h01, h11, fx), fz);
+  }
+
+  _sampleData(uvx, uvz) {
+    const C = this._const;
+    const tx = int(uvx.mul(C.nx - 1).add(0.5).clamp(0.0, C.nx - 1));
+    const tz = int(uvz.mul(C.nz - 1).add(0.5).clamp(0.0, C.nz - 1));
+    return textureLoad(C.dataTex, ivec2(tx, tz));
+  }
+
+  update(t, camera) {
     this.uTime.value = t;
-    // Slow, breathing gust envelope.
     this.uGust.value = 0.5 + 0.5 * Math.sin(t * 0.35);
+    // Distance cull: hide tiles beyond the LOD radius so far tiles inside the
+    // frustum don't draw (the textured ground carries the distance). The engine
+    // handles view-frustum culling of the remaining near tiles for free.
+    const cam = camera || this.camera;
+    const cx = cam.position.x, cz = cam.position.z;
+    const S = this.tileSize, R = this.radius + S;
+    for (const m of this.tiles) {
+      const dx = m.position.x + S / 2 - cx;
+      const dz = m.position.z + S / 2 - cz;
+      m.visible = dx * dx + dz * dz < R * R;
+    }
   }
 }
 
-// Mowing-stripe band width in meters (shared conceptually with the turf ground
-// shader in Terrain.js so blade lean and ground bands line up in world Z).
-const STRIPE_M = 6.0;
-
-// A muted straw tone for the sparse sun-bleached blades in the rough.
-const DRY = new Color(0xa79a5f);
+const MAX_H = 0.30;
 const _hsl = { h: 0, s: 0, l: 0 };
 
-// Turn the gameplay surface colors (tuned bright for the physics model, a bit
-// neon) into natural sun-lit turf: pull the hue toward true green (cooler, less
-// lime), desaturate hard to kill the neon, and drop the value for richness.
-// Terrain.js runs the IDENTICAL transform on the same SURFACES color, which is
-// what keeps the ground and the blades color-matched.
 function turfBase(name, out) {
   out.set(surface(name).color);
   out.getHSL(_hsl, SRGBColorSpace);
-  out.setHSL(
-    _hsl.h + (0.31 - _hsl.h) * 0.32,
-    _hsl.s * 0.68,
-    _hsl.l * 0.82,
-    SRGBColorSpace,
-  );
+  out.setHSL(_hsl.h + (0.31 - _hsl.h) * 0.32, _hsl.s * 0.68, _hsl.l * 0.82, SRGBColorSpace);
   return out;
 }
 
-// Per-surface blade parameters. Real courses read as different heights of the
-// same turf: tee/fairway tightly mown (2-4cm), fringe a touch longer, the green
-// essentially smooth (almost no visible blades), rough tall and wispy, deep
-// rough tallest and clumped.
-//   keep  fraction of attempts to actually plant (before distance thinning)
-//   h     [min,max] height meters   w [min,max] width meters
-//   lean  rest lay-over amount      wispy 0..1 clump/floppiness
-function bladeSpec(surf) {
-  switch (surf) {
-    case 'green':     return { keep: 0.12, h: [0.004, 0.014], w: [0.005, 0.008], lean: 0.10, wispy: 0.0 };
+function bladeHeight(name) {
+  switch (name) {
+    case 'green': return 0.014;
     case 'tee':
-    case 'fairway':   return { keep: 1.00, h: [0.028, 0.050], w: [0.007, 0.011], lean: 0.14, wispy: 0.0 };
-    case 'fringe':    return { keep: 1.00, h: [0.055, 0.090], w: [0.008, 0.012], lean: 0.22, wispy: 0.2 };
-    case 'rough':     return { keep: 1.00, h: [0.110, 0.200], w: [0.006, 0.012], lean: 0.42, wispy: 0.7 };
-    case 'deepRough': return { keep: 1.00, h: [0.170, 0.300], w: [0.006, 0.013], lean: 0.55, wispy: 1.0 };
-    default:          return null; // sand / water / cartpath / hardpan -> bare
+    case 'fairway': return 0.05;
+    case 'fringe': return 0.09;
+    case 'rough': return 0.20;
+    case 'deepRough': return 0.30;
+    default: return 0;
   }
-}
-
-// Smoothstep on the CPU.
-function smooth(a, b, x) {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
 }

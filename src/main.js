@@ -19,7 +19,7 @@ const lighting = new Lighting(sm.scene, SUN);
 // Image-based lighting + sky from a real HDRI (async; scene renders meanwhile).
 sm.loadEnvironment('/assets/hdri/sky.hdr').catch((e) => console.warn('HDRI load failed', e));
 
-const range = new Range(sm.scene);
+const range = new Range(sm.scene, sm.camera);
 const tracer = new Tracer(sm.scene);
 const director = new CameraDirector(sm.camera);
 
