@@ -33,7 +33,7 @@ export class Grass {
     this.uWindStrength = uniform(0.11);
     const sun = new Color(0xffefd2).multiplyScalar(1.9);
     const amb = new Color(0x7c9db0).multiplyScalar(1.05);
-    this.uSunDir = uniform(new Vector3(-0.62, 0.4, 0.3).normalize());
+    this.uSunDir = uniform(new Vector3(-0.82, 0.4, -0.12).normalize());
     this.uSunColor = uniform(new Vector3(sun.r, sun.g, sun.b));
     this.uAmbient = uniform(new Vector3(amb.r, amb.g, amb.b));
 

@@ -105,8 +105,10 @@ export class SceneManager {
     this.scene.environmentIntensity = 0.82;
     if (asBackground) {
       this.scene.background = hdr;
-      this.scene.backgroundBlurriness = 0.0;
-      this.scene.backgroundIntensity = 1.0;
+      // Soften the cartoon cumulus and dim the sky so a bright bluebird midday
+      // HDRI doesn't fight the warm low sun on the ground.
+      this.scene.backgroundBlurriness = 0.05;
+      this.scene.backgroundIntensity = 0.8;
     }
     return hdr;
   }

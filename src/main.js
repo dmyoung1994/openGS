@@ -10,8 +10,9 @@ import { makeEnv } from './physics/ballistics.js';
 import { airDensity } from './physics/constants.js';
 import { MPH_TO_MS, DEG_TO_RAD, mph as toMph, M_TO_YARD } from './util/units.js';
 
-// Low, warm late-afternoon sun -> long raking shadows and terrain modeling.
-const SUN = new Vector3(-0.62, 0.4, 0.3).normalize();
+// Low, warm late-afternoon sun from the SIDE (slightly in front) so its long
+// shadows rake ACROSS the frame toward the camera — not hidden behind objects.
+const SUN = new Vector3(-0.82, 0.4, -0.12).normalize();
 
 const app = document.getElementById('app');
 const sm = new SceneManager(app);

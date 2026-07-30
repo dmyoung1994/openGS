@@ -82,9 +82,9 @@ export class Range {
     // everywhere, plus finer rolls, ramping up down range. The tee is levelled
     // back out below.
     const far = Math.min(1, Math.max(0, (-z) / 300));
-    let h = this.noise.fbm(x * 0.006, z * 0.006, { octaves: 4 }) * (1.1 + 2.0 * far);
-    h += this.noise.fbm(x * 0.018, z * 0.018, { octaves: 3 }) * (0.45 + 0.5 * far);
-    h += this.noise.fbm(x * 0.05, z * 0.05, { octaves: 2 }) * 0.14; // fine rolls
+    let h = this.noise.fbm(x * 0.006, z * 0.006, { octaves: 4 }) * (2.2 + 2.4 * far);
+    h += this.noise.fbm(x * 0.016, z * 0.016, { octaves: 3 }) * (0.9 + 0.7 * far);
+    h += this.noise.fbm(x * 0.05, z * 0.05, { octaves: 2 }) * 0.2; // fine rolls
 
     // Green complexes: a broad shoulder tie-in that carries the landform out of
     // the green into the surrounds (continuous, not a pasted disc), a gentle
