@@ -3,9 +3,10 @@ import {
   ACESFilmicToneMapping, PCFSoftShadowMap,
   EquirectangularReflectionMapping, PostProcessing,
 } from 'three';
-import { pass, screenUV, saturation, mrt, output, velocity } from 'three/tsl';
+import { pass, screenUV, saturation, mrt, output, velocity, vec3, mix, luminance, smoothstep } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 
 // Owns the WebGPU renderer, scene, camera, HDRI environment, and the frame loop.
@@ -31,7 +32,7 @@ export class SceneManager {
     // dissolve band (~70-120m) so far grass/ground melt into a horizon-matched
     // haze — nothing to "pop." Kept gentle near the camera (exp^2) so mid-range
     // detail and the tree line stay readable.
-    this.scene.fog = new FogExp2(0xc9d6e2, 0.0013);
+    this.scene.fog = new FogExp2(0xd8d0bd, 0.0013);
 
     this.camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 4000);
     this.camera.position.set(0, 2, 8);
@@ -58,15 +59,32 @@ export class SceneManager {
     const depth = scenePass.getTextureNode('depth');
     const vel = scenePass.getTextureNode('velocity');
 
-    // Anti-alias, then the cinematic finish: restrained bloom (only the brightest
-    // sky/spec) and a slight de-saturation pull the look off "candy green" toward
-    // a filmic, realistic grade.
-    const aa = traa(color, depth, vel, this.camera);
+    // Ground-truth ambient occlusion with normals RECONSTRUCTED FROM DEPTH
+    // (normalNode = null) — no per-material normal MRT, so it works with our unlit
+    // grass. Contact shadows in the crevices (tree/grass bases, bunker edges,
+    // terrain folds) ground everything and add the depth a flat-lit scene lacks.
+    const aoPass = ao(depth, null, this.camera);
+    aoPass.radius.value = 0.6;
+    aoPass.scale.value = 1.5;
+    // GTAO writes the occlusion in a single (red) channel — use it as a scalar so
+    // it darkens all channels, not just red.
+    const litAO = color.mul(aoPass.getTextureNode().r);
+
+    // Anti-alias the AO'd beauty, then the cinematic finish: restrained bloom
+    // (only the brightest sky/spec) and a slight de-saturation pull the look off
+    // "candy green" toward a filmic, realistic grade.
+    const aa = traa(litAO, depth, vel, this.camera);
     const bloomPass = bloom(aa, 0.11, 0.6, 0.9);
     let rgb = aa.rgb.add(bloomPass);
-    rgb = saturation(rgb, 0.97);
+    rgb = saturation(rgb, 1.02);
     // Gentle contrast around linear mid-grey for a filmic, less-flat look.
-    rgb = rgb.sub(0.18).mul(1.08).add(0.18).max(0.0);
+    rgb = rgb.sub(0.18).mul(1.1).add(0.18).max(0.0);
+    // Golden-hour split-tone: warm the highlights toward amber, push the shadows
+    // slightly teal — a cohesive warm palette instead of cold minty green.
+    const lum = luminance(rgb);
+    const warmHi = rgb.mul(vec3(1.07, 1.0, 0.88));
+    const coolLo = rgb.mul(vec3(0.94, 0.99, 1.06));
+    rgb = mix(coolLo, warmHi, smoothstep(0.05, 0.5, lum));
     const d = screenUV.sub(0.5);
     const vignette = d.dot(d).mul(2.4 * 0.3).oneMinus();
     rgb = rgb.mul(vignette);
