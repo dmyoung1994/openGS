@@ -20,7 +20,7 @@ export class SceneManager {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.98;
+    this.renderer.toneMappingExposure = 0.9;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
@@ -31,7 +31,7 @@ export class SceneManager {
     // dissolve band (~70-120m) so far grass/ground melt into a horizon-matched
     // haze — nothing to "pop." Kept gentle near the camera (exp^2) so mid-range
     // detail and the tree line stay readable.
-    this.scene.fog = new FogExp2(0xcdd8e0, 0.0026);
+    this.scene.fog = new FogExp2(0xc9d6e2, 0.0013);
 
     this.camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 4000);
     this.camera.position.set(0, 2, 8);
@@ -57,13 +57,14 @@ export class SceneManager {
     const color = scenePass.getTextureNode();
     const depth = scenePass.getTextureNode('depth');
     const vel = scenePass.getTextureNode('velocity');
-    const aa = traa(color, depth, vel, this.camera);
 
-    // Cinematic finish on top of the anti-aliased beauty: gentle bloom, a
-    // saturation lift, and a soft vignette. ACES + sRGB applied last automatically.
-    const bloomPass = bloom(aa, 0.22, 0.6, 0.85);
+    // Anti-alias, then the cinematic finish: restrained bloom (only the brightest
+    // sky/spec) and a slight de-saturation pull the look off "candy green" toward
+    // a filmic, realistic grade.
+    const aa = traa(color, depth, vel, this.camera);
+    const bloomPass = bloom(aa, 0.11, 0.6, 0.9);
     let rgb = aa.rgb.add(bloomPass);
-    rgb = saturation(rgb, 1.12);
+    rgb = saturation(rgb, 0.97);
     const d = screenUV.sub(0.5);
     const vignette = d.dot(d).mul(2.4 * 0.3).oneMinus();
     rgb = rgb.mul(vignette);
