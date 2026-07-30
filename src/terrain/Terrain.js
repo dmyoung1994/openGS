@@ -2,22 +2,30 @@ import {
   BufferGeometry, BufferAttribute, Mesh, MeshStandardNodeMaterial,
   Vector2, Vector3, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
 } from 'three';
-import { attribute, positionWorld, mx_noise_float, float, vec3, smoothstep } from 'three/tsl';
+import {
+  attribute, positionWorld, mx_noise_float, float, vec2, vec3, mix, texture, luminance, smoothstep,
+} from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
 
-// Shared, tiled PBR turf maps (loaded once). Vertex colors still tint each
-// zone (fairway vs rough vs green), multiplied over this photographic detail.
+// Manicured-lawn PBR maps (ambientCG Grass004, CC0), loaded once. Mown surfaces
+// (fairway/tee/green/fringe) are now rendered as this TEXTURED ground rather than
+// short 3D blades (blades only cover the taller rough). The color map is used as
+// a DETAIL texture: its luminance/grain relights the per-zone tint (so each zone
+// keeps its correct color), sampled at two scales to hide tiling, with mowing
+// stripes on top. Normal + roughness maps give real turf relief.
 const _texLoader = new TextureLoader();
-// Only a faint normal map for lighting relief — NOT a diffuse map. A tiled
-// photographic ground reads as blotchy repetition at golf scale; the mown
-// surface colour comes from clean vertex-zone tint + noise, and the visible
-// texture of the turf comes from the instanced grass blades on top.
 function loadTurfMaps(rx, ry) {
-  const nor = _texLoader.load('/assets/textures/grass_nor_gl.jpg');
-  nor.wrapS = nor.wrapT = RepeatWrapping;
-  nor.repeat.set(rx, ry);
-  nor.anisotropy = 8;
-  return { normalMap: nor };
+  const load = (p, srgb) => {
+    const t = _texLoader.load(p);
+    t.wrapS = t.wrapT = RepeatWrapping;
+    t.anisotropy = 8;
+    if (srgb) t.colorSpace = SRGBColorSpace;
+    return t;
+  };
+  const map = load('/assets/textures/fairway_diff.jpg', true);  // sampled in colorNode
+  const nor = load('/assets/textures/fairway_nor_gl.jpg', false); nor.repeat.set(rx, ry);
+  const rough = load('/assets/textures/fairway_rough.jpg', false); rough.repeat.set(rx, ry);
+  return { map, normalMap: nor, roughnessMap: rough };
 }
 
 // A heightfield that is simultaneously the physics collision surface and the
@@ -159,8 +167,9 @@ export class Terrain {
     geo.setIndex(indices);
     geo.computeVertexNormals();
 
-    // Tile the turf photo so one repeat is ~5 m across the whole field.
-    const tile = 5;
+    // Normal/roughness tile every ~1.8 m (matching the colorNode's world-space
+    // sampling of the diffuse detail texture).
+    const tile = 1.8;
     const rx = (this.bounds.maxX - this.bounds.minX) / tile;
     const ry = (this.bounds.maxZ - this.bounds.minZ) / tile;
     const maps = loadTurfMaps(rx, ry);
@@ -168,11 +177,12 @@ export class Terrain {
       roughness: 1.0,
       metalness: 0.0,
       side: DoubleSide,
-      ...maps,
-      normalScale: new Vector2(0.35, 0.35),
+      normalMap: maps.normalMap,
+      roughnessMap: maps.roughnessMap,
+      normalScale: new Vector2(0.5, 0.5),
     });
-    // The zone tint (vertex `color`) times the procedural mow/detail node.
-    mat.colorNode = turfColorNode();
+    // Per-zone tint relit by the lawn detail texture (see turfColorNode).
+    mat.colorNode = turfColorNode(maps.map);
 
     const mesh = new Mesh(geo, mat);
     mesh.receiveShadow = true;
@@ -209,30 +219,36 @@ function turfBase(name, out) {
   return out;
 }
 
-// TSL colorNode: the per-vertex zone tint (`color`) multiplied by soft-edged
-// mowing stripes plus multi-scale procedural detail, so the GROUND itself reads
-// as tight mown turf even where the blades thin out (not flat paint). Ported
-// from the old GLSL onBeforeCompile injection to run natively under WebGPU.
-function turfColorNode() {
+// TSL colorNode: the per-zone tint (`color`) relit by a manicured-lawn detail
+// texture (`diffTex`). The texture's luminance carries the blade grain while the
+// zone tint sets the actual color of each surface (fairway/rough/green), so it's
+// photographic AND correctly colored. Sampled at two world scales to break
+// tiling, with soft-edged mowing stripes and a large-scale drift on top.
+function turfColorNode(diffTex) {
   const wx = positionWorld.x;
   const wz = positionWorld.z;
   const stripeMask = attribute('stripeMask', 'float');
   const baseCol = attribute('color', 'vec3');
 
-  // Soft-edged mow bands alternating down world Z, only where the turf is mown.
+  // Two-scale sample of the lawn texture — mixing 1.8 m and 5.5 m repeats hides
+  // the obvious tiling you'd get from a single scale down a long fairway.
+  const uv1 = vec2(wx, wz).mul(1 / 1.8);
+  const uv2 = vec2(wx, wz).mul(1 / 5.5);
+  const tex = mix(texture(diffTex, uv1), texture(diffTex, uv2), float(0.4));
+  const texLum = luminance(tex.rgb).max(0.001);
+
+  // Relight the zone tint by the texture luminance (grain), plus a hint of the
+  // texture's own hue variation (yellow/olive flecks) for richness.
+  const detail = texLum.div(0.09).clamp(0.55, 1.6);
+  const chroma = mix(vec3(1.0), tex.rgb.div(texLum), 0.30);
+  const c = baseCol.mul(detail).mul(chroma);
+
+  // Mow bands (fairway/tee only) + large-scale MaterialX drift to further break
+  // repetition.
   const sp = wz.mul(Math.PI / STRIPE_M).sin();
   const band = sp.sign().mul(smoothstep(0.0, 0.5, sp.abs()));
-  const mow = float(1.0).add(band.mul(0.16).mul(stripeMask));
+  const mow = float(1.0).add(band.mul(0.14).mul(stripeMask));
+  const macro = mx_noise_float(vec3(wx.mul(0.045), wz.mul(0.045), 0.0)).mul(0.5).add(0.5).mul(0.16).add(0.92);
 
-  // Smooth MaterialX noise sampled at several scales, remapped to [0,1].
-  const n = (f) => mx_noise_float(vec3(wx.mul(f), wz.mul(f), 0.0)).mul(0.5).add(0.5);
-  const micro = n(16.0).mul(0.20).add(0.90);   // blade-scale grain
-  const mottle = n(1.6).mul(0.24).add(0.88);   // turf color unevenness
-  const clump = n(0.7).mul(0.14).add(0.93);    // tufts/clumps
-  const wear = float(1.0).sub(smoothstep(0.5, 1.0, n(0.3)).mul(0.10));
-  const divot = float(1.0).sub(smoothstep(0.92, 1.0, n(1.3)).mul(0.14));
-  const macro = n(0.045).mul(0.16).add(0.92);  // large drift, hides tiling
-
-  const detail = mow.mul(micro).mul(mottle).mul(clump).mul(wear).mul(divot).mul(macro);
-  return baseCol.mul(detail);
+  return c.mul(mow).mul(macro);
 }

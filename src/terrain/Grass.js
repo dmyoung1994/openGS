@@ -312,12 +312,11 @@ function turfBase(name, out) {
 
 function bladeHeight(name) {
   switch (name) {
-    case 'green': return 0.014;
-    case 'tee':
-    case 'fairway': return 0.05;
-    case 'fringe': return 0.09;
+    // Mown surfaces (fairway / tee / green / fringe) render as TEXTURED GROUND,
+    // not 3D blades: short blades read as see-through slivers. Only the taller
+    // rough gets geometry, where blades genuinely look good.
     case 'rough': return 0.20;
-    case 'deepRough': return 0.30;
+    case 'deepRough': return 0.32;
     default: return 0;
   }
 }
