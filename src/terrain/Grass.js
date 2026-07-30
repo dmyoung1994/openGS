@@ -19,7 +19,7 @@ import { surface } from '../physics/groundInteraction.js';
 // TURF DATA texture (muted color + blade-height code) on the GPU. Density and
 // height fall off with distance from the camera (LOD); off-turf cells collapse.
 export class Grass {
-  constructor({ terrain, camera, tileSize = 8, gridPerTile = 96, radius = 60 }) {
+  constructor({ terrain, camera, tileSize = 8, gridPerTile = 112, radius = 60 }) {
     this.terrain = terrain;
     this.camera = camera;
     this.tileSize = tileSize;
@@ -186,7 +186,7 @@ export class Grass {
     // Blade width taper + grazing-angle widening.
     const orient = hA.mul(6.2831853);
     const cA = orient.cos(), sA = orient.sin();
-    const wInst = mix(0.006, 0.011, hE);
+    const wInst = mix(0.008, 0.013, hE);
     const wBase = wInst.mul(float(1.0).sub(smoothstep(0.55, 1.0, t)));
     const facing = vec2(sA.negate(), cA);
     const viewDir = vec2(dx.negate(), dz.negate()).div(dist.max(0.001));
@@ -237,13 +237,19 @@ export class Grass {
     return mat;
   }
 
-  // Nearest height fetch (one texel). The grid is 2 m; blades are short and
-  // dense, so nearest is cheap and the terracing is imperceptible under canopy.
+  // Bilinear terrain height via 4 texel fetches — smooth across the 2 m grid so
+  // blades don't terrace/step on slopes. Affordable now that only visible tiles
+  // (post-cull) run the shader.
   _sampleHeight(uvx, uvz) {
     const C = this._const;
-    const ix = int(uvx.mul(C.nx - 1).add(0.5).clamp(0.0, C.nx - 1));
-    const iz = int(uvz.mul(C.nz - 1).add(0.5).clamp(0.0, C.nz - 1));
-    return textureLoad(C.heightTex, ivec2(ix, iz)).x;
+    const gx = uvx.mul(C.nx - 1).clamp(0.0, C.nx - 1.001);
+    const gz = uvz.mul(C.nz - 1).clamp(0.0, C.nz - 1.001);
+    const ix = gx.floor(), iz = gz.floor();
+    const fx = gx.sub(ix), fz = gz.sub(iz);
+    const load = (a, b) => textureLoad(C.heightTex, ivec2(int(a), int(b))).x;
+    const h00 = load(ix, iz), h10 = load(ix.add(1), iz);
+    const h01 = load(ix, iz.add(1)), h11 = load(ix.add(1), iz.add(1));
+    return mix(mix(h00, h10, fx), mix(h01, h11, fx), fz);
   }
 
   _sampleData(uvx, uvz) {
