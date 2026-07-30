@@ -3,8 +3,9 @@ import {
   ACESFilmicToneMapping, PCFSoftShadowMap,
   EquirectangularReflectionMapping, PostProcessing,
 } from 'three';
-import { pass, screenUV, saturation } from 'three/tsl';
+import { pass, screenUV, saturation, mrt, output, velocity } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { traa } from 'three/addons/tsl/display/TRAANode.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 
 // Owns the WebGPU renderer, scene, camera, HDRI environment, and the frame loop.
@@ -26,9 +27,11 @@ export class SceneManager {
 
     this.scene = new Scene();
     this.scene.background = new Color(0x9ec6e0);
-    // Exponential aerial-perspective haze: distant timber melts into a horizon
-    // matched to the HDRI so background and fogged geometry agree.
-    this.scene.fog = new FogExp2(0xcbdcea, 0.0012);
+    // Exponential aerial-perspective haze, tuned to bite over the grass LOD
+    // dissolve band (~70-120m) so far grass/ground melt into a horizon-matched
+    // haze — nothing to "pop." Kept gentle near the camera (exp^2) so mid-range
+    // detail and the tree line stay readable.
+    this.scene.fog = new FogExp2(0xcdd8e0, 0.0026);
 
     this.camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 4000);
     this.camera.position.set(0, 2, 8);
@@ -46,9 +49,20 @@ export class SceneManager {
   // to the final node automatically (outputColorTransform), so the grade lives in
   // linear light before the filmic curve — a graded-broadcast finish, not a filter.
   _setupPost() {
-    const scenePass = pass(this.scene, this.camera);
-    const bloomPass = bloom(scenePass, 0.22, 0.6, 0.85);
-    let rgb = scenePass.rgb.add(bloomPass);
+    // TRAA (temporal AA) resolves the sub-pixel shimmer of thin grass blades that
+    // MSAA can't. It needs MSAA OFF and an MRT scene pass exposing color +
+    // velocity (motion vectors) plus depth so it can reproject the history.
+    const scenePass = pass(this.scene, this.camera, { samples: 0 });
+    scenePass.setMRT(mrt({ output, velocity }));
+    const color = scenePass.getTextureNode();
+    const depth = scenePass.getTextureNode('depth');
+    const vel = scenePass.getTextureNode('velocity');
+    const aa = traa(color, depth, vel, this.camera);
+
+    // Cinematic finish on top of the anti-aliased beauty: gentle bloom, a
+    // saturation lift, and a soft vignette. ACES + sRGB applied last automatically.
+    const bloomPass = bloom(aa, 0.22, 0.6, 0.85);
+    let rgb = aa.rgb.add(bloomPass);
     rgb = saturation(rgb, 1.12);
     const d = screenUV.sub(0.5);
     const vignette = d.dot(d).mul(2.4 * 0.3).oneMinus();

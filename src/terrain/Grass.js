@@ -19,7 +19,7 @@ import { surface } from '../physics/groundInteraction.js';
 // TURF DATA texture (muted color + blade-height code) on the GPU. Density and
 // height fall off with distance from the camera (LOD); off-turf cells collapse.
 export class Grass {
-  constructor({ terrain, camera, tileSize = 8, gridPerTile = 192, radius = 60 }) {
+  constructor({ terrain, camera, tileSize = 8, gridPerTile = 192, radius = 100 }) {
     this.terrain = terrain;
     this.camera = camera;
     this.tileSize = tileSize;
@@ -186,13 +186,19 @@ export class Grass {
     // Distance LOD (from the actual camera) + liveness.
     const dx = worldX.sub(cameraPosition.x), dz = worldZ.sub(cameraPosition.z);
     const dist = dx.mul(dx).add(dz.mul(dz)).sqrt();
-    const keepProb = float(1.0).sub(smoothstep(C.radius * 0.35, C.radius, dist).mul(0.75));
+    // Density feathers all the way to zero at the edge (not 25%) so the last
+    // blades disappear gradually — no hard ring.
+    const keepProb = float(1.0).sub(smoothstep(C.radius * 0.5, C.radius * 0.98, dist));
     const alive = inB.and(hMax.greaterThan(0.002)).and(dist.lessThan(C.radius)).and(hC.lessThan(keepProb));
     const aliveF = alive.select(float(1.0), float(0.0));
 
     const t = positionLocal.y;
     const side = positionLocal.x;
-    const distShort = float(1.0).sub(smoothstep(C.radius * 0.4, C.radius, dist).mul(0.4));
+    // Height feathers down (blades lie lower) toward the edge as they thin out.
+    const distShort = float(1.0).sub(smoothstep(C.radius * 0.45, C.radius, dist).mul(0.85));
+    // Edge dissolve factor: blend blade color toward the (darker) ground tone so
+    // the final blades melt into the color-matched terrain instead of standing out.
+    const edgeFade = smoothstep(C.radius * 0.6, C.radius, dist);
     const H = hMax.mul(float(0.6).add(hD.mul(0.5))).mul(distShort).mul(aliveF).mul(heightMul);
 
     // Blade width taper + grazing-angle widening.
@@ -236,12 +242,16 @@ export class Grass {
     const ndl = N.dot(this.uSunDir).max(0.0);
     const wrap = ndl.mul(0.6).add(0.4);
     const trans = N.negate().dot(this.uSunDir).max(0.0).pow(2.0).mul(0.4);
-    const ao = mix(0.7, 1.0, t);
-    const colJit = float(0.82).add(hD.mul(0.34));
-    const col = baseColor.mul(colJit);
+    const ao = mix(0.78, 1.0, t);
+    // Tighter per-blade color jitter (±10% vs ±17%) so dense grass reads as a
+    // smooth mown mat, not salt-and-pepper noise. Dissolve toward the ground tone
+    // near the LOD edge so far blades blend into the terrain.
+    const colJit = float(0.90).add(hD.mul(0.20));
+    const baseDis = mix(baseColor, baseColor.mul(0.82), edgeFade);
+    const col = baseDis.mul(colJit);
     const lightN = this.uAmbient.add(this.uSunColor.mul(wrap)).add(this.uSunColor.mul(trans));
     let lit = col.mul(lightN).mul(ao);
-    lit = lit.add(col.mul(t.pow(4.0).mul(0.10)));
+    lit = lit.add(col.mul(t.pow(4.0).mul(0.06)));
 
     const mat = new MeshBasicNodeMaterial({ side: DoubleSide });
     mat.positionNode = localP;
