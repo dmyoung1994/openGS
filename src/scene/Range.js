@@ -183,12 +183,15 @@ export class Range {
     matTop.castShadow = true;
     this.group.add(matTop);
 
+    // Rubber mat surround — a lit dark-olive rubber, NOT a black void. Slight
+    // spec so it catches the low sun instead of reading as an unlit hole.
     const frame = new Mesh(
       new BoxGeometry(2.7, 0.06, 1.9),
-      new MeshStandardMaterial({ color: 0x1a1c1e, roughness: 0.85 }),
+      new MeshStandardMaterial({ color: 0x3f463a, roughness: 0.7, metalness: 0.0 }),
     );
     frame.position.set(0, y0 + 0.03, 2);
     frame.receiveShadow = true;
+    frame.castShadow = true;
     this.group.add(frame);
 
     // Rubber tee peg under the ball (ball rests at x0,z2).

@@ -241,14 +241,26 @@ function turfColorNode(diffTex) {
   // texture's own hue variation (yellow/olive flecks) for richness.
   const detail = texLum.div(0.09).clamp(0.55, 1.6);
   const chroma = mix(vec3(1.0), tex.rgb.div(texLum), 0.30);
-  const c = baseCol.mul(detail).mul(chroma);
+  let c = baseCol.mul(detail).mul(chroma);
 
-  // Mow bands (fairway/tee only) + large-scale MaterialX drift to further break
-  // repetition.
+  // Mowing stripes — clear alternating light/dark bands down world Z on the
+  // mown turf (fairway/tee via stripeMask). The classic "that's a real course"
+  // cue; stronger than before, soft-edged, with a faint cool/warm tone shift so
+  // the light and dark bands read as different mow directions.
   const sp = wz.mul(Math.PI / STRIPE_M).sin();
-  const band = sp.sign().mul(smoothstep(0.0, 0.5, sp.abs()));
-  const mow = float(1.0).add(band.mul(0.14).mul(stripeMask));
-  const macro = mx_noise_float(vec3(wx.mul(0.045), wz.mul(0.045), 0.0)).mul(0.5).add(0.5).mul(0.16).add(0.92);
+  const band = sp.sign().mul(smoothstep(0.0, 0.55, sp.abs())).mul(stripeMask);
+  const mow = float(1.0).add(band.mul(0.24));
+  const stripeTint = mix(vec3(1.0), vec3(1.03, 1.0, 0.95), band.mul(0.5).add(0.5));
+  c = c.mul(mow).mul(stripeTint);
 
-  return c.mul(mow).mul(macro);
+  // Two-scale MaterialX drift (brightness + slow hue) to kill the tile repeat
+  // that marches to the horizon.
+  const m1 = mx_noise_float(vec3(wx.mul(0.03), wz.mul(0.03), 0.0)).mul(0.5).add(0.5);
+  const m2 = mx_noise_float(vec3(wx.mul(0.007), wz.mul(0.007), 3.0)).mul(0.5).add(0.5);
+  c = c.mul(m1.mul(0.16).add(0.88)).mul(m2.mul(0.12).add(0.94));
+
+  // Slightly desaturate + warm so the fairway is muted olive, not radioactive.
+  const lum = luminance(c);
+  c = mix(vec3(lum), c, 0.9).mul(vec3(1.03, 1.0, 0.95));
+  return c;
 }
