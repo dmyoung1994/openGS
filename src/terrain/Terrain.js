@@ -186,7 +186,7 @@ export class Terrain {
 
     const mesh = new Mesh(geo, mat);
     mesh.receiveShadow = true;
-    mesh.castShadow = false;
+    mesh.castShadow = true;   // so the rolling terrain SELF-SHADOWS in raking light
     mesh.name = 'terrain';
     return mesh;
   }

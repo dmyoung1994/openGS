@@ -77,10 +77,14 @@ export class Range {
   }
 
   _height(x, z) {
-    // Base rolling ground, calmer near the tee, more movement down range.
+    // Gently rolling ground so the fairway has real FORM (a flat billiard plane
+    // reads as a prototype and casts no shadows). Broad long-wavelength swells
+    // everywhere, plus finer rolls, ramping up down range. The tee is levelled
+    // back out below.
     const far = Math.min(1, Math.max(0, (-z) / 300));
-    let h = this.noise.fbm(x * 0.006, z * 0.006, { octaves: 4 }) * (0.4 + 2.2 * far);
-    h += this.noise.fbm(x * 0.02, z * 0.02, { octaves: 3 }) * 0.25 * far;
+    let h = this.noise.fbm(x * 0.006, z * 0.006, { octaves: 4 }) * (1.1 + 2.0 * far);
+    h += this.noise.fbm(x * 0.018, z * 0.018, { octaves: 3 }) * (0.45 + 0.5 * far);
+    h += this.noise.fbm(x * 0.05, z * 0.05, { octaves: 2 }) * 0.14; // fine rolls
 
     // Green complexes: a broad shoulder tie-in that carries the landform out of
     // the green into the surrounds (continuous, not a pasted disc), a gentle

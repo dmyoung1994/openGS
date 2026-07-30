@@ -18,15 +18,17 @@ export class Lighting {
     this.sun.position.copy(this._offset);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
-    this.sun.shadow.camera.near = 10;
-    this.sun.shadow.camera.far = 460;
-    const s = 78;                       // tight frustum -> crisp near shadows
+    this.sun.shadow.camera.near = 5;
+    this.sun.shadow.camera.far = 700;
+    // Frustum wide enough to cover the visible fairway/tree line so raking-light
+    // shadows actually fall across what the camera sees (not just the tee).
+    const s = 150;
     this.sun.shadow.camera.left = -s;
     this.sun.shadow.camera.right = s;
     this.sun.shadow.camera.top = s;
     this.sun.shadow.camera.bottom = -s;
-    this.sun.shadow.bias = -0.00035;
-    this.sun.shadow.normalBias = 0.028;
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.04;
     this.sun.shadow.radius = 3;         // PCFSoft penumbra — soft-edged, not hard
     scene.add(this.sun);
     scene.add(this.sun.target);
