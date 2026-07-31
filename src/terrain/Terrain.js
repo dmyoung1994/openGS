@@ -247,10 +247,13 @@ function turfColorNode(diffTex) {
   // mown turf (fairway/tee via stripeMask). The classic "that's a real course"
   // cue; stronger than before, soft-edged, with a faint cool/warm tone shift so
   // the light and dark bands read as different mow directions.
-  const sp = wz.mul(Math.PI / STRIPE_M).sin();
-  const band = sp.sign().mul(smoothstep(0.0, 0.55, sp.abs())).mul(stripeMask);
-  const mow = float(1.0).add(band.mul(0.24));
-  const stripeTint = mix(vec3(1.0), vec3(1.03, 1.0, 0.95), band.mul(0.5).add(0.5));
+  // A slow noise offset bends the bands with the ground so they read as mower
+  // arcs / terrain-warped stripes, not a perfect ruler grid; softened contrast.
+  const stripeWarp = mx_noise_float(vec3(wx.mul(0.02), wz.mul(0.02), 5.0)).mul(1.6);
+  const sp = wz.add(stripeWarp).mul(Math.PI / STRIPE_M).sin();
+  const band = sp.sign().mul(smoothstep(0.0, 0.6, sp.abs())).mul(stripeMask);
+  const mow = float(1.0).add(band.mul(0.18));
+  const stripeTint = mix(vec3(1.0), vec3(1.03, 1.0, 0.96), band.mul(0.5).add(0.5));
   c = c.mul(mow).mul(stripeTint);
 
   // Two-scale MaterialX drift (brightness + slow hue) to kill the tile repeat
