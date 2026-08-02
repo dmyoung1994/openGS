@@ -336,12 +336,32 @@ export function instanceTrees(proto, placements, options = {}) {
   const { backdrop = true, secondary = true } = options;
   const group = new Group();
 
-  fillParts(group, proto, placements);                       // hero species
+  // Bucket placements into spatial cells and instance each bucket separately, so
+  // every InstancedMesh has a TIGHT bounding sphere and the renderer frustum-culls
+  // off-screen buckets. One mesh spanning the whole forest ring never culls (its
+  // sphere covers everything) — the reason tree cost didn't change with view.
+  for (const bucket of bucketPlacements(placements, 45)) fillParts(group, proto, bucket);
   if (secondary) {
-    fillParts(group, createPineProto(), secondarySpeciesPlacements(placements));
+    const pine = createPineProto();
+    for (const bucket of bucketPlacements(secondarySpeciesPlacements(placements), 45)) {
+      fillParts(group, pine, bucket);
+    }
   }
   if (backdrop) addBillboardBackdrop(group, placements);
   return group;
+}
+
+// Group placements into square world cells of `cell` metres so each cell can be
+// instanced and culled independently.
+function bucketPlacements(placements, cell) {
+  const map = new Map();
+  for (const p of placements) {
+    const key = `${Math.floor(p.x / cell)},${Math.floor(p.z / cell)}`;
+    let b = map.get(key);
+    if (!b) { b = []; map.set(key, b); }
+    b.push(p);
+  }
+  return [...map.values()];
 }
 
 // RICHER MULTI-SPECIES API for Range.js to place several species explicitly.
