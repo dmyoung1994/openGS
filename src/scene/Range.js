@@ -6,7 +6,7 @@ import {
 } from 'three';
 import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
-import { loadTreePrototype, instanceTrees } from './Trees.js';
+import { loadTreePrototype, instanceTrees, billboardTrees } from './Trees.js';
 import { Noise } from '../util/noise.js';
 import { YARD_TO_M } from '../util/units.js';
 
@@ -421,9 +421,18 @@ export class Range {
     const placements = this._treePlacements();
     try {
       const proto = await loadTreePrototype('/assets/trees/island_tree_01.glb');
-      // Split placements across available prototypes for variety later.
-      this.trees = instanceTrees(proto, placements);
+      // Tree LOD: real geometry (hero GLB + procedural pines) only for placements
+      // near the play area; everything farther is a cheap billboard wall — the
+      // forest is 100-340m out where a photoscan is indistinguishable from a card,
+      // and this is where most of the tree cost was going.
+      const near = [], far = [];
+      for (const p of placements) {
+        (Math.hypot(p.x, p.z) < 95 ? near : far).push(p);
+      }
+      this.trees = new Group();
       this.trees.name = 'trees';
+      this.trees.add(instanceTrees(proto, near, { backdrop: false }));  // hero + pines (bucketed, culled)
+      this.trees.add(billboardTrees(far));                              // distant billboard wall
       this.group.add(this.trees);
     } catch (e) {
       console.warn('tree load failed', e);

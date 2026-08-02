@@ -294,16 +294,35 @@ function addBillboardBackdrop(group, placements) {
     }
   }
   const tex = billboardTextures();
-  // Split each species' cards across its texture variants for silhouette variety.
-  const split = (list, texes, widthRatio) => {
-    const buckets = texes.map(() => []);
-    list.forEach((it, i) => buckets[i % texes.length].push(it));
-    buckets.forEach((b, i) => {
-      if (b.length) group.add(instanceBillboards(b, { texture: texes[i], widthRatio }));
-    });
-  };
-  split(decid, tex.deciduous, 0.8);
-  split(pine, tex.pine, 0.5);
+  splitBillboards(group, decid, tex.deciduous, 0.8);
+  splitBillboards(group, pine, tex.pine, 0.5);
+  return group;
+}
+
+// Spread a species' cards across its texture variants (silhouette variety) and
+// add one instanced, frustum-independent mesh per variant.
+function splitBillboards(group, list, texes, widthRatio) {
+  const buckets = texes.map(() => []);
+  list.forEach((it, i) => buckets[i % texes.length].push(it));
+  buckets.forEach((b, i) => {
+    if (b.length) group.add(instanceBillboards(b, { texture: texes[i], widthRatio }));
+  });
+}
+
+// DISTANT trees as billboards only (the LOD tier): a card AT each placement plus
+// depth rows behind it. Photoscan hero geometry is wasted past ~100m — a billboard
+// wall is visually indistinguishable there and vastly cheaper.
+export function billboardTrees(placements) {
+  const group = new Group();
+  const decid = [], pine = [];
+  for (const p of placements) {
+    const item = { x: p.x, y: p.y, z: p.z, targetHeight: p.targetHeight };
+    (Math.random() < 0.5 ? decid : pine).push(item);
+  }
+  const tex = billboardTextures();
+  splitBillboards(group, decid, tex.deciduous, 0.8);
+  splitBillboards(group, pine, tex.pine, 0.5);
+  addBillboardBackdrop(group, placements);   // recede behind the front cards
   return group;
 }
 
