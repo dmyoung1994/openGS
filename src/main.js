@@ -82,8 +82,27 @@ ball.on('rest', (r) => {
 
 ball.on('hazard', () => panel.setLive('— in the water —'));
 
+// On-screen FPS / frame-time meter (toggle with `). Uses real wall-clock time —
+// the physics dt is clamped to 0.1s, so it would floor the reading at 10fps and
+// lie. On by default while we tune performance.
+const fpsEl = document.createElement('div');
+fpsEl.style.cssText = 'position:fixed;top:8px;right:10px;z-index:9999;'
+  + 'font:600 12px/1.3 ui-monospace,SFMono-Regular,monospace;color:#cfe9d0;'
+  + 'background:rgba(14,20,26,.72);padding:4px 8px;border-radius:6px;pointer-events:none;';
+document.body.appendChild(fpsEl);
+let _fpsLast = performance.now(), _fpsN = 0, _fpsAcc = 0;
+function updateFpsMeter() {
+  const now = performance.now();
+  _fpsAcc += (now - _fpsLast) / 1000; _fpsLast = now; _fpsN++;
+  if (_fpsAcc >= 0.5) {
+    fpsEl.textContent = `${(_fpsN / _fpsAcc).toFixed(0)} fps · ${(1000 * _fpsAcc / _fpsN).toFixed(1)} ms`;
+    _fpsAcc = 0; _fpsN = 0;
+  }
+}
+
 // Main update.
 sm.onUpdate((dt, t) => {
+  updateFpsMeter();
   range.update(t);
 
   if (flying) {
@@ -111,6 +130,7 @@ sm.start();
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); hit(); }
   if (e.code === 'KeyR' && !flying) toAddress();
+  if (e.code === 'Backquote') fpsEl.style.display = fpsEl.style.display === 'none' ? '' : 'none';
 });
 
 // Dismiss the loading veil once the first frame is up.
