@@ -1,5 +1,5 @@
 import {
-  BufferGeometry, BufferAttribute, Mesh, MeshStandardNodeMaterial,
+  BufferGeometry, BufferAttribute, Mesh, MeshStandardNodeMaterial, Group,
   Vector2, Vector3, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
 } from 'three';
 import {
@@ -113,65 +113,95 @@ export class Terrain {
   }
 
   _buildMesh() {
-    // Render grid at renderSpacing (coarser than the physics grid); each vertex
-    // takes its height from the FINE field via heightAt (bilinear), so the mesh is
-    // cheaper but still hugs the accurate contours the ball rolls on.
+    // Split the render surface into CHUNKS, each its own mesh with a real bounding
+    // box, so the renderer frustum-culls them: the whole terrain no longer draws
+    // when it's off-screen, and fps scales with what's actually in view. Same
+    // resolution everywhere → neighbours share exact edge vertices (no gaps), and
+    // normals come from heightAt (not per-chunk computeVertexNormals) so chunk
+    // borders don't show a lighting seam. This is Stage 1 of the LOD terrain — a
+    // chunk is a quadtree leaf; distance LOD + GPU displacement come next.
     const spacing = this.renderSpacing;
     const { minX, minZ, maxX, maxZ } = this.bounds;
     const nx = Math.floor((maxX - minX) / spacing) + 1;
     const nz = Math.floor((maxZ - minZ) / spacing) + 1;
-    const idx = (i, j) => j * nx + i;
-    const vcount = nx * nz;
-    const positions = new Float32Array(vcount * 3);
-    const uvs = new Float32Array(vcount * 2);
+    const mat = this._buildTurfMaterial();
 
-    for (let j = 0; j < nz; j++) {
-      for (let i = 0; i < nx; i++) {
-        const k = idx(i, j);
+    const CC = 24;                        // cells per chunk side (~24 m at 1 m spacing)
+    const group = new Group();
+    group.name = 'terrain';
+    for (let cj = 0; cj < nz - 1; cj += CC) {
+      for (let ci = 0; ci < nx - 1; ci += CC) {
+        const i1 = Math.min(ci + CC, nx - 1);
+        const j1 = Math.min(cj + CC, nz - 1);
+        group.add(this._buildChunk(ci, cj, i1, j1, spacing, minX, minZ, nx, nz, mat));
+      }
+    }
+    return group;
+  }
+
+  // One terrain chunk covering grid cells [i0..i1]×[j0..j1] (inclusive, so
+  // neighbours share the boundary row/column). Heights and normals are sampled
+  // from the fine physics field, so chunks tile seamlessly.
+  _buildChunk(i0, j0, i1, j1, spacing, minX, minZ, nx, nz, mat) {
+    const w = i1 - i0 + 1, h = j1 - j0 + 1;
+    const vcount = w * h;
+    const positions = new Float32Array(vcount * 3);
+    const normals = new Float32Array(vcount * 3);
+    const uvs = new Float32Array(vcount * 2);
+    const e = this.spacing;              // sample normals at the FINE step (sharper, physics-matched)
+    const lidx = (i, j) => (j - j0) * w + (i - i0);
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = lidx(i, j);
         const x = minX + i * spacing;
         const z = minZ + j * spacing;
         positions[k * 3] = x;
         positions[k * 3 + 1] = this.heightAt(x, z);
         positions[k * 3 + 2] = z;
+        // Analytic normal (central differences) — identical across chunk borders.
+        const nX = this.heightAt(x - e, z) - this.heightAt(x + e, z);
+        const nZ = this.heightAt(x, z - e) - this.heightAt(x, z + e);
+        const nY = 2 * e;
+        const inv = 1 / Math.hypot(nX, nY, nZ);
+        normals[k * 3] = nX * inv; normals[k * 3 + 1] = nY * inv; normals[k * 3 + 2] = nZ * inv;
         uvs[k * 2] = i / (nx - 1);
         uvs[k * 2 + 1] = j / (nz - 1);
       }
     }
-
-    // Two triangles per grid cell.
     const indices = [];
-    for (let j = 0; j < nz - 1; j++) {
-      for (let i = 0; i < nx - 1; i++) {
-        const a = idx(i, j);
-        const b = idx(i + 1, j);
-        const d = idx(i, j + 1);
-        const e = idx(i + 1, j + 1);
-        indices.push(a, d, b, b, d, e);
+    for (let j = j0; j < j1; j++) {
+      for (let i = i0; i < i1; i++) {
+        const a = lidx(i, j), b = lidx(i + 1, j), d = lidx(i, j + 1), ee = lidx(i + 1, j + 1);
+        indices.push(a, d, b, b, d, ee);
       }
     }
-
     const geo = new BufferGeometry();
     geo.setAttribute('position', new BufferAttribute(positions, 3));
+    geo.setAttribute('normal', new BufferAttribute(normals, 3));
     geo.setAttribute('uv', new BufferAttribute(uvs, 2));
     geo.setIndex(indices);
-    geo.computeVertexNormals();
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
 
-    // Normal/roughness tile every ~1.8 m (matching the colorNode's world-space
-    // sampling of the diffuse detail texture).
-    const tile = 1.8;
+    const mesh = new Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;              // rolling terrain self-shadows in raking light
+    mesh.frustumCulled = true;           // per-chunk culling — the whole point of Stage 1
+    return mesh;
+  }
+
+  // Shared turf material: analytic per-zone tint (smooth-curve boundaries) relit
+  // by a lawn detail texture. Sand keeps its own tan (the green-ward turfBase
+  // transform is only for grass).
+  _buildTurfMaterial() {
+    const tile = 1.8;                    // normal map tiles every ~1.8 m (matches colorNode)
     const rx = (this.bounds.maxX - this.bounds.minX) / tile;
     const ry = (this.bounds.maxZ - this.bounds.minZ) / tile;
     const maps = loadTurfMaps(rx, ry);
     const mat = new MeshStandardNodeMaterial({
-      roughness: 1.0,
-      metalness: 0.0,
-      side: DoubleSide,
-      normalMap: maps.normalMap,
-      normalScale: new Vector2(0.5, 0.5),
+      roughness: 1.0, metalness: 0.0, side: DoubleSide,
+      normalMap: maps.normalMap, normalScale: new Vector2(0.5, 0.5),
     });
-    // Analytic per-zone tint (smooth-curve boundaries) relit by the lawn detail
-    // texture. Bake the muted per-zone colors once; sand keeps its own tan (the
-    // green-ward turfBase transform is only for grass).
     const grassCol = (name) => {
       const c = turfBase(name, new Color()).multiplyScalar(0.82);
       return vec3(c.r, c.g, c.b);
@@ -183,12 +213,7 @@ export class Terrain {
       sand: vec3(sc.r, sc.g, sc.b),
     };
     mat.colorNode = turfColorNode(maps.map, { ...this.zones, colors: palette });
-
-    const mesh = new Mesh(geo, mat);
-    mesh.receiveShadow = true;
-    mesh.castShadow = true;   // so the rolling terrain SELF-SHADOWS in raking light
-    mesh.name = 'terrain';
-    return mesh;
+    return mat;
   }
 }
 
