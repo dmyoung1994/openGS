@@ -42,7 +42,8 @@ export class Range {
 
     this.terrain = new Terrain({
       bounds: { minX: -110, maxX: 110, minZ: -340, maxZ: 30 },
-      spacing: 0.6,
+      spacing: 0.6,          // fine physics/collision grid (accurate ball roll)
+      renderSpacing: 1.0,    // coarser render mesh + shadow pass (LOD; ~2.8x fewer verts)
       heightFn: (x, z) => this._height(x, z),
       surfaceFn: (x, z) => this._surface(x, z),
       // Geometric spec for the shader's analytic (smooth-curve) turf zones. Mirrors

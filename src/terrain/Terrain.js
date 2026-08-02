@@ -43,9 +43,14 @@ function loadTurfMaps(rx, ry) {
 //   surfaceFn:   (x, z) => key into SURFACES
 export class Terrain {
   constructor(config) {
-    const { bounds, spacing = 2, heightFn, surfaceFn, zones } = config;
+    // `spacing` is the FINE physics/collision grid (heightAt/normalAt sample it, so
+    // ball roll and contours stay accurate). `renderSpacing` is the coarser step
+    // the render mesh + shadow pass use — a distance-independent LOD that keeps the
+    // heavy vertex work down while the fine grid preserves gameplay fidelity.
+    const { bounds, spacing = 2, renderSpacing = spacing, heightFn, surfaceFn, zones } = config;
     this.bounds = bounds;
     this.spacing = spacing;
+    this.renderSpacing = renderSpacing;
     this.heightFn = heightFn;
     this.surfaceFn = surfaceFn;
     // Geometric zone spec (greens/sands circles, fairway corridor, tee box) used
@@ -108,21 +113,25 @@ export class Terrain {
   }
 
   _buildMesh() {
-    const { nx, nz, spacing } = this;
-    const { minX, minZ } = this.bounds;
+    // Render grid at renderSpacing (coarser than the physics grid); each vertex
+    // takes its height from the FINE field via heightAt (bilinear), so the mesh is
+    // cheaper but still hugs the accurate contours the ball rolls on.
+    const spacing = this.renderSpacing;
+    const { minX, minZ, maxX, maxZ } = this.bounds;
+    const nx = Math.floor((maxX - minX) / spacing) + 1;
+    const nz = Math.floor((maxZ - minZ) / spacing) + 1;
+    const idx = (i, j) => j * nx + i;
     const vcount = nx * nz;
     const positions = new Float32Array(vcount * 3);
     const uvs = new Float32Array(vcount * 2);
 
-    // Only geometry here now — per-zone color and the mow mask moved to the
-    // high-res splat (this.splatTex), sampled per-fragment for crisp zone edges.
     for (let j = 0; j < nz; j++) {
       for (let i = 0; i < nx; i++) {
-        const k = this._idx(i, j);
+        const k = idx(i, j);
         const x = minX + i * spacing;
         const z = minZ + j * spacing;
         positions[k * 3] = x;
-        positions[k * 3 + 1] = this.heights[k];
+        positions[k * 3 + 1] = this.heightAt(x, z);
         positions[k * 3 + 2] = z;
         uvs[k * 2] = i / (nx - 1);
         uvs[k * 2 + 1] = j / (nz - 1);
@@ -133,10 +142,10 @@ export class Terrain {
     const indices = [];
     for (let j = 0; j < nz - 1; j++) {
       for (let i = 0; i < nx - 1; i++) {
-        const a = this._idx(i, j);
-        const b = this._idx(i + 1, j);
-        const d = this._idx(i, j + 1);
-        const e = this._idx(i + 1, j + 1);
+        const a = idx(i, j);
+        const b = idx(i + 1, j);
+        const d = idx(i, j + 1);
+        const e = idx(i + 1, j + 1);
         indices.push(a, d, b, b, d, e);
       }
     }
