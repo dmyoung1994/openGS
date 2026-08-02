@@ -66,6 +66,10 @@ export class SceneManager {
     const aoPass = ao(depth, null, this.camera);
     aoPass.radius.value = 0.6;
     aoPass.scale.value = 1.5;
+    // AO is low-frequency: render it at half resolution with fewer samples. Nearly
+    // invisible vs full-res GTAO, but a big cut to the (view-independent) post cost.
+    aoPass.resolutionScale = 0.5;
+    aoPass.samples.value = 8;
     // GTAO writes the occlusion in a single (red) channel — use it as a scalar so
     // it darkens all channels, not just red.
     const litAO = color.mul(aoPass.getTextureNode().r);
