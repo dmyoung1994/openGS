@@ -27,11 +27,14 @@ export class Range {
     // Greenside sand bunkers and a lateral water hazard. These are carved into
     // the heightfield (so the ball physically rolls into them and the surface
     // classifier returns 'sand'/'water'), then dressed with overlay meshes.
+    // depth: sand floor below grade. lip: grass-ridge height above grade at the
+    // high side (down-range / green side); you look into the sand past a raised
+    // back lip. pot: a deep, small, steep, uniformly-lipped links pot bunker.
     this.bunkers = [
-      { x: 20, z: -86, r: 5.0, depth: 0.9 },   // front-right of the 100 green
-      { x: 1, z: -99, r: 4.2, depth: 0.8 },    // short-left of the 100 green
-      { x: -25, z: -132, r: 5.4, depth: 1.0 }, // guarding the 150 green
-      { x: 6, z: -190, r: 5.6, depth: 1.0 },   // fairway bunker ~205
+      { x: 20, z: -86, r: 5.0, depth: 1.0, lip: 0.75 },            // front-right of the 100 green
+      { x: 1, z: -99, r: 3.0, depth: 1.7, lip: 1.0, pot: true },   // deep pot, short-left of 100
+      { x: -25, z: -132, r: 5.4, depth: 1.1, lip: 0.85 },          // guarding the 150 green
+      { x: 6, z: -190, r: 5.6, depth: 1.0, lip: 0.6 },             // fairway bunker ~205
     ];
     this.ponds = [
       { x: 55, z: -122, r: 15, depth: 1.6 },   // lateral water, right side
@@ -105,16 +108,26 @@ export class Range {
       }
     }
 
-    // Carve bunkers with a DEFINED edge: a flat sand floor, a steep wall rising
-    // to the rim, and a raised lip just outside it — reads with a crisp shoulder
-    // instead of a soft parabolic dish. The conforming sand disc re-samples this
-    // height, so the sand hugs the floor and climbs the wall face to the lip.
+    // Carve bunkers with a real LIP: a flat sand floor, a steep wall up to the
+    // rim, then a raised GRASS ridge just outside it. The ridge is tall on the
+    // high side (down-range / green side) and low toward the player for a normal
+    // bunker — you look into the sand past a raised back lip — or uniformly tall
+    // and deep for a pot bunker (steep-walled links pit). The sand disc sits in
+    // the floor (see _bunkerSandR), so the lip reads as a grass face above it.
     for (const b of this.bunkers) {
-      const d = Math.hypot(x - b.x, z - b.z);
-      if (d < b.r + 2.5) {
-        const wall = smoothstep(b.r * 0.5, b.r, d);       // 0 on floor → 1 at rim
+      const dx = x - b.x, dz = z - b.z;
+      const d = Math.hypot(dx, dz);
+      const lipW = b.pot ? 2.0 : 2.8;
+      if (d < b.r + lipW) {
+        const rFloor = b.r * (b.pot ? 0.72 : 0.45);
+        const wall = smoothstep(rFloor, b.r, d);          // 0 on floor → 1 at rim
         const floorToRim = -b.depth * (1 - wall);         // flat -depth floor, 0 at rim
-        const lip = Math.exp(-((d - (b.r + 0.4)) ** 2) / (0.9 * 0.9)) * 0.2;
+        // Directional weight: 1 on the high (down-range, -z) side → 0 toward the
+        // player. Pot bunkers lip up uniformly all the way around.
+        const side = b.pot ? 1 : Math.max(0, 0.5 - 0.5 * (dz / Math.max(d, 0.001)));
+        const lipH = (b.lip ?? 0.6) * side;
+        const lipCenter = b.r + lipW * 0.32;
+        const lip = Math.exp(-((d - lipCenter) ** 2) / (lipW * 0.5) ** 2) * lipH;
         h += floorToRim + lip;
       }
     }
@@ -131,6 +144,12 @@ export class Range {
     const teeFlat = Math.exp(-((x * x) / 40 + ((z - 2) * (z - 2)) / 60));
     h = h * (1 - teeFlat) + 0.02 * teeFlat;
     return h;
+  }
+
+  // Radius of the visible sand (floor + wall face). Pot bunkers keep sand to the
+  // small floor so their steep grass walls rise revetted above it.
+  _bunkerSandR(b) {
+    return b.pot ? b.r * 0.78 : b.r;
   }
 
   // Water surface elevation for a pond (the flat plane the water mesh sits at).
@@ -156,9 +175,9 @@ export class Range {
       if (Math.hypot(x - p.x, z - p.z) < p.r) return 'water';
     }
 
-    // Sand bunkers.
+    // Sand bunkers — only the floor/wall reads as sand; the raised lip is grass.
     for (const b of this.bunkers) {
-      if (Math.hypot(x - b.x, z - b.z) < b.r + 0.4) return 'sand';
+      if (Math.hypot(x - b.x, z - b.z) < this._bunkerSandR(b)) return 'sand';
     }
 
     // The fairway fans out; beyond it is rough, then deep rough near the trees.
@@ -323,7 +342,7 @@ export class Range {
       for (const t of [m.map, m.normalMap, m.roughnessMap]) {
         t.wrapS = t.wrapT = RepeatWrapping; t.repeat.set(rep, rep); t.anisotropy = 8; t.needsUpdate = true;
       }
-      const geo = this._conformingDisc(b.x, b.z, b.r + 0.3, 0.04, { segments: 96, jitter: 0.08 });
+      const geo = this._conformingDisc(b.x, b.z, this._bunkerSandR(b), 0.04, { segments: 96, jitter: 0.07 });
       const mesh = new Mesh(geo, m);
       mesh.receiveShadow = true;
       mesh.name = 'bunker';
