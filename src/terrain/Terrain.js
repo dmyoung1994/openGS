@@ -4,7 +4,7 @@ import {
   DataTexture, RGBAFormat, UnsignedByteType, NearestFilter,
 } from 'three';
 import {
-  positionWorld, mx_noise_float, float, vec2, vec3, mix, texture, luminance, smoothstep,
+  positionWorld, normalWorld, mx_noise_float, float, vec2, vec3, mix, texture, luminance, smoothstep,
 } from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
 
@@ -25,8 +25,10 @@ function loadTurfMaps(rx, ry) {
   };
   const map = load('/assets/textures/fairway_diff.jpg', true);  // sampled in colorNode
   const nor = load('/assets/textures/fairway_nor_gl.jpg', false); nor.repeat.set(rx, ry);
-  const rough = load('/assets/textures/fairway_rough.jpg', false); rough.repeat.set(rx, ry);
-  return { map, normalMap: nor, roughnessMap: rough };
+  // No roughness map: its low-roughness texels put a broad specular sheen on the
+  // turf that blew out to white on sun-facing slopes (bunker walls). Grass is
+  // matte — a flat roughness of 1 reads correctly and kills the hot faces.
+  return { map, normalMap: nor };
 }
 
 // A heightfield that is simultaneously the physics collision surface and the
@@ -187,7 +189,6 @@ export class Terrain {
       metalness: 0.0,
       side: DoubleSide,
       normalMap: maps.normalMap,
-      roughnessMap: maps.roughnessMap,
       normalScale: new Vector2(0.5, 0.5),
     });
     // Per-zone tint (crisp splat) relit by the lawn detail texture.
@@ -279,5 +280,11 @@ function turfColorNode(diffTex, splatTex, bounds) {
   // Slightly desaturate + warm so the fairway is muted olive, not radioactive.
   const lum = luminance(c);
   c = mix(vec3(lum), c, 0.9).mul(vec3(1.03, 1.0, 0.95));
+
+  // A gentle richening of steep faces (bunker walls, green shoulders): steep
+  // grass is self-shadowed, so fold albedo down slightly with the slope. Subtle
+  // now that the specular blowout is fixed (no roughness map) — this is polish.
+  const slopeShade = smoothstep(0.35, 0.85, normalWorld.y);   // 0 vertical → 1 flat
+  c = c.mul(mix(float(0.7), float(1.0), slopeShade));
   return c;
 }
