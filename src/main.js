@@ -95,7 +95,12 @@ function updateFpsMeter() {
   const now = performance.now();
   _fpsAcc += (now - _fpsLast) / 1000; _fpsLast = now; _fpsN++;
   if (_fpsAcc >= 0.5) {
-    fpsEl.textContent = `${(_fpsN / _fpsAcc).toFixed(0)} fps · ${(1000 * _fpsAcc / _fpsN).toFixed(1)} ms`;
+    const off = [];
+    if (range.grass && !range.grass.mesh.visible) off.push('grass');
+    if (range.trees && !range.trees.visible) off.push('trees');
+    if (sm.bypassPost) off.push('post');
+    const tag = off.length ? `  [${off.join(' ')} off]` : '';
+    fpsEl.textContent = `${(_fpsN / _fpsAcc).toFixed(0)} fps · ${(1000 * _fpsAcc / _fpsN).toFixed(1)} ms${tag}`;
     _fpsAcc = 0; _fpsN = 0;
   }
 }
@@ -131,6 +136,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); hit(); }
   if (e.code === 'KeyR' && !flying) toAddress();
   if (e.code === 'Backquote') fpsEl.style.display = fpsEl.style.display === 'none' ? '' : 'none';
+  // Perf diagnostics — toggle a subsystem and watch the meter to find the cost.
+  if (e.code === 'Digit1' && range.grass) range.grass.mesh.visible = !range.grass.mesh.visible;
+  if (e.code === 'Digit2' && range.trees) range.trees.visible = !range.trees.visible;
+  if (e.code === 'Digit3') sm.bypassPost = !sm.bypassPost;
 });
 
 // Dismiss the loading veil once the first frame is up.

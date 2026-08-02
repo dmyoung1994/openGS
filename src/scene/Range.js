@@ -422,7 +422,9 @@ export class Range {
     try {
       const proto = await loadTreePrototype('/assets/trees/island_tree_01.glb');
       // Split placements across available prototypes for variety later.
-      this.group.add(instanceTrees(proto, placements));
+      this.trees = instanceTrees(proto, placements);
+      this.trees.name = 'trees';
+      this.group.add(this.trees);
     } catch (e) {
       console.warn('tree load failed', e);
     }

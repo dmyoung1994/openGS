@@ -127,7 +127,11 @@ export class SceneManager {
         last = now;
         this._elapsed += dt;
         for (const fn of this._updates) fn(dt, this._elapsed);
-        this.postProcessing.renderAsync();
+        // `bypassPost` (diagnostic toggle) renders the scene straight to screen,
+        // skipping the GTAO+TRAA+bloom stack, to gauge how much post-processing
+        // costs vs scene geometry.
+        if (this.bypassPost) this.renderer.renderAsync(this.scene, this.camera);
+        else this.postProcessing.renderAsync();
       });
     });
     return this;
