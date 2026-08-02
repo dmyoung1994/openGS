@@ -17,7 +17,7 @@ export class Lighting {
     this._offset = sunDir.clone().multiplyScalar(140);
     this.sun.position.copy(this._offset);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(4096, 4096);
+    this.sun.shadow.mapSize.set(2048, 2048);   // 2K is plenty with the soft PCF penumbra; 4K was a big fill cost
     this.sun.shadow.camera.near = 5;
     this.sun.shadow.camera.far = 700;
     // Frustum wide enough to cover the visible fairway/tree line so raking-light
