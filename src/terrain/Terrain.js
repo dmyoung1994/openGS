@@ -1,9 +1,10 @@
 import {
   BufferGeometry, BufferAttribute, Mesh, MeshStandardNodeMaterial,
   Vector2, Vector3, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
+  DataTexture, RGBAFormat, UnsignedByteType, NearestFilter,
 } from 'three';
 import {
-  attribute, positionWorld, mx_noise_float, float, vec2, vec3, mix, texture, luminance, smoothstep,
+  positionWorld, mx_noise_float, float, vec2, vec3, mix, texture, luminance, smoothstep,
 } from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
 
@@ -51,7 +52,42 @@ export class Terrain {
     this.heights = new Float32Array(this.nx * this.nz);
 
     this._bake();
+    // A high-resolution surface splat (per-zone base color + mow mask), baked
+    // independently of the coarser physics/mesh grid so zone boundaries render
+    // CRISP (sampled per-fragment, Nearest) instead of soft vertex-interpolated.
+    this.splatTex = this._bakeSplat(0.2);
     this.mesh = this._buildMesh();
+  }
+
+  // Rasterize the surface classifier into an RGBA splat: RGB = the muted per-zone
+  // turf base color (same transform as the grass canopy, so ground and blades
+  // match), A = mow-stripe mask (fairway/tee=1, fringe~0.4, else 0). Sampled by
+  // world XZ in turfColorNode. `res` is the texel size in meters.
+  _bakeSplat(res) {
+    const { minX, minZ, maxX, maxZ } = this.bounds;
+    const sx = Math.max(2, Math.ceil((maxX - minX) / res));
+    const sz = Math.max(2, Math.ceil((maxZ - minZ) / res));
+    const data = new Uint8Array(sx * sz * 4);
+    const base = new Color();
+    for (let j = 0; j < sz; j++) {
+      for (let i = 0; i < sx; i++) {
+        const x = minX + (i + 0.5) * (maxX - minX) / sx;
+        const z = minZ + (j + 0.5) * (maxZ - minZ) / sz;
+        const name = this.surfaceFn(x, z);
+        turfBase(name, base).multiplyScalar(0.82);   // matches old per-vertex base
+        const k = (j * sx + i) * 4;
+        data[k] = Math.round(Math.min(1, base.r) * 255);
+        data[k + 1] = Math.round(Math.min(1, base.g) * 255);
+        data[k + 2] = Math.round(Math.min(1, base.b) * 255);
+        data[k + 3] = name === 'fairway' || name === 'tee' ? 255
+                    : name === 'fringe' ? 102 : 0;
+      }
+    }
+    const tex = new DataTexture(data, sx, sz, RGBAFormat, UnsignedByteType);
+    tex.minFilter = tex.magFilter = NearestFilter;   // crisp, no bleed across zones
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    return tex;
   }
 
   _idx(i, j) { return j * this.nx + i; }
@@ -105,45 +141,20 @@ export class Terrain {
     const { minX, minZ } = this.bounds;
     const vcount = nx * nz;
     const positions = new Float32Array(vcount * 3);
-    const colors = new Float32Array(vcount * 3);
     const uvs = new Float32Array(vcount * 2);
-    // Per-vertex "how mown is this" mask: 1 on fairway/tee, partial on fringe,
-    // 0 on green/rough/hazards. Drives where the shader paints mow stripes so
-    // the rough and greens don't get striped like a fairway.
-    const stripeMask = new Float32Array(vcount);
 
-    const c = new Color();
-    const base = new Color();
+    // Only geometry here now — per-zone color and the mow mask moved to the
+    // high-res splat (this.splatTex), sampled per-fragment for crisp zone edges.
     for (let j = 0; j < nz; j++) {
       for (let i = 0; i < nx; i++) {
         const k = this._idx(i, j);
         const x = minX + i * spacing;
         const z = minZ + j * spacing;
-        const y = this.heights[k];
         positions[k * 3] = x;
-        positions[k * 3 + 1] = y;
+        positions[k * 3 + 1] = this.heights[k];
         positions[k * 3 + 2] = z;
         uvs[k * 2] = i / (nx - 1);
         uvs[k * 2 + 1] = j / (nz - 1);
-
-        // Per-vertex base color, muted from the gameplay surface color the exact
-        // same way the grass blades are (see turfBase). This is what makes the
-        // ground and the canopy one continuous turf instead of a bright carpet
-        // showing through darker blades. Interpolation across the grid softens
-        // the zone seams (fairway->rough->green) for free.
-        const surfName = this.surfaceFn(x, z);
-        // Slightly darkened so the IBL/sun-lit ground meets the analytically-lit
-        // grass canopy at the same luminance — otherwise the brighter ground
-        // shows through the blades as a mismatched pale patch.
-        turfBase(surfName, base).multiplyScalar(0.82);
-        const v = 0.92 + 0.10 * hash2(i * 0.37, j * 0.53);
-        c.copy(base).multiplyScalar(v);
-        colors[k * 3] = c.r;
-        colors[k * 3 + 1] = c.g;
-        colors[k * 3 + 2] = c.b;
-
-        stripeMask[k] = surfName === 'fairway' || surfName === 'tee' ? 1.0
-                      : surfName === 'fringe' ? 0.4 : 0.0;
       }
     }
 
@@ -161,9 +172,7 @@ export class Terrain {
 
     const geo = new BufferGeometry();
     geo.setAttribute('position', new BufferAttribute(positions, 3));
-    geo.setAttribute('color', new BufferAttribute(colors, 3));
     geo.setAttribute('uv', new BufferAttribute(uvs, 2));
-    geo.setAttribute('stripeMask', new BufferAttribute(stripeMask, 1));
     geo.setIndex(indices);
     geo.computeVertexNormals();
 
@@ -181,8 +190,8 @@ export class Terrain {
       roughnessMap: maps.roughnessMap,
       normalScale: new Vector2(0.5, 0.5),
     });
-    // Per-zone tint relit by the lawn detail texture (see turfColorNode).
-    mat.colorNode = turfColorNode(maps.map);
+    // Per-zone tint (crisp splat) relit by the lawn detail texture.
+    mat.colorNode = turfColorNode(maps.map, this.splatTex, this.bounds);
 
     const mesh = new Mesh(geo, mat);
     mesh.receiveShadow = true;
@@ -190,12 +199,6 @@ export class Terrain {
     mesh.name = 'terrain';
     return mesh;
   }
-}
-
-// Cheap deterministic hash for per-vertex jitter.
-function hash2(x, y) {
-  const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-  return s - Math.floor(s);
 }
 
 // Mowing-stripe band width in meters. Shared conceptually with Grass.js so the
@@ -224,11 +227,22 @@ function turfBase(name, out) {
 // zone tint sets the actual color of each surface (fairway/rough/green), so it's
 // photographic AND correctly colored. Sampled at two world scales to break
 // tiling, with soft-edged mowing stripes and a large-scale drift on top.
-function turfColorNode(diffTex) {
+function turfColorNode(diffTex, splatTex, bounds) {
   const wx = positionWorld.x;
   const wz = positionWorld.z;
-  const stripeMask = attribute('stripeMask', 'float');
-  const baseCol = attribute('color', 'vec3');
+  // Per-zone base color + mow mask from the high-res splat, sampled per-fragment
+  // (Nearest) so zone boundaries — the green collar, the fairway/rough line —
+  // land CRISP instead of the soft vertex-interpolated blend they were before.
+  // Warp the sample point with a little world-space noise so the crisp zone
+  // edges read as organic collars/lines (not perfect circles) and the texel
+  // stair-steps of the Nearest splat dissolve into a natural wander.
+  const wox = mx_noise_float(vec3(wx.mul(0.16), wz.mul(0.16), 11.0)).mul(0.7);
+  const woz = mx_noise_float(vec3(wx.mul(0.16), wz.mul(0.16), 23.0)).mul(0.7);
+  const su = wx.add(wox).sub(bounds.minX).div(bounds.maxX - bounds.minX);
+  const sv = wz.add(woz).sub(bounds.minZ).div(bounds.maxZ - bounds.minZ);
+  const splat = texture(splatTex, vec2(su, sv));
+  const baseCol = splat.rgb;
+  const stripeMask = splat.a;
 
   // Two-scale sample of the lawn texture — mixing 1.8 m and 5.5 m repeats hides
   // the obvious tiling you'd get from a single scale down a long fairway.

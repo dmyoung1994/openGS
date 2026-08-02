@@ -39,7 +39,7 @@ export class Range {
 
     this.terrain = new Terrain({
       bounds: { minX: -110, maxX: 110, minZ: -340, maxZ: 30 },
-      spacing: 2,
+      spacing: 0.6,
       heightFn: (x, z) => this._height(x, z),
       surfaceFn: (x, z) => this._surface(x, z),
     });
