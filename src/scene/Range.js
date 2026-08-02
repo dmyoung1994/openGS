@@ -381,21 +381,35 @@ export class Range {
   }
 
   _treePlacements() {
-    // Scatter along both flanks (widening down range) and across the back.
+    // An organic, layered tree line: the forest's INNER edge undulates in and out
+    // (bays and points) via low-frequency noise instead of a straight setback, and
+    // each flank is several rows deep — denser at the edge, thinning back — so the
+    // wall reads as a real forest with depth, not a picket fence.
+    // Hero (real-geometry) trees are kept to a MODERATE count for performance; the
+    // billboard backdrop (added in instanceTrees) fills the forest depth cheaply.
+    // The inner edge undulates so the hero front row already reads organic.
     const spots = [];
-    for (let z = 20; z > -340; z -= 7 + Math.random() * 6) {
-      const hw = 32 + (-z) * 0.11 + 28;
+    const fbm = (a, b) => this.noise.fbm(a, b, { octaves: 2 });   // ~ -1..1
+    for (let z = 22; z > -344; z -= 8 + Math.random() * 5) {
+      const corridor = 32 + (-z) * 0.11 + 24;                    // just past the deep-rough edge
       for (const side of [-1, 1]) {
-        const jitter = (Math.random() - 0.5) * 12;
-        const x = side * (hw + Math.random() * 26);
-        spots.push({ x, y: this.terrain.heightAt(x, z + jitter), z: z + jitter,
-          targetHeight: 7 + Math.random() * 6, rotY: Math.random() * Math.PI * 2 });
+        // Undulating inner edge: bays and points, seeded per side.
+        const edge = corridor + 4 + (fbm(side * 40 + z * 0.03, z * 0.05) * 0.5 + 0.5) * 24;
+        const rows = 1 + Math.floor(Math.random() * 2);
+        for (let r = 0; r < rows; r++) {
+          const depth = Math.pow(Math.random(), 0.6) * 44;       // biased toward the edge
+          const x = side * (edge + depth) + (Math.random() - 0.5) * 7;
+          const zj = z + (Math.random() - 0.5) * 6;
+          spots.push({ x, y: this.terrain.heightAt(x, zj), z: zj,
+            targetHeight: 6 + Math.random() * 7, rotY: Math.random() * Math.PI * 2 });
+        }
       }
     }
-    for (let x = -150; x < 150; x += 8 + Math.random() * 6) {
-      const z = -338 - Math.random() * 16;
-      spots.push({ x, y: this.terrain.heightAt(x, z), z,
-        targetHeight: 8 + Math.random() * 6, rotY: Math.random() * Math.PI * 2 });
+    // Back wall closing off the range.
+    for (let x = -170; x < 170; x += 9 + Math.random() * 5) {
+      const z = -342 - Math.random() * 16;
+      spots.push({ x: x + (Math.random() - 0.5) * 8, y: this.terrain.heightAt(x, z), z,
+        targetHeight: 7 + Math.random() * 7, rotY: Math.random() * Math.PI * 2 });
     }
     return spots;
   }
