@@ -1,10 +1,10 @@
 import {
   BufferGeometry, BufferAttribute, Mesh, MeshStandardNodeMaterial,
   Vector2, Vector3, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
-  DataTexture, RGBAFormat, UnsignedByteType, NearestFilter,
 } from 'three';
 import {
-  positionWorld, normalWorld, mx_noise_float, float, vec2, vec3, mix, texture, luminance, smoothstep,
+  positionWorld, normalWorld, mx_noise_float, float, vec2, vec3, mix, texture,
+  luminance, smoothstep, oneMinus,
 } from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
 
@@ -43,53 +43,22 @@ function loadTurfMaps(rx, ry) {
 //   surfaceFn:   (x, z) => key into SURFACES
 export class Terrain {
   constructor(config) {
-    const { bounds, spacing = 2, heightFn, surfaceFn } = config;
+    const { bounds, spacing = 2, heightFn, surfaceFn, zones } = config;
     this.bounds = bounds;
     this.spacing = spacing;
     this.heightFn = heightFn;
     this.surfaceFn = surfaceFn;
+    // Geometric zone spec (greens/sands circles, fairway corridor, tee box) used
+    // to classify the turf ANALYTICALLY in the shader — smooth-curve boundaries
+    // instead of a rasterized splat's stair-stepped squares. See turfColorNode.
+    this.zones = zones;
 
     this.nx = Math.floor((bounds.maxX - bounds.minX) / spacing) + 1;
     this.nz = Math.floor((bounds.maxZ - bounds.minZ) / spacing) + 1;
     this.heights = new Float32Array(this.nx * this.nz);
 
     this._bake();
-    // A high-resolution surface splat (per-zone base color + mow mask), baked
-    // independently of the coarser physics/mesh grid so zone boundaries render
-    // CRISP (sampled per-fragment, Nearest) instead of soft vertex-interpolated.
-    this.splatTex = this._bakeSplat(0.2);
     this.mesh = this._buildMesh();
-  }
-
-  // Rasterize the surface classifier into an RGBA splat: RGB = the muted per-zone
-  // turf base color (same transform as the grass canopy, so ground and blades
-  // match), A = mow-stripe mask (fairway/tee=1, fringe~0.4, else 0). Sampled by
-  // world XZ in turfColorNode. `res` is the texel size in meters.
-  _bakeSplat(res) {
-    const { minX, minZ, maxX, maxZ } = this.bounds;
-    const sx = Math.max(2, Math.ceil((maxX - minX) / res));
-    const sz = Math.max(2, Math.ceil((maxZ - minZ) / res));
-    const data = new Uint8Array(sx * sz * 4);
-    const base = new Color();
-    for (let j = 0; j < sz; j++) {
-      for (let i = 0; i < sx; i++) {
-        const x = minX + (i + 0.5) * (maxX - minX) / sx;
-        const z = minZ + (j + 0.5) * (maxZ - minZ) / sz;
-        const name = this.surfaceFn(x, z);
-        turfBase(name, base).multiplyScalar(0.82);   // matches old per-vertex base
-        const k = (j * sx + i) * 4;
-        data[k] = Math.round(Math.min(1, base.r) * 255);
-        data[k + 1] = Math.round(Math.min(1, base.g) * 255);
-        data[k + 2] = Math.round(Math.min(1, base.b) * 255);
-        data[k + 3] = name === 'fairway' || name === 'tee' ? 255
-                    : name === 'fringe' ? 102 : 0;
-      }
-    }
-    const tex = new DataTexture(data, sx, sz, RGBAFormat, UnsignedByteType);
-    tex.minFilter = tex.magFilter = NearestFilter;   // crisp, no bleed across zones
-    tex.generateMipmaps = false;
-    tex.needsUpdate = true;
-    return tex;
   }
 
   _idx(i, j) { return j * this.nx + i; }
@@ -191,8 +160,20 @@ export class Terrain {
       normalMap: maps.normalMap,
       normalScale: new Vector2(0.5, 0.5),
     });
-    // Per-zone tint (crisp splat) relit by the lawn detail texture.
-    mat.colorNode = turfColorNode(maps.map, this.splatTex, this.bounds);
+    // Analytic per-zone tint (smooth-curve boundaries) relit by the lawn detail
+    // texture. Bake the muted per-zone colors once; sand keeps its own tan (the
+    // green-ward turfBase transform is only for grass).
+    const grassCol = (name) => {
+      const c = turfBase(name, new Color()).multiplyScalar(0.82);
+      return vec3(c.r, c.g, c.b);
+    };
+    const sc = new Color(surface('sand').color).multiplyScalar(0.82);
+    const palette = {
+      fairway: grassCol('fairway'), rough: grassCol('rough'), deepRough: grassCol('deepRough'),
+      green: grassCol('green'), fringe: grassCol('fringe'), tee: grassCol('tee'),
+      sand: vec3(sc.r, sc.g, sc.b),
+    };
+    mat.colorNode = turfColorNode(maps.map, { ...this.zones, colors: palette });
 
     const mesh = new Mesh(geo, mat);
     mesh.receiveShadow = true;
@@ -228,22 +209,51 @@ function turfBase(name, out) {
 // zone tint sets the actual color of each surface (fairway/rough/green), so it's
 // photographic AND correctly colored. Sampled at two world scales to break
 // tiling, with soft-edged mowing stripes and a large-scale drift on top.
-function turfColorNode(diffTex, splatTex, bounds) {
+function turfColorNode(diffTex, zones) {
   const wx = positionWorld.x;
   const wz = positionWorld.z;
-  // Per-zone base color + mow mask from the high-res splat, sampled per-fragment
-  // (Nearest) so zone boundaries — the green collar, the fairway/rough line —
-  // land CRISP instead of the soft vertex-interpolated blend they were before.
-  // Warp the sample point with a little world-space noise so the crisp zone
-  // edges read as organic collars/lines (not perfect circles) and the texel
-  // stair-steps of the Nearest splat dissolve into a natural wander.
-  const wox = mx_noise_float(vec3(wx.mul(0.16), wz.mul(0.16), 11.0)).mul(0.7);
-  const woz = mx_noise_float(vec3(wx.mul(0.16), wz.mul(0.16), 23.0)).mul(0.7);
-  const su = wx.add(wox).sub(bounds.minX).div(bounds.maxX - bounds.minX);
-  const sv = wz.add(woz).sub(bounds.minZ).div(bounds.maxZ - bounds.minZ);
-  const splat = texture(splatTex, vec2(su, sv));
-  const baseCol = splat.rgb;
-  const stripeMask = splat.a;
+  const C = zones.colors;                 // vec3 per zone
+  const AA = 0.16;                        // edge softness (m): smooth curve, still crisp
+
+  // ANALYTIC zone classification: boundaries are true smooth curves — greens and
+  // bunkers are circles, the fairway is a z-widening corridor — so edges read as
+  // smooth mowing lines, NOT the stair-stepped squares a rasterized splat gives.
+  // A gentle low-frequency domain warp makes the curves organic (not machined
+  // circles) while staying smooth. The same math mirrors Range._surface.
+  const dwx = wx.add(mx_noise_float(vec3(wx.mul(0.09), wz.mul(0.09), 4.0)).mul(0.6));
+  const dwz = wz.add(mx_noise_float(vec3(wx.mul(0.09), wz.mul(0.09), 8.0)).mul(0.6));
+
+  const ax = dwx.abs();
+  const half = float(zones.corridor.c0).add(dwz.negate().mul(zones.corridor.k));
+  let baseCol = C.deepRough;
+  baseCol = mix(baseCol, C.rough,
+    oneMinus(smoothstep(half.add(zones.corridor.rough - AA), half.add(zones.corridor.rough + AA), ax)));
+  baseCol = mix(baseCol, C.fairway, oneMinus(smoothstep(half.sub(AA), half.add(AA), ax)));
+  let stripeMask = oneMinus(smoothstep(half.sub(AA), half.add(AA), ax));   // fairway stripes
+
+  // Green complexes: fringe collar, then putting surface (both circles).
+  for (const g of zones.greens) {
+    const d = vec2(dwx.sub(g.x), dwz.sub(g.z)).length();
+    const fr = oneMinus(smoothstep(g.r + zones.fringeW - AA, g.r + zones.fringeW + AA, d));
+    const gr = oneMinus(smoothstep(g.r - AA, g.r + AA, d));
+    baseCol = mix(baseCol, C.fringe, fr);
+    baseCol = mix(baseCol, C.green, gr);
+    stripeMask = stripeMask.mul(oneMinus(fr));       // no fairway stripes over a green
+  }
+  // Sand floors (mostly under the overlay disc; keeps the ground edge consistent).
+  for (const s of zones.sands) {
+    const d = vec2(dwx.sub(s.x), dwz.sub(s.z)).length();
+    const sa = oneMinus(smoothstep(s.r - AA, s.r + AA, d));
+    baseCol = mix(baseCol, C.sand, sa);
+    stripeMask = stripeMask.mul(oneMinus(sa));
+  }
+  // Tee mat surround (a mown box).
+  const tee = zones.tee;
+  const teeM = oneMinus(smoothstep(tee.x - AA, tee.x + AA, ax))
+    .mul(smoothstep(tee.z0 - AA, tee.z0 + AA, dwz))
+    .mul(oneMinus(smoothstep(tee.z1 - AA, tee.z1 + AA, dwz)));
+  baseCol = mix(baseCol, C.tee, teeM);
+  stripeMask = stripeMask.max(teeM);
 
   // Two-scale sample of the lawn texture — mixing 1.8 m and 5.5 m repeats hides
   // the obvious tiling you'd get from a single scale down a long fairway.
@@ -281,10 +291,22 @@ function turfColorNode(diffTex, splatTex, bounds) {
   const lum = luminance(c);
   c = mix(vec3(lum), c, 0.9).mul(vec3(1.03, 1.0, 0.95));
 
-  // A gentle richening of steep faces (bunker walls, green shoulders): steep
-  // grass is self-shadowed, so fold albedo down slightly with the slope. Subtle
-  // now that the specular blowout is fixed (no roughness map) — this is polish.
+  // Revetted (stacked-sod) faces: the pot bunkers are the only near-vertical
+  // terrain, so trigger on steepness alone. Replace the grass with horizontal
+  // banded sod layers (constant world-Y bands = stacked turf courses) — the
+  // classic links pot-bunker wall. A little noise breaks the ruler-straight
+  // courses so they read as hand-stacked sod.
+  const steep = smoothstep(0.62, 0.4, normalWorld.y);         // 1 only on near-vertical walls
+  const yWarp = mx_noise_float(vec3(wx.mul(0.7), wz.mul(0.7), 2.0)).mul(0.03);
+  const sod = positionWorld.y.add(yWarp).mul(42.0).sin().mul(0.5).add(0.5);
+  // Warm, earthy sod courses (dark peat → tan-olive turf edge); the cool sky fill
+  // in the shaded pit would otherwise read blue-grey.
+  const revet = mix(vec3(0.075, 0.07, 0.045), vec3(0.185, 0.165, 0.11), sod);
+  c = mix(c, revet, steep);
+
+  // A gentle richening of steep faces (green shoulders, bunker walls): steep
+  // grass is self-shadowed, so fold albedo down slightly with the slope.
   const slopeShade = smoothstep(0.35, 0.85, normalWorld.y);   // 0 vertical → 1 flat
-  c = c.mul(mix(float(0.7), float(1.0), slopeShade));
+  c = c.mul(mix(float(0.72), float(1.0), slopeShade));
   return c;
 }

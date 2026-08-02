@@ -32,7 +32,7 @@ export class Range {
     // back lip. pot: a deep, small, steep, uniformly-lipped links pot bunker.
     this.bunkers = [
       { x: 20, z: -86, r: 5.0, depth: 1.0, lip: 0.75 },            // front-right of the 100 green
-      { x: 1, z: -99, r: 3.0, depth: 1.7, lip: 1.0, pot: true },   // deep pot, short-left of 100
+      { x: 1, z: -99, r: 3.0, depth: 2.0, lip: 1.05, pot: true },  // deep pot, short-left of 100
       { x: -25, z: -132, r: 5.4, depth: 1.1, lip: 0.85 },          // guarding the 150 green
       { x: 6, z: -190, r: 5.6, depth: 1.0, lip: 0.6 },             // fairway bunker ~205
     ];
@@ -45,6 +45,15 @@ export class Range {
       spacing: 0.6,
       heightFn: (x, z) => this._height(x, z),
       surfaceFn: (x, z) => this._surface(x, z),
+      // Geometric spec for the shader's analytic (smooth-curve) turf zones. Mirrors
+      // the circles/corridor in _surface so the visual edges match gameplay zones.
+      zones: {
+        greens: this.targets.map((t) => ({ x: t.x, z: t.z, r: t.r })),
+        sands: this.bunkers.map((b) => ({ x: b.x, z: b.z, r: this._bunkerSandR(b) })),
+        corridor: { c0: 32, k: 0.11, rough: 26 },   // halfWidth = c0 + (-z)*k, then rough band
+        tee: { x: 3.2, z0: -2, z1: 6 },
+        fringeW: 2.2,
+      },
     });
     this.group.add(this.terrain.mesh);
 
