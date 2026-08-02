@@ -105,14 +105,17 @@ export class Range {
       }
     }
 
-    // Carve bunker dishes: a smooth bowl with a raised lip on the far side, so
-    // the sand sits below grade and reads with a defined edge.
+    // Carve bunkers with a DEFINED edge: a flat sand floor, a steep wall rising
+    // to the rim, and a raised lip just outside it — reads with a crisp shoulder
+    // instead of a soft parabolic dish. The conforming sand disc re-samples this
+    // height, so the sand hugs the floor and climbs the wall face to the lip.
     for (const b of this.bunkers) {
       const d = Math.hypot(x - b.x, z - b.z);
-      if (d < b.r + 3) {
-        const bowl = -b.depth * Math.max(0, 1 - (d / b.r) ** 2);
-        const lip = Math.exp(-((d - b.r) * (d - b.r)) / 3.0) * 0.18;
-        h += bowl + lip;
+      if (d < b.r + 2.5) {
+        const wall = smoothstep(b.r * 0.5, b.r, d);       // 0 on floor → 1 at rim
+        const floorToRim = -b.depth * (1 - wall);         // flat -depth floor, 0 at rim
+        const lip = Math.exp(-((d - (b.r + 0.4)) ** 2) / (0.9 * 0.9)) * 0.2;
+        h += floorToRim + lip;
       }
     }
 
@@ -320,7 +323,7 @@ export class Range {
       for (const t of [m.map, m.normalMap, m.roughnessMap]) {
         t.wrapS = t.wrapT = RepeatWrapping; t.repeat.set(rep, rep); t.anisotropy = 8; t.needsUpdate = true;
       }
-      const geo = this._conformingDisc(b.x, b.z, b.r + 0.3, 0.04, { segments: 72, jitter: 0.14 });
+      const geo = this._conformingDisc(b.x, b.z, b.r + 0.3, 0.04, { segments: 96, jitter: 0.08 });
       const mesh = new Mesh(geo, m);
       mesh.receiveShadow = true;
       mesh.name = 'bunker';
@@ -401,6 +404,13 @@ export class Range {
   update(t) {
     if (this.grass) this.grass.update(t, this.camera);
   }
+}
+
+// Smooth Hermite ramp: 0 below edge0, 1 above edge1, eased between. Used to give
+// bunker walls a defined shoulder without a hard (non-differentiable) step.
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
 }
 
 // One legible internal green contour, returned as meters of relief. nx/nz are
