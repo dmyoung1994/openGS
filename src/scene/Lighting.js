@@ -36,12 +36,12 @@ export class Lighting {
     // Sky/ground hemisphere fill — pulled DOWN so shadows read deep and contrasty
     // (the earlier high fill flattened everything). Just enough cool sky bounce to
     // keep shadowed sides from crushing to black.
-    this.hemi = new HemisphereLight(0xbcd6ea, 0x54662f, 0.26);
+    this.hemi = new HemisphereLight(0xbcd6ea, 0x54662f, 0.19);
     scene.add(this.hemi);
 
     // A dim, cool counter-fill from the opposite side keeps shadowed foliage from
     // going muddy without washing out the key. No shadows (fill only).
-    this.fill = new DirectionalLight(0xaecbe8, 0.16);
+    this.fill = new DirectionalLight(0xaecbe8, 0.11);
     this.fill.position.set(-this._offset.x, this._offset.y * 0.6, -this._offset.z);
     scene.add(this.fill);
   }

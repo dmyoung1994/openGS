@@ -3,17 +3,19 @@ import {
   Vector2, Vector3, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
 } from 'three';
 import {
-  positionWorld, normalWorld, mx_noise_float, float, vec2, vec3, mix, texture,
+  positionWorld, normalWorld, cameraPosition, mx_noise_float, float, vec2, vec3, mix, texture,
   luminance, smoothstep, oneMinus,
 } from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
 
-// Manicured-lawn PBR maps (ambientCG Grass004, CC0), loaded once. Mown surfaces
-// (fairway/tee/green/fringe) are now rendered as this TEXTURED ground rather than
-// short 3D blades (blades only cover the taller rough). The color map is used as
-// a DETAIL texture: its luminance/grain relights the per-zone tint (so each zone
-// keeps its correct color), sampled at two scales to hide tiling, with mowing
-// stripes on top. Normal + roughness maps give real turf relief.
+// Manicured-turf PBR maps baked from the BlenderKit "Procedural Grass" material
+// (scripts/bake_material.py). This is real golf bentgrass — its base color, normal,
+// roughness AND a HEIGHT map (the blade micro-displacement). The height map is what
+// finally kills the "flat" look: the material parallax-offsets its texture lookups
+// by that height so the surface shows self-occluding blade depth that shifts with
+// the view (reconstructing, in real time, the displaced-blade look of the Blender
+// preview). Base color is used as a DETAIL texture graded to each zone's tint, at
+// two scales to hide tiling, with mowing stripes on top.
 const _texLoader = new TextureLoader();
 function loadTurfMaps(rx, ry) {
   const load = (p, srgb) => {
@@ -23,12 +25,11 @@ function loadTurfMaps(rx, ry) {
     if (srgb) t.colorSpace = SRGBColorSpace;
     return t;
   };
-  const map = load('/assets/textures/fairway_diff.jpg', true);  // sampled in colorNode
-  const nor = load('/assets/textures/fairway_nor_gl.jpg', false); nor.repeat.set(rx, ry);
-  // No roughness map: its low-roughness texels put a broad specular sheen on the
-  // turf that blew out to white on sun-facing slopes (bunker walls). Grass is
-  // matte — a flat roughness of 1 reads correctly and kills the hot faces.
-  return { map, normalMap: nor };
+  const map = load('/assets/textures/bentgrass_basecolor.png', true);  // sampled in colorNode
+  const nor = load('/assets/textures/bentgrass_nor.png', false); nor.repeat.set(rx, ry);
+  const rough = load('/assets/textures/bentgrass_rough.png', false);
+  const height = load('/assets/textures/bentgrass_height.png', false);
+  return { map, normalMap: nor, roughMap: rough, heightMap: height };
 }
 
 // A heightfield that is simultaneously the physics collision surface and the
@@ -199,20 +200,50 @@ export class Terrain {
     const ry = (this.bounds.maxZ - this.bounds.minZ) / tile;
     const maps = loadTurfMaps(rx, ry);
     const mat = new MeshStandardNodeMaterial({
-      roughness: 1.0, metalness: 0.0, side: DoubleSide,
-      normalMap: maps.normalMap, normalScale: new Vector2(0.5, 0.5),
+      metalness: 0.0, side: DoubleSide,
+      normalMap: maps.normalMap, normalScale: new Vector2(1.0, 1.0),
     });
-    const grassCol = (name) => {
-      const c = turfBase(name, new Color()).multiplyScalar(0.82);
+
+    // ---- Parallax: the fix for "flat". Offset the turf texture lookups along the
+    // view's horizontal direction, scaled by the baked blade-height map, so higher
+    // texels shift toward the camera and the ground shows self-occluding blade depth
+    // that moves as you look around. The offset grows at grazing angles (÷ upC) —
+    // exactly the horizon-ward fairway where flatness reads worst — and is faded to
+    // ZERO on steep faces (flat) so bunker walls (where "horizontal parallax" is
+    // meaningless) are never distorted. PAR_M exaggerates the real ~5 mm relief to a
+    // readable depth. Shared by colorNode + roughnessNode so they stay registered.
+    const worldXZ = vec2(positionWorld.x, positionWorld.z);
+    const Vdir = cameraPosition.sub(positionWorld).normalize();
+    const flat = smoothstep(0.75, 0.97, normalWorld.y);
+    const upC = Vdir.y.abs().max(0.25);
+    const h0 = texture(maps.heightMap, worldXZ.mul(1 / 1.8)).r;
+    const PAR_M = 0.06;
+    const parOff = vec2(Vdir.x, Vdir.z).div(upC).mul(h0.mul(PAR_M)).mul(flat);
+    const texXZ = worldXZ.sub(parOff);   // parallaxed world XZ for all turf texture reads
+
+    // Soft grass sheen. The rough map is fairly glossy (dark), so remap it UP into a
+    // matte-with-sheen band — enough specular for the sun/sky to catch the normal-map
+    // relief (kills the flat look), never a hotspot. STEEP faces (pot-bunker revetted
+    // walls) are forced near-matte so they don't blow out.
+    const rTex = texture(maps.roughMap, texXZ.mul(1 / 1.8)).r;
+    const rGrass = rTex.mul(0.3).add(0.52);
+    const steepR = smoothstep(0.62, 0.4, normalWorld.y);
+    mat.roughnessNode = mix(rGrass, float(0.97), steepR);
+    const grassCol = (name, extra = 1) => {
+      const c = turfBase(name, new Color()).multiplyScalar(0.82 * extra);
       return vec3(c.r, c.g, c.b);
     };
     const sc = new Color(surface('sand').color).multiplyScalar(0.82);
     const palette = {
-      fairway: grassCol('fairway'), rough: grassCol('rough'), deepRough: grassCol('deepRough'),
+      fairway: grassCol('fairway'),
+      // Rough/deepRough carry 3D blades on top. Darken the GROUND under them toward
+      // the shaded blade bases so the gaps you see through a thinned canopy (far LOD
+      // or between blades) read as shadow, not a lighter speckle poking through.
+      rough: grassCol('rough', 0.8), deepRough: grassCol('deepRough', 0.8),
       green: grassCol('green'), fringe: grassCol('fringe'), tee: grassCol('tee'),
       sand: vec3(sc.r, sc.g, sc.b),
     };
-    mat.colorNode = turfColorNode(maps.map, { ...this.zones, colors: palette });
+    mat.colorNode = turfColorNode(maps.map, texXZ, { ...this.zones, colors: palette });
     return mat;
   }
 }
@@ -243,8 +274,8 @@ function turfBase(name, out) {
 // zone tint sets the actual color of each surface (fairway/rough/green), so it's
 // photographic AND correctly colored. Sampled at two world scales to break
 // tiling, with soft-edged mowing stripes and a large-scale drift on top.
-function turfColorNode(diffTex, zones) {
-  const wx = positionWorld.x;
+function turfColorNode(diffTex, texXZ, zones) {
+  const wx = positionWorld.x;             // TRUE world pos drives zone classification
   const wz = positionWorld.z;
   const C = zones.colors;                 // vec3 per zone
   const AA = 0.16;                        // edge softness (m): smooth curve, still crisp
@@ -289,17 +320,23 @@ function turfColorNode(diffTex, zones) {
   baseCol = mix(baseCol, C.tee, teeM);
   stripeMask = stripeMask.max(teeM);
 
-  // Two-scale sample of the lawn texture — mixing 1.8 m and 5.5 m repeats hides
-  // the obvious tiling you'd get from a single scale down a long fairway.
-  const uv1 = vec2(wx, wz).mul(1 / 1.8);
-  const uv2 = vec2(wx, wz).mul(1 / 5.5);
-  const tex = mix(texture(diffTex, uv1), texture(diffTex, uv2), float(0.4));
+  // Two-scale sample of the bentgrass base color at the PARALLAXED world XZ (texXZ) —
+  // mixing 1.8 m and 5.5 m repeats hides the tiling you'd get from a single scale down
+  // a long fairway. Sampling at texXZ (not the true world pos) is what gives the turf
+  // its view-shifting blade depth.
+  const uv1 = texXZ.mul(1 / 1.8);
+  const uv2 = texXZ.mul(1 / 5.5);
+  const tex = mix(texture(diffTex, uv1), texture(diffTex, uv2), float(0.28));
   const texLum = luminance(tex.rgb).max(0.001);
 
-  // Relight the zone tint by the texture luminance (grain), plus a hint of the
-  // texture's own hue variation (yellow/olive flecks) for richness.
-  const detail = texLum.div(0.09).clamp(0.55, 1.6);
-  const chroma = mix(vec3(1.0), tex.rgb.div(texLum), 0.30);
+  // Render the baked bentgrass PHOTO as real detail, not flat grain. Its per-blade
+  // light/dark variation and real green flecks carry the texture; the per-zone tint
+  // only GRADES it to the right hue. Normalize to the map's ~0.13 mean linear
+  // luminance (bentgrass is brighter/greener than the old ambientCG map), keep a
+  // gentle contrast curve, and carry most of the texture's own hue (0.8) so the
+  // fairway reads as photographed golf turf rather than a tinted plane.
+  const detail = texLum.div(0.13).sub(1.0).mul(1.2).add(1.0).clamp(0.35, 2.4);
+  const chroma = mix(vec3(1.0), tex.rgb.div(texLum), 0.8);
   let c = baseCol.mul(detail).mul(chroma);
 
   // Mowing stripes — clear alternating light/dark bands down world Z on the

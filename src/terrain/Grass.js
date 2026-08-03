@@ -29,10 +29,15 @@ export class Grass {
 
     this.uTime = uniform(0);
     this.uGust = uniform(0);
+    // Live LOD radius. Both the per-tile cull AND the in-shader density feather read
+    // this, so shrinking it fades far blades out smoothly (no pop) — we pull it in
+    // when the camera sits low at the ball, where you can't see the far rough anyway.
+    this.uRadius = uniform(radius);
+    this._radiusFull = radius;
     this.uWindDir = uniform(new Vector2(0.8, 0.6).normalize());
     this.uWindStrength = uniform(0.11);
     const sun = new Color(0xffefd2).multiplyScalar(1.9);
-    const amb = new Color(0x7c9db0).multiplyScalar(1.05);
+    const amb = new Color(0x7c9db0).multiplyScalar(0.82);
     this.uSunDir = uniform(new Vector3(-0.82, 0.4, -0.12).normalize());
     this.uSunColor = uniform(new Vector3(sun.r, sun.g, sun.b));
     this.uAmbient = uniform(new Vector3(amb.r, amb.g, amb.b));
@@ -90,6 +95,16 @@ export class Grass {
 
   // Shared blade geometry + one tile mesh per grid cell that actually contains
   // grass turf. Meshes share geometry/material; only their position differs.
+  //
+  // Distance LOD on BLADE COUNT. Frustum + distance culling already drop tiles you
+  // can't see, but every surviving tile still ran the full gridPerTile^2 (~37k)
+  // instance vertex shader — far tiles collapsed most blades to degenerate
+  // triangles (keepProb) yet still paid the vertex cost for all of them. So each
+  // tile now carries THREE geometry/material LODs (stride 1 / 2 / 4 -> full /
+  // quarter / sixteenth the blades). Each LOD samples a STABLE SUBSET of the same
+  // world-cell grid, so a blade sits in exactly the same spot at every level and
+  // swapping LOD never makes the grass swim or pop — it just thins the count where
+  // the tile is too far to resolve individual blades anyway.
   _buildTiles() {
     const C = this._const;
     const SEG = 3, rows = SEG + 1;
@@ -100,17 +115,35 @@ export class Grass {
       const a = r * 2, b = r * 2 + 1, c = r * 2 + 2, d = r * 2 + 3;
       idx.push(a, c, b, b, c, d);
     }
-    const geo = new InstancedBufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(new Float32Array(basePos), 3));
-    geo.setIndex(idx);
-    geo.instanceCount = C.gridPerTile * C.gridPerTile;
+    // Share the base blade attributes across all three LOD geometries (they differ
+    // only in instanceCount) so the LODs cost almost nothing in memory.
+    const posAttr = new BufferAttribute(new Float32Array(basePos), 3);
+    const idxAttr = new BufferAttribute(new Uint16Array(idx), 1);
     // Local-space bounding sphere covering one tile's blades (X/Z in [0,tile],
     // Y ~ the tile's terrain height plus blades); transformed per mesh -> correct
     // per-tile world sphere for the engine's frustum cull.
-    geo.boundingSphere = new Sphere(new Vector3(C.tileSize / 2, 2.5, C.tileSize / 2), C.tileSize * 0.71 + 6);
-    this._geo = geo;
+    const bSphere = new Sphere(new Vector3(C.tileSize / 2, 2.5, C.tileSize / 2), C.tileSize * 0.71 + 6);
 
-    const mat = this._material();
+    // stride: world-cell step (higher = fewer blades). widthLOD: blades widen as
+    // they thin so the canopy keeps roughly the same coverage from a distance.
+    this._lods = [
+      { stride: 1, widthLOD: 1.0 },
+      { stride: 2, widthLOD: 1.7 },
+      { stride: 4, widthLOD: 2.8 },
+    ];
+    this._geos = [];
+    this._mats = [];
+    for (const L of this._lods) {
+      const gridEff = C.gridPerTile / L.stride;
+      const geo = new InstancedBufferGeometry();
+      geo.setAttribute('position', posAttr);
+      geo.setIndex(idxAttr);
+      geo.instanceCount = gridEff * gridEff;
+      geo.boundingSphere = bSphere;
+      this._geos.push(geo);
+      this._mats.push(this._material(gridEff, L.stride, L.widthLOD));
+    }
+
     const t = this.terrain;
     const { minX, maxX, minZ, maxZ } = t.bounds;
     const S = C.tileSize;
@@ -119,13 +152,14 @@ export class Grass {
         // Keep a tile only if its area actually holds grass turf (sample a few
         // points), so we don't spawn thousands of empty tiles over sand/water.
         if (!this._tileHasGrass(tx, tz, S)) continue;
-        const m = new Mesh(geo, mat);
+        const m = new Mesh(this._geos[0], this._mats[0]);
         m.position.set(tx, 0, tz);
         m.frustumCulled = false;   // we cull manually (distance + frustum) in update()
         m.matrixAutoUpdate = false;
         m.updateMatrix();
         m.updateMatrixWorld(true);
         m._sphere = new Sphere(new Vector3(tx + S / 2, 2.5, tz + S / 2), S * 0.71 + 6);
+        m._lod = 0;
         this.mesh.add(m);
         this.tiles.push(m);
       }
@@ -141,7 +175,10 @@ export class Grass {
     return false;
   }
 
-  _material() {
+  // gridEff = blades per axis for THIS LOD (gridPerTile / stride); stride = the
+  // world-cell step so a coarser LOD samples a stable subset of the same grid;
+  // widthLOD fattens blades as they thin so coverage holds at a distance.
+  _material(gridEff = this._const.gridPerTile, stride = 1, widthLOD = 1.0) {
     const C = this._const;
     const hash2 = (v, s) => v.x.mul(12.9898).add(v.y.mul(78.233)).add(s).sin().mul(43758.5453).fract();
 
@@ -149,12 +186,15 @@ export class Grass {
     const origin = modelWorldMatrix.mul(vec4(0, 0, 0, 1)).xyz;
 
     // Per-blade cell within the tile, hashed by WORLD cell index (world-anchored,
-    // so identical wherever it's rendered — no swim).
+    // so identical wherever it's rendered — no swim). At a coarser LOD we lay out
+    // gridEff^2 blades but step them by `stride` world cells, i.e. every stride-th
+    // cell of the full grid — a stable subset, so a blade keeps the same world cell
+    // (and thus the same hash/position) at every LOD.
     const iidF = float(instanceIndex);
-    const cxi = iidF.mod(C.gridPerTile);
-    const czi = iidF.div(C.gridPerTile).floor();
-    const wcx = origin.x.div(C.cell).add(cxi);   // integer world cell index
-    const wcz = origin.z.div(C.cell).add(czi);
+    const cxi = iidF.mod(gridEff);
+    const czi = iidF.div(gridEff).floor();
+    const wcx = origin.x.div(C.cell).add(cxi.mul(stride));   // integer world cell index
+    const wcz = origin.z.div(C.cell).add(czi.mul(stride));
     const cellv = vec2(wcx, wcz);
     const hA = hash2(cellv, 0.0), hB = hash2(cellv, 1.7), hC = hash2(cellv, 3.3);
     const hD = hash2(cellv, 5.1), hE = hash2(cellv, 7.7), hF = hash2(cellv, 9.3);
@@ -187,24 +227,26 @@ export class Grass {
     const dx = worldX.sub(cameraPosition.x), dz = worldZ.sub(cameraPosition.z);
     const dist = dx.mul(dx).add(dz.mul(dz)).sqrt();
     // Density feathers all the way to zero at the edge (not 25%) so the last
-    // blades disappear gradually — no hard ring.
-    const keepProb = float(1.0).sub(smoothstep(C.radius * 0.5, C.radius * 0.98, dist));
-    const alive = inB.and(hMax.greaterThan(0.002)).and(dist.lessThan(C.radius)).and(hC.lessThan(keepProb));
+    // blades disappear gradually — no hard ring. Driven by the LIVE radius uniform
+    // so pulling the radius in (low camera) fades far blades instead of popping.
+    const R = this.uRadius;
+    const keepProb = float(1.0).sub(smoothstep(R.mul(0.5), R.mul(0.98), dist));
+    const alive = inB.and(hMax.greaterThan(0.002)).and(dist.lessThan(R)).and(hC.lessThan(keepProb));
     const aliveF = alive.select(float(1.0), float(0.0));
 
     const t = positionLocal.y;
     const side = positionLocal.x;
     // Height feathers down (blades lie lower) toward the edge as they thin out.
-    const distShort = float(1.0).sub(smoothstep(C.radius * 0.45, C.radius, dist).mul(0.85));
+    const distShort = float(1.0).sub(smoothstep(R.mul(0.45), R, dist).mul(0.85));
     // Edge dissolve factor: blend blade color toward the (darker) ground tone so
     // the final blades melt into the color-matched terrain instead of standing out.
-    const edgeFade = smoothstep(C.radius * 0.6, C.radius, dist);
+    const edgeFade = smoothstep(R.mul(0.6), R, dist);
     const H = hMax.mul(float(0.6).add(hD.mul(0.5))).mul(distShort).mul(aliveF).mul(heightMul);
 
     // Blade width taper + grazing-angle widening.
     const orient = hA.mul(6.2831853);
     const cA = orient.cos(), sA = orient.sin();
-    const wInst = mix(0.008, 0.013, hE).mul(widthMul);
+    const wInst = mix(0.008, 0.013, hE).mul(widthMul).mul(widthLOD);
     const wBase = wInst.mul(float(1.0).sub(smoothstep(0.55, 1.0, t)));
     const facing = vec2(sA.negate(), cA);
     const viewDir = vec2(dx.negate(), dz.negate()).div(dist.max(0.001));
@@ -292,10 +334,39 @@ export class Grass {
     this._pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this._frustum.setFromProjectionMatrix(this._pm);
     const cx = cam.position.x, cz = cam.position.z;
-    const R = this.radius + this.tileSize;
+
+    // Camera-height-aware LOD radius: sitting low at the ball you can't see the far
+    // rough (near blades occlude it), so pull the radius in to ~70% there and ease
+    // back to full as the rig lifts on the shot. Fed to the shader (uRadius) so the
+    // density feather retreats WITH the cull edge — the far ~30% fades, never pops.
+    const camH = cam.position.y - this.terrain.heightAt(cx, cz);
+    const k = Math.min(Math.max((camH - 0.8) / (4.0 - 0.8), 0), 1);
+    const effR = this._radiusFull * (0.7 + 0.3 * k);
+    this.uRadius.value = effR;
+
+    const R = effR + this.tileSize;
+    const R2 = R * R;
     for (const m of this.tiles) {
       const dx = m._sphere.center.x - cx, dz = m._sphere.center.z - cz;
-      m.visible = (dx * dx + dz * dz < R * R) && this._frustum.intersectsSphere(m._sphere);
+      const d2 = dx * dx + dz * dz;
+      m.visible = (d2 < R2) && this._frustum.intersectsSphere(m._sphere);
+      if (m.visible) this._applyLod(m, Math.sqrt(d2));
+    }
+  }
+
+  // Pick a blade-count LOD by tile distance, with a hysteresis dead-band so tiles
+  // hovering on a threshold don't swap geometry every frame. Positions are stable
+  // across LODs, so the swap is invisible.
+  _applyLod(m, d) {
+    const T1 = 22, T2 = 46, H = 5;
+    let lod = d < T1 ? 0 : d < T2 ? 1 : 2;
+    const cur = m._lod;
+    if (lod > cur && d < (cur === 0 ? T1 : T2) + H) lod = cur;      // don't drop detail until clearly past
+    else if (lod < cur && d > (cur === 1 ? T1 : T2) - H) lod = cur; // don't raise detail until clearly inside
+    if (lod !== cur) {
+      m.geometry = this._geos[lod];
+      m.material = this._mats[lod];
+      m._lod = lod;
     }
   }
 }

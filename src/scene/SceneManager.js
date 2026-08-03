@@ -3,7 +3,7 @@ import {
   ACESFilmicToneMapping, PCFSoftShadowMap,
   EquirectangularReflectionMapping, PostProcessing,
 } from 'three';
-import { pass, screenUV, saturation, mrt, output, velocity, vec3, mix, luminance, smoothstep } from 'three/tsl';
+import { pass, screenUV, saturation, mrt, output, velocity, vec3, mix, luminance, smoothstep, uniform } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -32,7 +32,7 @@ export class SceneManager {
     // dissolve band (~70-120m) so far grass/ground melt into a horizon-matched
     // haze — nothing to "pop." Kept gentle near the camera (exp^2) so mid-range
     // detail and the tree line stay readable.
-    this.scene.fog = new FogExp2(0xd8d0bd, 0.0013);
+    this.scene.fog = new FogExp2(0xcbd6de, 0.0011);
 
     this.camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 4000);
     this.camera.position.set(0, 2, 8);
@@ -72,7 +72,18 @@ export class SceneManager {
     aoPass.samples.value = 8;
     // GTAO writes the occlusion in a single (red) channel — use it as a scalar so
     // it darkens all channels, not just red.
-    const litAO = color.mul(aoPass.getTextureNode().r);
+    //
+    // FLOOR the occlusion. Depth-reconstructed GTAO is built for LOW-frequency
+    // contact shadows (tree/bunker bases, terrain folds). Grass is a dense forest
+    // of thin blades: every blade edge is a depth discontinuity, so raw GTAO reads
+    // the canopy as almost fully self-occluded and — with only 8 half-res samples —
+    // crushes it to a sparkly near-black up close. Remapping the AO term to
+    // [floor,1] keeps the genuine contact shadows while capping how dark (and how
+    // noisy) the false blade-on-blade occlusion can get, so blades stay crisp.
+    this._aoPass = aoPass;
+    this.uAOFloor = uniform(0.55);
+    const aoR = aoPass.getTextureNode().r;
+    const litAO = color.mul(aoR.mul(this.uAOFloor.oneMinus()).add(this.uAOFloor));
 
     // Anti-alias the AO'd beauty, then the cinematic finish: restrained bloom
     // (only the brightest sky/spec) and a slight de-saturation pull the look off
@@ -106,13 +117,14 @@ export class SceneManager {
     this.scene.environment = hdr;
     // Pull the IBL fill down so the warm directional key and its shadows dominate
     // — deeper, more contrasty light (less flat/overcast).
-    this.scene.environmentIntensity = 0.82;
+    this.scene.environmentIntensity = 0.55;
     if (asBackground) {
       this.scene.background = hdr;
-      // Soften the cartoon cumulus and dim the sky so a bright bluebird midday
-      // HDRI doesn't fight the warm low sun on the ground.
-      this.scene.backgroundBlurriness = 0.05;
-      this.scene.backgroundIntensity = 0.8;
+      // Crisp cumulus and a brighter sky to match the reference's punchy bluebird
+      // look — the lower environmentIntensity keeps the sky from flattening the
+      // ground, so the background no longer needs to be dimmed/blurred to compete.
+      this.scene.backgroundBlurriness = 0.0;
+      this.scene.backgroundIntensity = 0.92;
     }
     return hdr;
   }
