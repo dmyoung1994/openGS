@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
+import { courseAgent } from './vite-plugin-course-agent.js';
 
 // Point ONLY the exact bare specifier `three` at the WebGPU superset build. Using
 // a /^three$/ regex (not a plain string) is essential: a string alias also
@@ -18,4 +19,7 @@ export default defineConfig({
   resolve: {
     alias: [{ find: /^three$/, replacement: threeWebGPU }],
   },
+  // Course Builder sidecar: serves /course.json, exposes POST /api/build (runs the
+  // local design agent), and live-reloads the course on file change.
+  plugins: [courseAgent()],
 });

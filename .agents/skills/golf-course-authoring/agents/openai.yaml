@@ -1,0 +1,4 @@
+interface:
+  display_name: "Golf Course Authoring"
+  short_description: "Design strategic greens, bunkers, and terrain"
+  default_prompt: "Use $golf-course-authoring to design a strategic, physics-ready golf hole with resolved greens, bunkers, and hazards."

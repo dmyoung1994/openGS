@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "name": "Practice Range",
+    "mode": "realistic",
+    "schema": 1,
+    "notes": "Feature-level course spec. The engine BAKES terrain from these features (see src/scene/Range.js _height/_surface). There is no raw heightfield here on purpose — authoring is by features, never by terrain editing."
+  },
+  "bounds": { "minX": -110, "maxX": 110, "minZ": -340, "maxZ": 30 },
+  "tee": { "x": 0, "z": 2, "boxHalfX": 3.2, "z0": -2, "z1": 6 },
+  "corridor": { "c0": 32, "k": 0.11, "rough": 26 },
+  "fringeW": 2.2,
+  "greens": [
+    { "yards": 50, "x": -6, "r": 7, "contour": "tilt" },
+    { "yards": 100, "x": 10, "r": 8, "contour": "punchbowl" },
+    { "yards": 150, "x": -14, "r": 9, "contour": "spine" },
+    { "yards": 200, "x": 8, "r": 10, "contour": "tier" },
+    { "yards": 250, "x": -4, "r": 11, "contour": "crown" },
+    { "yards": 300, "x": 16, "r": 11, "contour": "saddle" }
+  ],
+  "bunkers": [
+    { "x": 20, "z": -86, "r": 5.0, "depth": 1.0, "pot": false },
+    { "x": 1, "z": -99, "r": 3.0, "depth": 2.0, "pot": true },
+    { "x": -25, "z": -132, "r": 5.4, "depth": 1.1, "pot": false },
+    { "x": -30, "z": -119, "r": 4.6, "depth": 0.7, "pot": false },
+    { "x": 6, "z": -190, "r": 5.6, "depth": 1.0, "pot": false }
+  ],
+  "ponds": [
+    { "x": 55, "z": -122, "r": 15, "depth": 1.6 }
+  ]
+}

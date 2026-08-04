@@ -1,0 +1,4 @@
+interface:
+  display_name: "Golf Environment Vibe"
+  short_description: "Dress golf holes with strategic natural character"
+  default_prompt: "Use $golf-environment-vibe to dress this hole with a cohesive, playable environmental vibe."

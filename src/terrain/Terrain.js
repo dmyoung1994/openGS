@@ -1,10 +1,11 @@
 import {
   BufferGeometry, BufferAttribute, Mesh, MeshStandardNodeMaterial, Group,
-  Vector2, Vector3, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
+  Vector2, Vector3, Vector4, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
+  StorageTexture, LinearFilter, ClampToEdgeWrapping,
 } from 'three';
 import {
-  positionWorld, normalWorld, cameraPosition, mx_noise_float, float, vec2, vec3, mix, texture,
-  luminance, smoothstep, oneMinus,
+  positionWorld, normalWorld, cameraPosition, mx_noise_float, float, vec2, vec3, vec4, mix, texture,
+  luminance, smoothstep, oneMinus, Fn, If, uniform, instanceIndex, textureStore, uvec2,
 } from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
 
@@ -63,8 +64,121 @@ export class Terrain {
     this.nz = Math.floor((bounds.maxZ - bounds.minZ) / spacing) + 1;
     this.heights = new Float32Array(this.nx * this.nz);
 
+    this._initDivots();          // divot scar field (GPU compute-stamped mask, read by the turf shader)
     this._bake();
     this.mesh = this._buildMesh();
+    // prepopulateDivots(renderer) is called from main once the WebGPU backend is
+    // initialized (compute needs a live renderer).
+  }
+
+  // Divots live entirely on the GPU: a StorageTexture mask (R = scar, G = kicked-up
+  // lip) that a COMPUTE shader stamps into, and that the turf shader samples once per
+  // pixel. Stamping one divot = a compute dispatch (1M texels, but only when a divot
+  // is added), so there's no CPU rasterization and no per-frame texture upload — the
+  // whole thing is "insanely fast" GPU work. Elongated along the swing line, rotated
+  // by `angle`; writes only inside the oval so prior divots elsewhere are preserved.
+  _initDivots() {
+    // Tight, high-res region around the hitting area: club-width divots (~4 cm) are only a
+    // few cm, so the mask needs fine texels. 1536 over ~12 m ≈ 128 texels/m ≈ 8 mm/texel.
+    const RES = 1536;
+    const originX = -6, originZ = -12, sizeX = 12, sizeZ = 18;    // metres, around the tee
+    const tpmX = RES / sizeX, tpmZ = RES / sizeZ;
+    this._divotRegion = { originX, originZ, sizeX, sizeZ, res: RES };
+
+    const tex = new StorageTexture(RES, RES);
+    tex.minFilter = tex.magFilter = LinearFilter;      // smooth scar edges
+    tex.wrapS = tex.wrapT = ClampToEdgeWrapping;        // 0 border → no divots outside the region
+    this._divotTex = tex;
+
+    // The mask covers a small high-res window; its ORIGIN is a uniform so the window can
+    // RE-CENTER on wherever the ball is actually hit from (a course lie), not just the
+    // tee — divots anywhere, without a course-sized texture. colorNode + roughnessNode
+    // read the same uniform so the sampling always matches the compute.
+    this._uDivOrigin = uniform(new Vector2(originX, originZ));
+    // Per-stamp params fed to the compute shader:
+    //   D  = (x, z, halfWidth, angle)
+    //   D2 = (dryness 0..1, aspect = length/width, seed for unique tearing, spare)
+    this._uDiv = uniform(new Vector4(0, 0, 0, 0));
+    this._uDiv2 = uniform(new Vector4(0.3, 2.8, 0, 0));
+    const D = this._uDiv, D2 = this._uDiv2, O = this._uDivOrigin;
+
+    const texelWorld = () => {
+      const ix = instanceIndex.mod(RES);
+      const iy = instanceIndex.div(RES);
+      const wx = float(ix).div(tpmX).add(O.x);
+      const wz = float(iy).div(tpmZ).add(O.y);
+      return { ix, iy, wx, wz };
+    };
+
+    // Stamp: one "bacon-strip" scar — a tapered teardrop (wide at the club-entry/leading
+    // edge, narrowing to the exit) with a NOISE-TORN outline, not a clean oval. Channels:
+    //   R = exposed-soil mask, G = leading-edge depth (for the depression shadow),
+    //   B = per-divot dryness. Store only where soil is present, so prior divots persist.
+    this._divotStamp = Fn(() => {
+      const { ix, iy, wx, wz } = texelWorld();
+      const dx = wx.sub(D.x), dz = wz.sub(D.y);
+      const ca = D.w.cos(), sa = D.w.sin();
+      const lx = dx.mul(ca).sub(dz.mul(sa));            // across the swing line
+      const ly = dx.mul(sa).add(dz.mul(ca));            // along the swing line (leading = -ly)
+      const rx = D.z, ry = D.z.mul(D2.y);               // half-width, half-length (elongated)
+      const ny = ly.div(ry);
+      // Teardrop taper: narrow the trailing (+ly) half toward the exit.
+      const taper = float(1.0).sub(ny.max(0.0).mul(0.55));
+      const nx = lx.div(rx.mul(taper).max(0.02));
+      // Torn outline: warp the distance field with per-divot-seeded noise (2 scales).
+      const seed = D2.z;
+      const n1 = mx_noise_float(vec3(wx.mul(9.0).add(seed), wz.mul(9.0), seed));
+      const n2 = mx_noise_float(vec3(wx.mul(3.2).add(seed), wz.mul(3.2), seed.add(4.0)));
+      const od = vec2(nx, ny).length().add(n1.mul(0.13)).add(n2.mul(0.09));
+      const mask = oneMinus(smoothstep(0.5, 1.0, od));
+      // Leading edge (ny ~ -1) is deepest; fades to 0 by mid-scar.
+      const depth = oneMinus(smoothstep(-0.9, 0.15, ny)).mul(mask);
+      If(mask.greaterThan(0.01), () => {
+        textureStore(this._divotTex, uvec2(ix, iy), vec4(mask, depth, D2.x, 1.0)).toWriteOnly();
+      });
+    })().compute(RES * RES);
+
+    // Clear the whole mask (StorageTexture contents aren't guaranteed zeroed).
+    this._divotClear = Fn(() => {
+      const { ix, iy } = texelWorld();
+      textureStore(this._divotTex, uvec2(ix, iy), vec4(0.0, 0.0, 0.0, 1.0)).toWriteOnly();
+    })().compute(RES * RES);
+  }
+
+  // Stamp one divot into the mask on the GPU. `renderer` is the live WebGPURenderer.
+  //   radius = half-WIDTH (m); the scar length is radius*aspect. dryness/seed vary the look.
+  stampDivot(renderer, x, z, radius = 0.022, angle = 0, dryness = 0.25, aspect = 4.5, seed = 0) {
+    // If the strike is outside the current mask window (a shot from a new part of the
+    // course), re-center the window on it and clear — so divots follow you anywhere.
+    // Shots within the window (e.g. every tee shot on the range) never trigger this, so
+    // the used-tee scatter accumulates intact.
+    const R = this._divotRegion, O = this._uDivOrigin.value, m = 2.0;
+    if (x < O.x + m || x > O.x + R.sizeX - m || z < O.y + m || z > O.y + R.sizeZ - m) {
+      O.set(x - R.sizeX / 2, z - R.sizeZ / 2);
+      renderer.compute(this._divotClear);
+    }
+    this._uDiv.value.set(x, z, radius, angle);
+    this._uDiv2.value.set(dryness, aspect, seed, 0);
+    renderer.compute(this._divotStamp);
+  }
+
+  // Clear + scatter a "used" hitting area of THIN, varied scars target-side of the ball
+  // (rests at ~x0,z2), fanning down range (-z), denser near the hitting spot. Deterministic
+  // seed so it's stable across loads. Must run after the WebGPU backend is initialized.
+  prepopulateDivots(renderer) {
+    renderer.compute(this._divotClear);
+    let s = 20260803 >>> 0;
+    const rnd = () => ((s = (Math.imul(s, 1103515245) + 12345) >>> 0) & 0x7fffffff) / 0x7fffffff;
+    for (let i = 0; i < 34; i++) {
+      const spread = 0.4 + 0.6 * rnd();          // bias the cluster toward the centre line
+      const x = (rnd() - 0.5) * 5.0 * spread;
+      const z = 1.2 - Math.pow(rnd(), 0.7) * 8.0; // denser near the tee, thinning down range
+      const r = 0.015 + rnd() * 0.017;           // half-WIDTH ~1.5-3.2cm -> ~3-6cm wide (a club)
+      const a = (rnd() - 0.5) * 0.5;             // roughly aligned to the -z target line
+      const dry = 0.05 + rnd() * 0.4;
+      const aspect = 3.5 + rnd() * 3.0;          // long, thin bacon-strips
+      this.stampDivot(renderer, x, z, r, a, dry, aspect, rnd() * 20.0);
+    }
   }
 
   _idx(i, j) { return j * this.nx + i; }
@@ -227,8 +341,14 @@ export class Terrain {
     // walls) are forced near-matte so they don't blow out.
     const rTex = texture(maps.roughMap, texXZ.mul(1 / 1.8)).r;
     const rGrass = rTex.mul(0.3).add(0.52);
+    // Scuffed soil in the divots is matte — kill the grass sheen there so a scar doesn't
+    // glint like turf. One extra sample of the divot mask (0 outside its region).
+    const dvR = this._divotRegion, dvO = this._uDivOrigin;
+    const dMask = texture(this._divotTex,
+      vec2(positionWorld.x.sub(dvO.x).div(dvR.sizeX), positionWorld.z.sub(dvO.y).div(dvR.sizeZ))).r;
+    const rGrassD = mix(rGrass, float(0.96), dMask.mul(0.85));
     const steepR = smoothstep(0.62, 0.4, normalWorld.y);
-    mat.roughnessNode = mix(rGrass, float(0.97), steepR);
+    mat.roughnessNode = mix(rGrassD, float(0.97), steepR);
     const grassCol = (name, extra = 1) => {
       const c = turfBase(name, new Color()).multiplyScalar(0.82 * extra);
       return vec3(c.r, c.g, c.b);
@@ -243,7 +363,10 @@ export class Terrain {
       green: grassCol('green'), fringe: grassCol('fringe'), tee: grassCol('tee'),
       sand: vec3(sc.r, sc.g, sc.b),
     };
-    mat.colorNode = turfColorNode(maps.map, texXZ, { ...this.zones, colors: palette });
+    mat.colorNode = turfColorNode(maps.map, texXZ, {
+      ...this.zones, colors: palette,
+      divotTex: this._divotTex, divotRegion: this._divotRegion, divotOrigin: this._uDivOrigin,
+    });
     return mat;
   }
 }
@@ -379,5 +502,34 @@ function turfColorNode(diffTex, texXZ, zones) {
   // grass is self-shadowed, so fold albedo down slightly with the slope.
   const slopeShade = smoothstep(0.35, 0.85, normalWorld.y);   // 0 vertical → 1 flat
   c = c.mul(mix(float(0.72), float(1.0), slopeShade));
+
+  // ---- Divots: fresh exposed-soil scars near the hitting area, from a single lookup into
+  // the GPU divot mask (R = soil, G = leading-edge depth, B = dryness). Mask is 0 outside
+  // its region (ClampToEdge), so this is a no-op over the rest of the course. NO bright ring
+  // — real fresh divots are just torn earth: a moist-dark leading edge grading to drier
+  // brown, mottled soil texture inside, and a ragged (noise-torn) boundary into the turf.
+  if (zones.divotTex) {
+    const R = zones.divotRegion, O = zones.divotOrigin;
+    const duv = vec2(wx.sub(O.x).div(R.sizeX), wz.sub(O.y).div(R.sizeZ));
+    const dm = texture(zones.divotTex, duv);
+    const soilMask = dm.r, depth = dm.g, dry = dm.b;
+
+    // Moist-dark earth grading to drier, lighter brown (by per-divot dryness + toward edges).
+    const moist = vec3(0.075, 0.052, 0.033);
+    const drySoil = vec3(0.155, 0.115, 0.072);
+    // Per-divot dryness drives the tone; only the very rim dries a little (kept small so
+    // thin strips — which are mostly "edge" — still read as fresh dark soil, not tan).
+    const dryAmt = dry.mul(0.7).add(oneMinus(smoothstep(0.5, 0.95, soilMask)).mul(0.15)).clamp(0.0, 1.0);
+    let soilCol = mix(moist, drySoil, dryAmt);
+    // Mottled dirt (two scales) so the fill isn't flat — kept below 1.0 so it only darkens.
+    const sn1 = mx_noise_float(vec3(wx.mul(24.0), wz.mul(24.0), 11.0)).mul(0.5).add(0.5);
+    const sn2 = mx_noise_float(vec3(wx.mul(7.0), wz.mul(7.0), 3.0)).mul(0.5).add(0.5);
+    soilCol = soilCol.mul(sn1.mul(0.3).add(0.72)).mul(sn2.mul(0.2).add(0.8));
+    // Leading-edge depression shadow (deepest where the club entered) — replaces the old rim.
+    soilCol = soilCol.mul(oneMinus(depth.mul(0.5)));
+    // Blend turf -> soil by the ragged mask; keep the very edge partly grass (torn, not painted).
+    const soilAmt = smoothstep(0.12, 0.6, soilMask).mul(0.9);
+    c = mix(c, soilCol, soilAmt);
+  }
   return c;
 }

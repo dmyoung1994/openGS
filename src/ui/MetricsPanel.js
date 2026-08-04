@@ -40,12 +40,13 @@ export class MetricsPanel {
     this.applyPreset('7-iron');
   }
 
-  getParams() { return { ...this.values }; }
+  getParams() { return { ...this.values, club: this.club }; }
   getEnv() { return { ...this.env }; }
 
   applyPreset(name) {
     const p = PRESETS[name];
     if (!p) return;
+    this.club = name;                    // remembered so the sim can gate club-specific FX (e.g. divots)
     Object.assign(this.values, p);
     for (const f of FIELDS) this._setField(f.key, this.values[f.key] ?? 0);
   }

@@ -1,6 +1,7 @@
 import {
   Group, Mesh, SphereGeometry, CylinderGeometry, ConeGeometry, PlaneGeometry,
-  CircleGeometry, BoxGeometry, MeshStandardMaterial, MeshBasicMaterial, InstancedMesh,
+  CircleGeometry, BoxGeometry, BufferGeometry, BufferAttribute,
+  MeshStandardMaterial, MeshBasicMaterial, InstancedMesh,
   Object3D, Color, Vector2, Vector3, DoubleSide, CanvasTexture,
   TextureLoader, RepeatWrapping, SRGBColorSpace,
 } from 'three';
@@ -8,7 +9,6 @@ import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
 import { loadTreePrototype, instanceTrees, billboardTrees } from './Trees.js';
 import { Noise } from '../util/noise.js';
-import { YARD_TO_M } from '../util/units.js';
 
 const _tex = new TextureLoader();
 
@@ -16,32 +16,31 @@ const _tex = new TextureLoader();
 // target greens at marked yardages, framed by rough and a tree line. Also owns
 // the ball mesh. Everything that scales (grass, trees) is GPU-instanced.
 export class Range {
-  constructor(scene, camera) {
+  // `course` is a normalized spec (see src/course/course.js) of FEATURES only —
+  // greens, bunkers, ponds, the fairway corridor, the tee. The engine bakes the
+  // terrain from these (heightFn/surfaceFn below); nothing here edits raw heights.
+  // That is what lets the whole course be (re)built from a prompt-driven course.json
+  // with no terrain-editing surface exposed to the user.
+  constructor(scene, camera, course) {
     this.scene = scene;
     this.camera = camera;
+    this.course = course;
     this.group = new Group();
     scene.add(this.group);
 
     this.noise = new Noise(7);
-    this.targets = this._defineTargets();
-    // Greenside sand bunkers and a lateral water hazard. These are carved into
-    // the heightfield (so the ball physically rolls into them and the surface
-    // classifier returns 'sand'/'water'), then dressed with overlay meshes.
-    // depth: sand floor below grade. lip: grass-ridge height above grade at the
-    // high side (down-range / green side); you look into the sand past a raised
-    // back lip. pot: a deep, small, steep, uniformly-lipped links pot bunker.
-    this.bunkers = [
-      { x: 20, z: -86, r: 5.0, depth: 1.0, lip: 0.75 },            // front-right of the 100 green
-      { x: 1, z: -99, r: 3.0, depth: 2.0, lip: 1.05, pot: true },  // deep pot, short-left of 100
-      { x: -25, z: -132, r: 5.4, depth: 1.1, lip: 0.85 },          // guarding the 150 green
-      { x: 6, z: -190, r: 5.6, depth: 1.0, lip: 0.6 },             // fairway bunker ~205
-    ];
-    this.ponds = [
-      { x: 55, z: -122, r: 15, depth: 1.6 },   // lateral water, right side
-    ];
+    // Feature arrays come straight from the course spec. Greens carry a named
+    // internal contour; bunkers carve depressions (pot = deep steep revetted pit);
+    // ponds are dished water basins. See _height/_surface for how they bake.
+    this.targets = course.greens;
+    this.bunkers = course.bunkers;
+    this.ponds = course.ponds;
+    this.tee = course.tee;
+    this.corridor = course.corridor;
+    this.fringeW = course.fringeW;
 
     this.terrain = new Terrain({
-      bounds: { minX: -110, maxX: 110, minZ: -340, maxZ: 30 },
+      bounds: course.bounds,
       spacing: 0.6,          // fine physics/collision grid (accurate ball roll)
       renderSpacing: 1.0,    // coarser render mesh + shadow pass (LOD; ~2.8x fewer verts)
       heightFn: (x, z) => this._height(x, z),
@@ -51,9 +50,9 @@ export class Range {
       zones: {
         greens: this.targets.map((t) => ({ x: t.x, z: t.z, r: t.r })),
         sands: this.bunkers.map((b) => ({ x: b.x, z: b.z, r: this._bunkerSandR(b) })),
-        corridor: { c0: 32, k: 0.11, rough: 26 },   // halfWidth = c0 + (-z)*k, then rough band
-        tee: { x: 3.2, z0: -2, z1: 6 },
-        fringeW: 2.2,
+        corridor: this.corridor,                                     // halfWidth = c0 + (-z)*k, then rough band
+        tee: { x: this.tee.boxHalfX, z0: this.tee.z0, z1: this.tee.z1 },
+        fringeW: this.fringeW,
       },
     });
     this.group.add(this.terrain.mesh);
@@ -74,20 +73,6 @@ export class Range {
   }
 
   // ---- Terrain definition -------------------------------------------------
-
-  _defineTargets() {
-    // distance (yards), lateral offset (m), radius (m), and a primary contour
-    // idea. Per the authoring skill, each green gets ONE legible contour family
-    // and they vary across the set — never the same dome repeated.
-    return [
-      { yards: 50, x: -6, r: 7, contour: 'tilt' },       // short: fall to front
-      { yards: 100, x: 10, r: 8, contour: 'punchbowl' }, // gathering bowl
-      { yards: 150, x: -14, r: 9, contour: 'spine' },    // ridge splits pins
-      { yards: 200, x: 8, r: 10, contour: 'tier' },      // two shelves
-      { yards: 250, x: -4, r: 11, contour: 'crown' },    // pushed-up turtleback
-      { yards: 300, x: 16, r: 11, contour: 'saddle' },   // twin shoulders
-    ].map((t) => ({ ...t, z: -t.yards * YARD_TO_M }));
-  }
 
   _height(x, z) {
     // Gently rolling ground so the fairway has real FORM (a flat billiard plane
@@ -118,28 +103,28 @@ export class Range {
       }
     }
 
-    // Carve bunkers with a real LIP: a flat sand floor, a steep wall up to the
-    // rim, then a raised GRASS ridge just outside it. The ridge is tall on the
-    // high side (down-range / green side) and low toward the player for a normal
-    // bunker — you look into the sand past a raised back lip — or uniformly tall
-    // and deep for a pot bunker (steep-walled links pit). The sand disc sits in
-    // the floor (see _bunkerSandR), so the lip reads as a grass face above it.
+    // Carve each bunker as a depression CUT INTO the grade — never a raised rim.
+    // Real bunkers sit BELOW the surrounding turf: a flat sand floor that would
+    // drain to the low point, walls rising back to grade, and a rim that is FLUSH
+    // with the surrounding ground. The old code added a Gaussian grass ridge just
+    // OUTSIDE the rim (h += lip) — a ring of raised turf around the hole — which is
+    // exactly what made every bunker read as a meteor crater. Framing, where wanted,
+    // belongs to the landform / green shoulders, not a ring around the pit.
+    //   • regular: a flashed face — sand sweeps up a moderate wall to a grade rim.
+    //   • pot:     a deep, near-vertical REVETTED pit — a small flat floor and steep
+    //              turf walls straight up to a flush rim (no lip). The stacked-sod
+    //              wall look is added by the shader on steep faces; the sand stays on
+    //              the floor (see _bunkerSandR).
     for (const b of this.bunkers) {
       const dx = x - b.x, dz = z - b.z;
       const d = Math.hypot(dx, dz);
-      const lipW = b.pot ? 2.0 : 2.8;
-      if (d < b.r + lipW) {
-        const rFloor = b.r * (b.pot ? 0.72 : 0.45);
-        const wall = smoothstep(rFloor, b.r, d);          // 0 on floor → 1 at rim
-        const floorToRim = -b.depth * (1 - wall);         // flat -depth floor, 0 at rim
-        // Directional weight: 1 on the high (down-range, -z) side → 0 toward the
-        // player. Pot bunkers lip up uniformly all the way around.
-        const side = b.pot ? 1 : Math.max(0, 0.5 - 0.5 * (dz / Math.max(d, 0.001)));
-        const lipH = (b.lip ?? 0.6) * side;
-        const lipCenter = b.r + lipW * 0.32;
-        const lip = Math.exp(-((d - lipCenter) ** 2) / (lipW * 0.5) ** 2) * lipH;
-        h += floorToRim + lip;
-      }
+      if (d >= b.r) continue;                              // outside the footprint → grade untouched
+      const rFloor = b.r * (b.pot ? 0.70 : 0.42);
+      let wall = smoothstep(rFloor, b.r, d);               // 0 on the flat floor → 1 at the rim
+      // Pot walls are near-vertical: hold the floor flat, then rise steeply in the
+      // last band (bias the ramp toward the rim). Regular walls stay a gentler flash.
+      if (b.pot) wall = wall * wall;
+      h += -b.depth * (1 - wall);                          // −depth on the floor, 0 (grade) at the rim
     }
 
     // Water basins: dished well below the waterline so the pond has depth.
@@ -157,9 +142,10 @@ export class Range {
   }
 
   // Radius of the visible sand (floor + wall face). Pot bunkers keep sand to the
-  // small floor so their steep grass walls rise revetted above it.
+  // small flat floor (≈ rFloor) so their steep turf walls rise revetted above it,
+  // rather than draping sand up a near-vertical face.
   _bunkerSandR(b) {
-    return b.pot ? b.r * 0.78 : b.r;
+    return b.pot ? b.r * 0.72 : b.r;
   }
 
   // Water surface elevation for a pond (the flat plane the water mesh sits at).
@@ -171,13 +157,13 @@ export class Range {
 
   _surface(x, z) {
     // Tee mat.
-    if (Math.abs(x) < 3.2 && z < 6 && z > -2) return 'tee';
+    if (Math.abs(x - this.tee.x) < this.tee.boxHalfX && z < this.tee.z1 && z > this.tee.z0) return 'tee';
 
     // Target greens with a fringe collar.
     for (const t of this.targets) {
       const d = Math.hypot(x - t.x, z - t.z);
       if (d < t.r) return 'green';
-      if (d < t.r + 2.2) return 'fringe';
+      if (d < t.r + this.fringeW) return 'fringe';
     }
 
     // Water hazards take priority over anything they sit in.
@@ -191,9 +177,9 @@ export class Range {
     }
 
     // The fairway fans out; beyond it is rough, then deep rough near the trees.
-    const halfWidth = 32 + (-z) * 0.11; // widens down range
+    const halfWidth = this.corridor.c0 + (-z) * this.corridor.k; // widens down range
     const ax = Math.abs(x);
-    if (ax > halfWidth + 26) return 'deepRough';
+    if (ax > halfWidth + this.corridor.rough) return 'deepRough';
     if (ax > halfWidth) return 'rough';
     return 'fairway';
   }
@@ -210,7 +196,10 @@ export class Range {
       new BoxGeometry(2.4, 0.05, 1.6),
       new MeshStandardMaterial({ map: makeMatTexture(), roughness: 0.9, metalness: 0.0 }),
     );
-    matTop.position.set(0, y0 + 0.035, 2);
+    // Sit the turf top PROUD of the rubber frame (top at y0+0.075 vs the frame's
+    // y0+0.06). Previously both tops sat at y0+0.06 — coplanar faces that z-fought and
+    // flickered light-green/dark under the temporal AA jitter.
+    matTop.position.set(0, y0 + 0.05, 2);
     matTop.receiveShadow = true;
     matTop.castShadow = true;
     this.group.add(matTop);
@@ -303,35 +292,69 @@ export class Range {
     return sign;
   }
 
-  // A flat disc whose vertices are pinned to the terrain height — used for the
-  // sand surface so it hugs the carved bunker bowl exactly. `jitter` breaks the
-  // perfect circle into a natural, irregular sand edge.
-  _conformingDisc(cx, cz, r, yOffset, { segments = 64, jitter = 0 } = {}) {
-    const geo = new CircleGeometry(r, segments);
-    geo.rotateX(-Math.PI / 2);                    // lie flat in the XZ plane
-    const pos = geo.attributes.position;
-    if (jitter > 0) {
-      for (let i = 1; i < pos.count; i++) {       // index 0 is the center vertex
-        const lx = pos.getX(i), lz = pos.getZ(i);
-        const ang = Math.atan2(lz, lx);
-        const f = 1 + jitter * this.noise.noise2(Math.cos(ang) * 2.5, Math.sin(ang) * 2.5);
-        pos.setX(i, lx * f); pos.setZ(i, lz * f);
+  // A flat-in-plan disc whose vertices are pinned to the terrain height, so the
+  // sand hugs the carved bunker bowl exactly. Built as a CONCENTRIC-RING polar grid
+  // rather than CircleGeometry's single center-vertex fan: a fan makes every floor
+  // triangle share the one center vertex, so draped over a bowl that vertex's
+  // averaged normal pinwheels into the radial star artifact we were seeing. Multiple
+  // rings distribute vertices across the radius → smooth, well-behaved normals that
+  // follow the bowl. `jitter` roughens only the OUTER rings into a natural, irregular
+  // sand edge while the interior stays smooth.
+  _conformingDisc(cx, cz, r, yOffset, { radial = 96, rings = 14, jitter = 0 } = {}) {
+    const pos = [cx, 0, cz];                       // center vertex (index 0)
+    const uv = [0.5, 0.5];
+    for (let ri = 1; ri <= rings; ri++) {
+      const t = ri / rings;                        // 0..1 out to the rim
+      for (let a = 0; a < radial; a++) {
+        const ang = (a / radial) * Math.PI * 2;
+        const ca = Math.cos(ang), sa = Math.sin(ang);
+        // Edge jitter scales with t, so it vanishes near the center and only the
+        // rim reads irregular.
+        const j = jitter > 0 ? jitter * t * this.noise.noise2(ca * 2.5, sa * 2.5) : 0;
+        const rad = r * t * (1 + j);
+        pos.push(cx + ca * rad, 0, cz + sa * rad);
+        uv.push(ca * t * 0.5 + 0.5, sa * t * 0.5 + 0.5);
       }
     }
-    geo.translate(cx, 0, cz);
-    for (let i = 0; i < pos.count; i++) {
-      pos.setY(i, this.terrain.heightAt(pos.getX(i), pos.getZ(i)) + yOffset);
+    const idx = [];
+    for (let a = 0; a < radial; a++) {             // center → first ring
+      const a2 = (a + 1) % radial;
+      idx.push(0, 1 + a2, 1 + a);
     }
-    pos.needsUpdate = true;
+    for (let ri = 1; ri < rings; ri++) {           // ring ri → ring ri+1
+      const b0 = 1 + (ri - 1) * radial, b1 = 1 + ri * radial;
+      for (let a = 0; a < radial; a++) {
+        const a2 = (a + 1) % radial;
+        idx.push(b0 + a, b1 + a2, b1 + a, b0 + a, b0 + a2, b1 + a2);
+      }
+    }
+    const p = new Float32Array(pos);
+    for (let i = 0; i < p.length; i += 3) p[i + 1] = this.terrain.heightAt(p[i], p[i + 2]) + yOffset;
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new BufferAttribute(p, 3));
+    geo.setAttribute('uv', new BufferAttribute(new Float32Array(uv), 2));
+    geo.setIndex(idx);
     geo.computeVertexNormals();
     return geo;
   }
 
-  _buildBunkers() {
-    const diff = _tex.load('/assets/textures/sand_diff.jpg');
+  // Async: AWAIT the sand textures before building the bunker overlays. Cloning a
+  // texture that is still loading yields a clone with a null image/source, and the
+  // WebGPU renderer throws (invalid pipeline) the moment it tries to bind it on the
+  // first frame. Waiting for the load guarantees valid sources. Bunkers are cosmetic
+  // overlays (the terrain already carries the sand surface), so the brief defer is
+  // invisible. Fire-and-forget from the constructor, like the tree line.
+  async _buildBunkers() {
+    let diff, nor, rough;
+    try {
+      [diff, nor, rough] = await Promise.all([
+        _tex.loadAsync('/assets/textures/sand_diff.jpg'),
+        _tex.loadAsync('/assets/textures/sand_nor_gl.jpg'),
+        _tex.loadAsync('/assets/textures/sand_rough.jpg'),
+      ]);
+    } catch (e) { console.warn('sand textures failed', e); return; }
+    if (this._disposed) return;
     diff.colorSpace = SRGBColorSpace;
-    const nor = _tex.load('/assets/textures/sand_nor_gl.jpg');
-    const rough = _tex.load('/assets/textures/sand_rough.jpg');
     for (const t of [diff, nor, rough]) {
       t.wrapS = t.wrapT = RepeatWrapping;
       t.anisotropy = 8;
@@ -352,7 +375,7 @@ export class Range {
       for (const t of [m.map, m.normalMap, m.roughnessMap]) {
         t.wrapS = t.wrapT = RepeatWrapping; t.repeat.set(rep, rep); t.anisotropy = 8; t.needsUpdate = true;
       }
-      const geo = this._conformingDisc(b.x, b.z, this._bunkerSandR(b), 0.04, { segments: 96, jitter: 0.07 });
+      const geo = this._conformingDisc(b.x, b.z, this._bunkerSandR(b), 0.04, { radial: 96, rings: 14, jitter: 0.08 });
       const mesh = new Mesh(geo, m);
       mesh.receiveShadow = true;
       mesh.name = 'bunker';
@@ -392,7 +415,7 @@ export class Range {
     const spots = [];
     const fbm = (a, b) => this.noise.fbm(a, b, { octaves: 2 });   // ~ -1..1
     for (let z = 22; z > -344; z -= 8 + Math.random() * 5) {
-      const corridor = 32 + (-z) * 0.11 + 24;                    // just past the deep-rough edge
+      const corridor = this.corridor.c0 + (-z) * this.corridor.k + 24;   // just past the deep-rough edge
       for (const side of [-1, 1]) {
         // Undulating inner edge: bays and points, seeded per side.
         const edge = corridor + 4 + (fbm(side * 40 + z * 0.03, z * 0.05) * 0.5 + 0.5) * 24;
@@ -457,6 +480,24 @@ export class Range {
 
   update(t) {
     if (this.grass) this.grass.update(t, this.camera);
+  }
+
+  // Tear the whole course out of the scene so a new one can be built from an edited
+  // course spec (the live-rebuild path). Frees GPU resources so repeated agent
+  // rebuilds don't leak geometries/materials/textures.
+  dispose() {
+    this._disposed = true;
+    this.scene.remove(this.group);
+    this.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const m of mats) {
+        for (const k in m) { const v = m[k]; if (v && v.isTexture) v.dispose(); }
+        m.dispose?.();
+      }
+    });
+    this.grass = null;
+    this.trees = null;
   }
 }
 
