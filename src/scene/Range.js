@@ -1,14 +1,24 @@
 import {
-  Group, Mesh, SphereGeometry, CylinderGeometry, ConeGeometry, PlaneGeometry,
-  CircleGeometry, BoxGeometry, BufferGeometry, BufferAttribute,
-  MeshStandardMaterial, MeshBasicMaterial, InstancedMesh,
-  Object3D, Color, Vector2, Vector3, DoubleSide, CanvasTexture,
-  TextureLoader, RepeatWrapping, SRGBColorSpace,
+  Group, Mesh, CylinderGeometry, BoxGeometry,
+  MeshStandardMaterial, InstancedMesh,
+  Object3D, Color, Vector3, DoubleSide, CanvasTexture,
+  TextureLoader, RepeatWrapping, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter,
 } from 'three';
 import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
-import { loadTreePrototype, instanceTrees, billboardTrees } from './Trees.js';
+import { loadTreePrototype, loadTreeImpostor, buildTreeBeautyLod, TreeShadowProxy } from './Trees.js';
+import { createGolfBallMesh } from './GolfBall.js';
+import { disposeMaterialTextures, disposeWebGPUGeometries } from './WebGPUResourceDisposal.js';
 import { Noise } from '../util/noise.js';
+import { createRng, deriveSeed, normalizeSeed } from '../util/random.js';
+import { resolveEnvironmentPlacements } from '../environment/EnvironmentPlacement.js';
+import { getCatalogAsset } from '../environment/EnvironmentCatalog.js';
+import { WaterSurface } from './WaterSurface.js';
+import { buildEnvironmentProps } from './EnvironmentProps.js';
+import { BackdropTerrain } from './BackdropTerrain.js';
+import {
+  bunkerGradeAt, roundedHazardFeature, signedDistanceToFeature,
+} from '../course/featureGeometry.js';
 
 const _tex = new TextureLoader();
 
@@ -21,10 +31,22 @@ export class Range {
   // terrain from these (heightFn/surfaceFn below); nothing here edits raw heights.
   // That is what lets the whole course be (re)built from a prompt-driven course.json
   // with no terrain-editing surface exposed to the user.
-  constructor(scene, camera, course) {
+  constructor(scene, camera, course, { renderer, motionHistory, lighting, environmentTier, environment, environmentCatalog } = {}) {
+    if (!environmentTier?.grassRadius || !environmentTier?.trees) {
+      throw new Error('Range requires the resolved environment device tier.');
+    }
     this.scene = scene;
     this.camera = camera;
     this.course = course;
+    this.environmentSeed = normalizeSeed(course.environmentSeed);
+    this.renderer = renderer;
+    this.lighting = lighting;
+    this.motionHistory = motionHistory;
+    this.environmentTier = environmentTier;
+    if (!environment?.windAt) throw new Error('Range requires shared EnvironmentGpuBindings.');
+    if (!environmentCatalog?.byId) throw new Error('Range requires the verified environment catalog.');
+    this.environment = environment;
+    this.environmentCatalog = environmentCatalog;
     this.group = new Group();
     scene.add(this.group);
 
@@ -33,75 +55,153 @@ export class Range {
     // internal contour; bunkers carve depressions (pot = deep steep revetted pit);
     // ponds are dished water basins. See _height/_surface for how they bake.
     this.targets = course.greens;
-    this.bunkers = course.bunkers;
-    this.ponds = course.ponds;
+    // Target furniture is deliberately shared within a Range rebuild: the
+    // authored yardage labels remain separate textures, while poles, posts,
+    // cloth volumes, bases, and marker bodies reuse their geometry/material
+    // buckets instead of allocating one mesh asset per target.
+    this._targetPropAssets = null;
+    this.bunkers = course.bunkers.map((feature, index) => {
+      const rounded = roundedHazardFeature(feature, { kind: 'bunker', index });
+      const sandFeature = rounded.pot ? null : Object.freeze({
+        x: rounded.x, z: rounded.z, r: rounded.r, shape: rounded._sandShape,
+      });
+      return Object.freeze({
+        ...rounded,
+        ...bunkerDrainageAxis(this.noise, rounded, index),
+        _sandFeature: sandFeature,
+      });
+    });
+    // Most terrain samples are far from authored features. Cache conservative
+    // plan-view bounds once so the expensive polygon SDF only runs in a feature's
+    // actual influence region; this is an exact broad-phase cull, not a visual or
+    // physics approximation.
+    this._targetBounds = this.targets.map((feature) => featureBounds(feature));
+    this._bunkerBounds = this.bunkers.map((feature) => featureBounds(feature));
+    // Cache each pond's centre-to-outline inset once.  The same signed outline
+    // drives terrain, collision classification, water geometry, and placement;
+    // keeping this scalar avoids re-walking the 24-sample smoothed polygon for
+    // every heightfield sample.
+    this.ponds = course.ponds.map((feature, index) => {
+      const pond = roundedHazardFeature(feature, { kind: 'pond', index });
+      return Object.freeze({
+        ...pond,
+        _centerInset: signedDistanceToFeature(pond, pond.x, pond.z),
+        _bounds: featureBounds(pond),
+      });
+    });
     this.tee = course.tee;
     this.corridor = course.corridor;
     this.fringeW = course.fringeW;
+    // Water is a constant datum, not a height sampled from the pond centre.
+    // Resolve it from the authored shoreline before Terrain starts sampling;
+    // this avoids a Terrain -> Range -> Terrain recursion and keeps rebuilds
+    // deterministic when the outline is irregular.
+    this._pondWaterLevels = new Map(
+      this.ponds.map((pond) => [pond, pondWaterDatum(pond, (x, z) => this._baseHeight(x, z))]),
+    );
 
     this.terrain = new Terrain({
       bounds: course.bounds,
       spacing: 0.6,          // fine physics/collision grid (accurate ball roll)
-      renderSpacing: 1.0,    // coarser render mesh + shadow pass (LOD; ~2.8x fewer verts)
+      // Match the render mesh to the baked height grid. Sampling a 0.6 m bilinear
+      // heightfield on a 1 m mesh creates a 3 m beat in the visible rows at grazing
+      // angles; that was the source of the regular fairway striping during startup.
+      renderSpacing: 0.6,
       heightFn: (x, z) => this._height(x, z),
       surfaceFn: (x, z) => this._surface(x, z),
       // Geometric spec for the shader's analytic (smooth-curve) turf zones. Mirrors
       // the circles/corridor in _surface so the visual edges match gameplay zones.
       zones: {
-        greens: this.targets.map((t) => ({ x: t.x, z: t.z, r: t.r })),
-        sands: this.bunkers.map((b) => ({ x: b.x, z: b.z, r: this._bunkerSandR(b) })),
+        greens: this.targets.map((t) => ({ x: t.x, z: t.z, r: t.r, ...(t.shape ? { shape: t.shape } : {}) })),
+        sands: this.bunkers.map((b) => ({
+          x: b.x, z: b.z, r: b.r,
+          ...(b.pot ? { shape: b.shape, inset: b.r * 0.28 } : { shape: b._sandShape }),
+        })),
+        waters: this.ponds.map((p) => ({
+          x: p.x, z: p.z, r: p.r, ...(p.shape ? { shape: p.shape } : {}),
+        })),
         corridor: this.corridor,                                     // halfWidth = c0 + (-z)*k, then rough band
         tee: { x: this.tee.boxHalfX, z0: this.tee.z0, z1: this.tee.z1 },
         fringeW: this.fringeW,
       },
+      motionHistory,
+      renderer,
     });
     this.group.add(this.terrain.mesh);
+    this.backdrop = new BackdropTerrain({
+      terrain: this.terrain,
+      bounds: course.bounds,
+      seed: this.environmentSeed,
+      biome: course.biome,
+      // The backdrop shares the scene's one atmosphere rather than blending in a
+      // fixed haze colour of its own; see worldMaterial in BackdropTerrain.js.
+      environment,
+    });
+    this.group.add(this.backdrop.group);
+    this.terrain.waterHeightAt = (x, z) => this.waterHeightAt(x, z);
+    this.environmentPlacements = resolveEnvironmentPlacements(course, environmentCatalog, this.terrain);
+    // Resolve one immutable tree record set for both the visible forest and the
+    // grass bake. Canopy suppression therefore follows the exact authored roots
+    // and scaled catalog crown bounds rather than a second procedural forest mask.
+    const treePlacements = this._treePlacements();
 
     // Camera-relative grass (WebGPU / TSL). A world-cell-anchored field of ~1M
     // blades follows the camera every frame, sampling terrain height + surface
     // from GPU textures, with density/height LOD falling off with distance. So
     // wherever you look — tee, mid-fairway, a green after a shot — there's turf.
-    this.grass = new Grass({ terrain: this.terrain, camera: this.camera });
+    this.grass = new Grass({
+      terrain: this.terrain, camera: this.camera, renderer, motionHistory, environment,
+      radius: environmentTier.grassRadius,
+      canopyPlacements: treePlacements,
+    });
     this.group.add(this.grass.mesh);
 
     this._buildTee();
     this._buildTargets();
-    this._buildBunkers();
     this._buildWater();
-    this._buildTreeLine();
-    this._buildBall();
+    const treesReady = this._buildTreeLine(treePlacements);
+    const environmentPropsReady = this._buildEnvironmentProps();
+    const ballReady = this._buildBall();
+    // Replacing a course removes and recreates static shadow casters. Mark the
+    // retained directional map dirty immediately; the async tree proxy marks it
+    // again when its new GPU record set is ready.
+    this.lighting?.invalidateShadow();
+    // The environment benchmark waits for this before it begins its shader warm-up.
+    // Every visible asset is required. Bunker sand is part of the authoritative
+    // terrain material rather than a second, independently tessellated surface.
+    this.assetsReady = Promise.all([
+      this.terrain.assetsReady, this.backdrop.assetsReady,
+      treesReady, environmentPropsReady, ballReady,
+    ]);
   }
 
   // ---- Terrain definition -------------------------------------------------
 
   _height(x, z) {
-    // Gently rolling ground so the fairway has real FORM (a flat billiard plane
-    // reads as a prototype and casts no shadows). Broad long-wavelength swells
-    // everywhere, plus finer rolls, ramping up down range. The tee is levelled
-    // back out below.
-    const far = Math.min(1, Math.max(0, (-z) / 300));
-    let h = this.noise.fbm(x * 0.006, z * 0.006, { octaves: 4 }) * (2.2 + 2.4 * far);
-    h += this.noise.fbm(x * 0.016, z * 0.016, { octaves: 3 }) * (0.9 + 0.7 * far);
-    h += this.noise.fbm(x * 0.05, z * 0.05, { octaves: 2 }) * 0.2; // fine rolls
-
-    // Green complexes: a broad shoulder tie-in that carries the landform out of
-    // the green into the surrounds (continuous, not a pasted disc), a gentle
-    // push-up so the surface sits above grade, and ONE legible internal contour
-    // per green (see greenContour). Amplitudes stay in a puttable range.
-    for (const t of this.targets) {
-      const dx = x - t.x, dz = z - t.z;
-      const d = Math.hypot(dx, dz);
-      if (d < t.r + 10) {
-        const shoulder = Math.exp(-((d - t.r) * (d - t.r)) / 40) * 0.5;
-        const pad = Math.max(0, 1 - (d / (t.r + 6)) ** 2) * 0.30;
-        let gc = 0;
-        if (d < t.r + 2) {
-          const inside = Math.max(0, 1 - (d / (t.r + 2)) ** 2);
-          gc = greenContour(t.contour, dx / t.r, dz / t.r) * inside;
-        }
-        h += shoulder + pad + gc;
-      }
+    let h = this._baseHeight(x, z);
+    for (const p of this.ponds) {
+      if (!inFeatureBounds(p._bounds, x, z, 4)) continue;
+      const sd = signedDistanceToFeature(p, x, z);
+      const level = this._waterLevel(p);
+      // The water plane is the top datum. Grade the basin monotonically down
+      // from that exact shoreline, and return outside to natural grade over a
+      // short erosion shoulder.
+      h = pondGradeAt({ pond: p, signedDistance: sd, baseHeight: h, waterLevel: level });
     }
+    return h;
+  }
+
+  _baseHeight(x, z) {
+    // Collision-authoritative course form. One lateral drainage swale, offset
+    // maintained-ground benches, and elongated low rolls create readable terrain
+    // shadows from golfer height. Every primitive is metre-scaled and aperiodic;
+    // the low-amplitude fBm breaks their shoulders without becoming random moguls.
+    let h = courseLandformHeight(this.noise, x, z);
+
+    // Greens inherit the continuous course landform. Their authored irregular SDF
+    // still owns gameplay, cut height, pigment, roughness, and fringe. There is no
+    // additive per-green elevation pad: even an outline-aware shoulder produces
+    // two conspicuous contour rings in the fixed overview camera.
 
     // Carve each bunker as a depression CUT INTO the grade — never a raised rim.
     // Real bunkers sit BELOW the surrounding turf: a flat sand floor that would
@@ -114,25 +214,15 @@ export class Range {
     //   • pot:     a deep, near-vertical REVETTED pit — a small flat floor and steep
     //              turf walls straight up to a flush rim (no lip). The stacked-sod
     //              wall look is added by the shader on steep faces; the sand stays on
-    //              the floor (see _bunkerSandR).
-    for (const b of this.bunkers) {
-      const dx = x - b.x, dz = z - b.z;
-      const d = Math.hypot(dx, dz);
-      if (d >= b.r) continue;                              // outside the footprint → grade untouched
-      const rFloor = b.r * (b.pot ? 0.70 : 0.42);
-      let wall = smoothstep(rFloor, b.r, d);               // 0 on the flat floor → 1 at the rim
-      // Pot walls are near-vertical: hold the floor flat, then rise steeply in the
-      // last band (bias the ramp toward the rim). Regular walls stay a gentler flash.
-      if (b.pot) wall = wall * wall;
-      h += -b.depth * (1 - wall);                          // −depth on the floor, 0 (grade) at the rim
-    }
-
-    // Water basins: dished well below the waterline so the pond has depth.
-    for (const p of this.ponds) {
-      const d = Math.hypot(x - p.x, z - p.z);
-      if (d < p.r + 4) {
-        h -= p.depth * Math.max(0, 1 - (d / (p.r + 2)) ** 2);
-      }
+    //              the floor (see Bunkers.js's bunkerSandRadius).
+    for (let bunkerIndex = 0; bunkerIndex < this.bunkers.length; bunkerIndex += 1) {
+      const b = this.bunkers[bunkerIndex];
+      if (!inFeatureBounds(this._bunkerBounds[bunkerIndex], x, z)) continue;
+      const sd = signedDistanceToFeature(b, x, z);
+      if (sd <= 0) continue;                               // outside the footprint → grade untouched
+      h = bunkerGradeAt({
+        bunker: b, signedDistance: sd, baseHeight: h, x, z,
+      });
     }
 
     // Flat, level tee.
@@ -141,18 +231,9 @@ export class Range {
     return h;
   }
 
-  // Radius of the visible sand (floor + wall face). Pot bunkers keep sand to the
-  // small flat floor (≈ rFloor) so their steep turf walls rise revetted above it,
-  // rather than draping sand up a near-vertical face.
-  _bunkerSandR(b) {
-    return b.pot ? b.r * 0.72 : b.r;
-  }
-
   // Water surface elevation for a pond (the flat plane the water mesh sits at).
   _waterLevel(p) {
-    return this.terrain
-      ? this.terrain.heightAt(p.x, p.z) + p.depth * 0.55
-      : -p.depth * 0.45;
+    return this._pondWaterLevels?.get(p) ?? -p.depth * 0.45;
   }
 
   _surface(x, z) {
@@ -160,20 +241,29 @@ export class Range {
     if (Math.abs(x - this.tee.x) < this.tee.boxHalfX && z < this.tee.z1 && z > this.tee.z0) return 'tee';
 
     // Target greens with a fringe collar.
-    for (const t of this.targets) {
-      const d = Math.hypot(x - t.x, z - t.z);
-      if (d < t.r) return 'green';
-      if (d < t.r + this.fringeW) return 'fringe';
+    for (let targetIndex = 0; targetIndex < this.targets.length; targetIndex += 1) {
+      const t = this.targets[targetIndex];
+      if (!inFeatureBounds(this._targetBounds[targetIndex], x, z, this.fringeW)) continue;
+      const sd = signedDistanceToFeature(t, x, z);
+      if (sd > 0) return 'green';
+      if (sd + this.fringeW > 0) return 'fringe';
     }
 
     // Water hazards take priority over anything they sit in.
     for (const p of this.ponds) {
-      if (Math.hypot(x - p.x, z - p.z) < p.r) return 'water';
+      if (inFeatureBounds(p._bounds, x, z) && signedDistanceToFeature(p, x, z) > 0) return 'water';
     }
 
-    // Sand bunkers — only the floor/wall reads as sand; the raised lip is grass.
-    for (const b of this.bunkers) {
-      if (Math.hypot(x - b.x, z - b.z) < this._bunkerSandR(b)) return 'sand';
+    // Sand bunkers — a regular bunker keeps a world-stable 0.30–0.50 m turf
+    // face between the exact grade-flush carve and its separately compiled sand
+    // contour. The CPU lie and GPU SDF consume that same inner outline. A pot
+    // bunker retains its wider revetted turf wall and small sand floor.
+    for (let bunkerIndex = 0; bunkerIndex < this.bunkers.length; bunkerIndex += 1) {
+      const b = this.bunkers[bunkerIndex];
+      if (!inFeatureBounds(this._bunkerBounds[bunkerIndex], x, z)) continue;
+      if (b.pot) {
+        if (signedDistanceToFeature(b, x, z) > b.r * 0.28) return 'sand';
+      } else if (signedDistanceToFeature(b._sandFeature, x, z) > 0) return 'sand';
     }
 
     // The fairway fans out; beyond it is rough, then deep rough near the trees.
@@ -191,10 +281,10 @@ export class Range {
 
     // A realistic artificial hitting mat: a tufted-turf top with a darker rubber
     // frame, sitting flush on the tee. The canvas texture supplies the fine
-    // synthetic-turf grain and a subtle mow band so it doesn't read as flat paint.
+    // synthetic-turf grain so it doesn't read as flat paint.
     const matTop = new Mesh(
       new BoxGeometry(2.4, 0.05, 1.6),
-      new MeshStandardMaterial({ map: makeMatTexture(), roughness: 0.9, metalness: 0.0 }),
+      new MeshStandardMaterial({ map: makeMatTexture(this.environmentSeed), roughness: 0.9, metalness: 0.0 }),
     );
     // Sit the turf top PROUD of the rubber frame (top at y0+0.075 vs the frame's
     // y0+0.06). Previously both tops sat at y0+0.06 — coplanar faces that z-fought and
@@ -215,270 +305,303 @@ export class Range {
     frame.castShadow = true;
     this.group.add(frame);
 
-    // Rubber tee peg under the ball (ball rests at x0,z2).
-    const tee = new Mesh(
-      new CylinderGeometry(0.006, 0.009, 0.05, 10),
-      new MeshStandardMaterial({ color: 0xf3f3f3, roughness: 0.5 }),
-    );
-    tee.position.set(0, y0 + 0.06, 2);
-    tee.castShadow = true;
-    this.group.add(tee);
+    // No tee peg. There used to be a 5 cm rubber peg here centred at y0+0.06, i.e.
+    // spanning y0+0.035 to y0+0.085 — but the ball is NOT teed up: physics rests it on
+    // the ground (centre = ground + radius) and the renderer sinks it ~3 mm into the
+    // canopy, putting its top at about y0+0.040. The peg therefore speared straight
+    // through the ball and stood 4.5 cm proud of it from every angle, which is very
+    // obvious in the macro address shot. Lowering it doesn't help either: a peg
+    // actually supporting a grounded ball would have to sit entirely below the turf.
+    // If a teed lie is ever wanted, raise the BALL (Ball.placeAt already accepts a
+    // teeHeight) and bring the peg back to meet it.
 
-    // Two white tee markers, set just behind the ball line.
-    for (const sx of [-1.8, 1.8]) {
-      const marker = new Mesh(
-        new SphereGeometry(0.11, 20, 14),
-        new MeshStandardMaterial({ color: 0xfbfbfb, roughness: 0.5 }),
-      );
-      marker.position.set(sx, this.terrain.heightAt(sx, 3.2) + 0.11, 3.2);
-      marker.castShadow = true;
-      this.group.add(marker);
-    }
+    // Two painted tee markers, set just behind the ball line. A low truncated
+    // cylinder reads as a rubber/painted marker and has a real ground contact,
+    // unlike the former floating sphere silhouette.
+    const assets = this._targetProps();
+    const markerMesh = new InstancedMesh(assets.markerGeometry, assets.markerMaterial, 2);
+    const markerDummy = new Object3D();
+    [-1.8, 1.8].forEach((sx, index) => {
+      markerDummy.position.set(sx, this.terrain.heightAt(sx, 3.2) + 0.05, 3.2);
+      markerDummy.updateMatrix();
+      markerMesh.setMatrixAt(index, markerDummy.matrix);
+    });
+    markerMesh.instanceMatrix.needsUpdate = true;
+    markerMesh.castShadow = true;
+    markerMesh.receiveShadow = true;
+    markerMesh.name = 'tee-markers-instanced';
+    markerMesh.userData.instanceCount = 2;
+    this.group.add(markerMesh);
+  }
+
+  _targetProps() {
+    if (this._targetPropAssets) return this._targetPropAssets;
+    this._targetPropAssets = {
+      // Scale-correct painted hardware: thicker poles/bases retain a grounded
+      // silhouette at golfer height while staying in the existing instanced
+      // draw buckets. These are lit dielectric surfaces, never black cutouts.
+      poleGeometry: new CylinderGeometry(0.026, 0.034, 2.4, 10),
+      poleMaterial: new MeshStandardMaterial({ color: 0x929a88, roughness: 0.68, metalness: 0.02 }),
+      flagGeometry: makeTargetFlagGeometry(),
+      flagMaterial: new MeshStandardMaterial({ color: 0xd9d5c5, vertexColors: true, side: DoubleSide, roughness: 0.9, metalness: 0 }),
+      flagBaseGeometry: new CylinderGeometry(0.13, 0.10, 0.07, 16),
+      flagBaseMaterial: new MeshStandardMaterial({ color: 0x4b5544, roughness: 0.88 }),
+      signGeometry: new BoxGeometry(1.08, 0.48, 0.055),
+      postGeometry: new CylinderGeometry(0.035, 0.045, 0.40, 10),
+      postMaterial: new MeshStandardMaterial({ color: 0x747c6c, roughness: 0.82 }),
+      signMaterials: new Map(),
+      markerGeometry: new CylinderGeometry(0.105, 0.078, 0.10, 16),
+      markerMaterial: new MeshStandardMaterial({ color: 0x8f987d, roughness: 0.78, metalness: 0 }),
+    };
+    return this._targetPropAssets;
   }
 
   _buildTargets() {
-    for (const t of this.targets) {
+    const assets = this._targetProps();
+    const count = this.targets.length;
+    const poleMesh = new InstancedMesh(assets.poleGeometry, assets.poleMaterial, count);
+    const flagMesh = new InstancedMesh(assets.flagGeometry, assets.flagMaterial, count);
+    const baseMesh = new InstancedMesh(assets.flagBaseGeometry, assets.flagBaseMaterial, count);
+    const postMesh = new InstancedMesh(assets.postGeometry, assets.postMaterial, count * 2);
+    const dummy = new Object3D();
+    const flagColors = [0xf0eee5, 0xc8d0c4, 0xefe6cf, 0xaeb9ad];
+    this.targets.forEach((t, index) => {
       const y = this.terrain.heightAt(t.x, t.z);
-      this.group.add(this._flag(t.x, y, t.z, t.yards));
-      this.group.add(this._placard(t.x, y, t.z + t.r + 4, `${t.yards}`));
+      dummy.position.set(t.x, y + 1.2, t.z);
+      dummy.updateMatrix();
+      poleMesh.setMatrixAt(index, dummy.matrix);
+      dummy.position.set(t.x + 0.36, y + 2.15, t.z);
+      dummy.updateMatrix();
+      flagMesh.setMatrixAt(index, dummy.matrix);
+      flagMesh.setColorAt(index, new Color(flagColors[Math.round(t.yards / 50) % flagColors.length]));
+      dummy.position.set(t.x, y + 0.025, t.z);
+      dummy.updateMatrix();
+      baseMesh.setMatrixAt(index, dummy.matrix);
+      const signZ = t.z + t.r + 4;
+      const signY = this.terrain.heightAt(t.x, signZ);
+      for (const postX of [-0.48, 0.48]) {
+        dummy.position.set(t.x + postX, signY + 0.18, signZ);
+        dummy.updateMatrix();
+        postMesh.setMatrixAt(index * 2 + (postX > 0 ? 1 : 0), dummy.matrix);
+      }
+      this.group.add(this._placard(t.x, signY, signZ, `${t.yards}`));
+    });
+    for (const mesh of [poleMesh, flagMesh, baseMesh, postMesh]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
     }
+    flagMesh.instanceColor.needsUpdate = true;
+    const drawBuckets = Object.freeze({ flagPoles: 1, flagCloth: 1, flagBases: 1, signBoards: count, signPosts: 1, teeMarkers: 1 });
+    this.group.userData.targetPropDiagnostics = Object.freeze({
+      drawBuckets,
+      signDraws: count,
+      instances: Object.freeze({ flagPoles: count, flagCloth: count, flagBases: count, signBoards: count, signPosts: count * 2, teeMarkers: 2 }),
+      targetDraws: count + 5,
+    });
   }
 
-  _flag(x, y, z, yards) {
-    const g = new Group();
-    const pole = new Mesh(
-      new CylinderGeometry(0.02, 0.02, 2.4, 8),
-      new MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.4 }),
-    );
-    pole.position.set(x, y + 1.2, z);
-    pole.castShadow = true;
-    g.add(pole);
-
-    const hue = new Color().setHSL((yards / 360) % 1, 0.7, 0.5);
-    const flag = new Mesh(
-      new PlaneGeometry(0.7, 0.45),
-      new MeshStandardMaterial({ color: hue, side: DoubleSide, roughness: 0.8 }),
-    );
-    flag.position.set(x + 0.36, y + 2.15, z);
-    flag.castShadow = true;
-    g.add(flag);
-
-    // Cup ring.
-    const cup = new Mesh(
-      new CylinderGeometry(0.12, 0.12, 0.02, 16),
-      new MeshStandardMaterial({ color: 0x111111 }),
-    );
-    cup.position.set(x, y + 0.02, z);
-    g.add(cup);
-    return g;
+  targetPropDiagnostics() {
+    return this.group.userData.targetPropDiagnostics || Object.freeze({
+      drawBuckets: Object.freeze({}), signDraws: 0, instances: Object.freeze({}), targetDraws: 0,
+    });
   }
 
   _placard(x, y, z, text) {
+    // These signs spend most of their life minified and oblique. A 256 × 128 source
+    // leaves only a handful of source pixels across a glyph by 100–200 yards, then TRAA
+    // quite correctly filters that unstable signal. Give the mip chain enough real
+    // glyph coverage to converge to crisp text instead of trying to sharpen it later.
+    const SCALE = 4;
     const canvas = document.createElement('canvas');
-    canvas.width = 256; canvas.height = 128;
+    canvas.width = 256 * SCALE; canvas.height = 128 * SCALE;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#12331b'; ctx.fillRect(0, 0, 256, 128);
-    ctx.fillStyle = '#eafff0';
-    ctx.font = 'bold 78px system-ui, sans-serif';
+    // A painted olive housing keeps the face readable under real shadow while
+    // retaining restrained contrast against the maintained turf backdrop.
+    ctx.fillStyle = '#707969'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#b0b6a5'; ctx.lineWidth = 5 * SCALE; ctx.strokeRect(4 * SCALE, 4 * SCALE, canvas.width - 8 * SCALE, canvas.height - 8 * SCALE);
+    ctx.fillStyle = '#f0ebdc';
+    ctx.font = `700 ${70 * SCALE}px ui-serif, Georgia, serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(text, 128, 68);
-    ctx.font = '22px system-ui'; ctx.fillText('YARDS', 128, 116);
+    ctx.fillText(text, 128 * SCALE, 68 * SCALE);
+    ctx.font = `600 ${18 * SCALE}px system-ui, sans-serif`;
+    ctx.fillText('YARDS', 128 * SCALE, 116 * SCALE);
     const tex = new CanvasTexture(canvas);
-    const sign = new Mesh(
-      new PlaneGeometry(2, 1),
-      new MeshBasicMaterial({ map: tex, side: DoubleSide }),
-    );
-    sign.position.set(x, y + 0.7, z);
+    tex.name = `yardage-placard-${text}`;
+    tex.colorSpace = SRGBColorSpace;
+    tex.minFilter = LinearMipmapLinearFilter;
+    tex.magFilter = LinearFilter;
+    tex.anisotropy = 16;
+    const assets = this._targetProps();
+    let signMaterial = assets.signMaterials.get(text);
+    if (!signMaterial) {
+      signMaterial = new MeshStandardMaterial({ map: tex, side: DoubleSide, roughness: 0.84, metalness: 0 });
+      assets.signMaterials.set(text, signMaterial);
+    } else {
+      tex.dispose();
+    }
+    const sign = new Mesh(assets.signGeometry, signMaterial);
+    // Board bottom overlaps the post tops, while both posts terminate at the
+    // authored terrain datum instead of floating behind a billboard plane.
+    sign.position.set(x, y + 0.50, z);
+    sign.castShadow = true;
+    sign.receiveShadow = true;
     return sign;
-  }
-
-  // A flat-in-plan disc whose vertices are pinned to the terrain height, so the
-  // sand hugs the carved bunker bowl exactly. Built as a CONCENTRIC-RING polar grid
-  // rather than CircleGeometry's single center-vertex fan: a fan makes every floor
-  // triangle share the one center vertex, so draped over a bowl that vertex's
-  // averaged normal pinwheels into the radial star artifact we were seeing. Multiple
-  // rings distribute vertices across the radius → smooth, well-behaved normals that
-  // follow the bowl. `jitter` roughens only the OUTER rings into a natural, irregular
-  // sand edge while the interior stays smooth.
-  _conformingDisc(cx, cz, r, yOffset, { radial = 96, rings = 14, jitter = 0 } = {}) {
-    const pos = [cx, 0, cz];                       // center vertex (index 0)
-    const uv = [0.5, 0.5];
-    for (let ri = 1; ri <= rings; ri++) {
-      const t = ri / rings;                        // 0..1 out to the rim
-      for (let a = 0; a < radial; a++) {
-        const ang = (a / radial) * Math.PI * 2;
-        const ca = Math.cos(ang), sa = Math.sin(ang);
-        // Edge jitter scales with t, so it vanishes near the center and only the
-        // rim reads irregular.
-        const j = jitter > 0 ? jitter * t * this.noise.noise2(ca * 2.5, sa * 2.5) : 0;
-        const rad = r * t * (1 + j);
-        pos.push(cx + ca * rad, 0, cz + sa * rad);
-        uv.push(ca * t * 0.5 + 0.5, sa * t * 0.5 + 0.5);
-      }
-    }
-    const idx = [];
-    for (let a = 0; a < radial; a++) {             // center → first ring
-      const a2 = (a + 1) % radial;
-      idx.push(0, 1 + a2, 1 + a);
-    }
-    for (let ri = 1; ri < rings; ri++) {           // ring ri → ring ri+1
-      const b0 = 1 + (ri - 1) * radial, b1 = 1 + ri * radial;
-      for (let a = 0; a < radial; a++) {
-        const a2 = (a + 1) % radial;
-        idx.push(b0 + a, b1 + a2, b1 + a, b0 + a, b0 + a2, b1 + a2);
-      }
-    }
-    const p = new Float32Array(pos);
-    for (let i = 0; i < p.length; i += 3) p[i + 1] = this.terrain.heightAt(p[i], p[i + 2]) + yOffset;
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(p, 3));
-    geo.setAttribute('uv', new BufferAttribute(new Float32Array(uv), 2));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
-    return geo;
-  }
-
-  // Async: AWAIT the sand textures before building the bunker overlays. Cloning a
-  // texture that is still loading yields a clone with a null image/source, and the
-  // WebGPU renderer throws (invalid pipeline) the moment it tries to bind it on the
-  // first frame. Waiting for the load guarantees valid sources. Bunkers are cosmetic
-  // overlays (the terrain already carries the sand surface), so the brief defer is
-  // invisible. Fire-and-forget from the constructor, like the tree line.
-  async _buildBunkers() {
-    let diff, nor, rough;
-    try {
-      [diff, nor, rough] = await Promise.all([
-        _tex.loadAsync('/assets/textures/sand_diff.jpg'),
-        _tex.loadAsync('/assets/textures/sand_nor_gl.jpg'),
-        _tex.loadAsync('/assets/textures/sand_rough.jpg'),
-      ]);
-    } catch (e) { console.warn('sand textures failed', e); return; }
-    if (this._disposed) return;
-    diff.colorSpace = SRGBColorSpace;
-    for (const t of [diff, nor, rough]) {
-      t.wrapS = t.wrapT = RepeatWrapping;
-      t.anisotropy = 8;
-    }
-    const mat = new MeshStandardMaterial({
-      map: diff, normalMap: nor, roughnessMap: rough,
-      color: 0xe9dcbc, roughness: 1.0, metalness: 0.0,
-      normalScale: new Vector2(0.7, 0.7),
-    });
-
-    for (const b of this.bunkers) {
-      const rep = b.r / 2.6;
-      // Per-bunker texture repeat via a cloned material keeps the sand grain at a
-      // believable scale regardless of bunker size (UVs are shared 0..1).
-      const m = mat.clone();
-      m.map = diff.clone(); m.map.colorSpace = SRGBColorSpace;
-      m.normalMap = nor.clone(); m.roughnessMap = rough.clone();
-      for (const t of [m.map, m.normalMap, m.roughnessMap]) {
-        t.wrapS = t.wrapT = RepeatWrapping; t.repeat.set(rep, rep); t.anisotropy = 8; t.needsUpdate = true;
-      }
-      const geo = this._conformingDisc(b.x, b.z, this._bunkerSandR(b), 0.04, { radial: 96, rings: 14, jitter: 0.08 });
-      const mesh = new Mesh(geo, m);
-      mesh.receiveShadow = true;
-      mesh.name = 'bunker';
-      this.group.add(mesh);
-    }
   }
 
   _buildWater() {
     for (const p of this.ponds) {
       const level = this._waterLevel(p);
-      const geo = new CircleGeometry(p.r + 1.2, 72);
-      geo.rotateX(-Math.PI / 2);
-      // Reflective, slightly translucent water. Roughness is low so it mirrors
-      // the HDRI sky (scene.environment) for that bright pond-surface sheen.
-      const mat = new MeshStandardMaterial({
-        color: 0x35636e, roughness: 0.06, metalness: 0.0,
-        transparent: true, opacity: 0.9, envMapIntensity: 1.5,
-        side: DoubleSide,
+      const surface = new WaterSurface({
+        environment: this.environment, pond: p, level,
       });
-      const mesh = new Mesh(geo, mat);
-      mesh.position.set(p.x, level, p.z);
-      mesh.name = 'water';
-      this.group.add(mesh);
+      this.group.add(surface.mesh);
       this._water = this._water || [];
-      this._water.push({ mesh, mat, p });
+      this._water.push(surface);
     }
+  }
+
+  waterHeightAt(x, z) {
+    for (const surface of this._water || []) if (surface.contains(x, z)) return surface.level;
+    return null;
+  }
+
+  addWaterImpact(position, speed) {
+    const surface = (this._water || []).find((candidate) => candidate.contains(position.x, position.z));
+    if (!surface) throw new Error('Water impact did not resolve to an authored pond.');
+    surface.addImpact(position, speed);
+  }
+
+  captureWaterReflections({ force = false, backgroundNode = null } = {}) {
+    if (!this.renderer || !this.scene) throw new Error('Range water reflection capture requires its renderer and scene.');
+    let captures = 0;
+    for (const surface of this._water || []) {
+      if (surface.captureReflection(this.renderer, this.scene, {
+        camera: this.camera, force, backgroundNode,
+      })) captures++;
+    }
+    return captures;
+  }
+
+  waterReflectionDiagnostics() {
+    return (this._water || []).map((surface) => surface.reflectionDiagnostics());
   }
 
   _treePlacements() {
-    // An organic, layered tree line: the forest's INNER edge undulates in and out
-    // (bays and points) via low-frequency noise instead of a straight setback, and
-    // each flank is several rows deep — denser at the edge, thinning back — so the
-    // wall reads as a real forest with depth, not a picket fence.
-    // Hero (real-geometry) trees are kept to a MODERATE count for performance; the
-    // billboard backdrop (added in instanceTrees) fills the forest depth cheaply.
-    // The inner edge undulates so the hero front row already reads organic.
-    const spots = [];
-    const fbm = (a, b) => this.noise.fbm(a, b, { octaves: 2 });   // ~ -1..1
-    for (let z = 22; z > -344; z -= 8 + Math.random() * 5) {
-      const corridor = this.corridor.c0 + (-z) * this.corridor.k + 24;   // just past the deep-rough edge
-      for (const side of [-1, 1]) {
-        // Undulating inner edge: bays and points, seeded per side.
-        const edge = corridor + 4 + (fbm(side * 40 + z * 0.03, z * 0.05) * 0.5 + 0.5) * 24;
-        const rows = 1 + Math.floor(Math.random() * 2);
-        for (let r = 0; r < rows; r++) {
-          const depth = Math.pow(Math.random(), 0.6) * 44;       // biased toward the edge
-          const x = side * (edge + depth) + (Math.random() - 0.5) * 7;
-          const zj = z + (Math.random() - 0.5) * 6;
-          spots.push({ x, y: this.terrain.heightAt(x, zj), z: zj,
-            targetHeight: 6 + Math.random() * 7, rotY: Math.random() * Math.PI * 2 });
-        }
-      }
-    }
-    // Back wall closing off the range.
-    for (let x = -170; x < 170; x += 9 + Math.random() * 5) {
-      const z = -342 - Math.random() * 16;
-      spots.push({ x: x + (Math.random() - 0.5) * 8, y: this.terrain.heightAt(x, z), z,
-        targetHeight: 7 + Math.random() * 7, rotY: Math.random() * Math.PI * 2 });
-    }
-    return spots;
+    const trees = this.environmentPlacements.filter((placement) => (
+      getCatalogAsset(this.environmentCatalog, placement.assetId).category === 'tree'
+      && getCatalogAsset(this.environmentCatalog, placement.assetId).impostor.kind === 'baked-atlas'
+    ));
+    return trees.map((placement) => {
+      const asset = getCatalogAsset(this.environmentCatalog, placement.assetId);
+      return Object.freeze({
+        ...placement,
+        rotY: placement.rotationY,
+        canopyRadius: asset.bounds.radius * placement.scale,
+      });
+    });
   }
 
-  // Load processed CC0 tree GLBs and instance them along the tree line. Async;
-  // the trees pop in when ready while the rest of the scene renders.
-  async _buildTreeLine() {
-    const placements = this._treePlacements();
-    try {
-      const proto = await loadTreePrototype('/assets/trees/island_tree_01.glb');
-      // Tree LOD: real geometry (hero GLB + procedural pines) only for placements
-      // near the play area; everything farther is a cheap billboard wall — the
-      // forest is 100-340m out where a photoscan is indistinguishable from a card,
-      // and this is where most of the tree cost was going.
-      const near = [], far = [];
-      for (const p of placements) {
-        (Math.hypot(p.x, p.z) < 95 ? near : far).push(p);
-      }
-      this.trees = new Group();
-      this.trees.name = 'trees';
-      this.trees.add(instanceTrees(proto, near, { backdrop: false }));  // hero + pines (bucketed, culled)
-      this.trees.add(billboardTrees(far));                              // distant billboard wall
-      this.group.add(this.trees);
-    } catch (e) {
-      console.warn('tree load failed', e);
+  // Load the processed licensed near geometry and its source-baked far atlas. Both
+  // are part of the range readiness contract; rendering never begins with a
+  // substitute. One species is one classifier: a GPU batch draws a single canonical
+  // prototype, so a mixed tree line resolves to one TreeBeautyLod + shadow proxy per
+  // catalog asset rather than one merged batch.
+  async _buildTreeLine(placements = this._treePlacements()) {
+    if (!placements.length) return;
+    const byAsset = new Map();
+    for (const placement of placements) {
+      if (!byAsset.has(placement.assetId)) byAsset.set(placement.assetId, []);
+      byAsset.get(placement.assetId).push(placement);
     }
+    // Authored order is deterministic (placements are resolved from the sorted
+    // course spec), so species batches build in a stable order across reloads.
+    const species = [...byAsset.entries()].map(([assetId, assetPlacements]) => {
+      const asset = getCatalogAsset(this.environmentCatalog, assetId);
+      if (asset.lods.length !== 2 || asset.lods[0].level !== 0 || asset.lods[1].level !== 1 || asset.impostor.kind !== 'baked-atlas') {
+        throw new Error(`${asset.id} requires verified catalog LOD derivatives and a source-baked impostor atlas.`);
+      }
+      return { asset, placements: assetPlacements };
+    });
+    // Every species' geometry and atlas load in parallel; a mixed line must not
+    // serialise startup behind the first prototype.
+    const loaded = await Promise.all(species.map(async ({ asset }) => Promise.all([
+      loadTreePrototype(asset.lods[0].url),
+      loadTreePrototype(asset.lods[1].url),
+      loadTreeImpostor(asset.impostor),
+    ])));
+    this.trees = new Group();
+    this.trees.name = 'trees';
+    this.treeBeauties = [];
+    this.treeShadows = [];
+    species.forEach(({ asset, placements: assetPlacements }, index) => {
+      const [proto, midProto, impostorTexture] = loaded[index];
+      // One GPU classifier owns every tree of this species. It emits compacted LOD0
+      // and LOD1 geometry through the foreground/middle distance, then the
+      // runtime-lit multi-view atlas. Every representation derives from the
+      // verified licensed source.
+      const beauty = buildTreeBeautyLod(proto, midProto, asset.impostor, impostorTexture, assetPlacements, {
+        // Seeding per species keeps each batch's tint/age variation independent
+        // and stable when another species is added or removed from the course.
+        seed: deriveSeed(this.environmentSeed, `tree-beauty-lod:${asset.id}`),
+        renderer: this.renderer,
+        camera: this.camera,
+        motionHistory: this.motionHistory,
+        environment: this.environment,
+        lodNear: this.environmentTier.trees.lodNear,
+        lodFar: this.environmentTier.trees.lodFar,
+      });
+      this.trees.add(beauty.group);
+      // The beauty meshes never cast. One GPU-compacted, layer-isolated source-atlas
+      // caster per species is the complete tree shadow path; it projects that
+      // species' real silhouette rather than an unrelated procedural canopy mask.
+      const shadow = new TreeShadowProxy({
+        renderer: this.renderer,
+        light: this.lighting?.sun,
+        records: beauty.shadowRecords,
+        impostorTexture,
+        impostor: asset.impostor,
+      });
+      this.trees.add(shadow.mesh);
+      this.treeBeauties.push(beauty);
+      this.treeShadows.push(shadow);
+    });
+    this.group.add(this.trees);
   }
 
+  // Single-species accessors retained for the diagnostic/benchmark call sites that
+  // predate the mixed tree line. Anything that must cover the whole forest reads
+  // `treeBeauties` / `treeShadows`.
+  get treeBeauty() { return this.treeBeauties?.[0] ?? null; }
+
+  get treeShadow() { return this.treeShadows?.[0] ?? null; }
+
+  async _buildEnvironmentProps() {
+    this.environmentProps = await buildEnvironmentProps({
+      catalog: this.environmentCatalog,
+      placements: this.environmentPlacements,
+      environmentSeed: this.environmentSeed,
+    });
+    this.group.add(this.environmentProps);
+    // Static prop meshes join the cached directional map only after their GLBs load.
+    this.lighting?.invalidateShadow();
+  }
+
+  // Hero object — see GolfBall.js for the mesh build (dimple normal map,
+  // clearcoat urethane shading, tangent handling). The camera gets to ~5 cm
+  // from this thing at address, so it's the one surface that has to survive
+  // a genuine macro shot.
   _buildBall() {
-    // Hero object: a clean urethane-white ball with a dimpled surface and a
-    // faint clearcoat sheen so the sun catches a tight specular highlight in the
-    // result close-ups. Dimples come from a procedurally generated normal map.
-    this.ballMesh = new Mesh(
-      new SphereGeometry(0.02134, 48, 36),
-      new MeshStandardMaterial({
-        color: 0xf6f7f4, roughness: 0.28, metalness: 0.0,
-        normalMap: makeDimpleNormal(), normalScale: new Vector2(0.5, 0.5),
-        envMapIntensity: 1.0,
-      }),
-    );
-    this.ballMesh.castShadow = true;
+    this.ballMesh = createGolfBallMesh({ isDisposed: () => this._disposed });
     this.group.add(this.ballMesh);
+    return this.ballMesh.userData.assetsReady;
   }
 
   update(t) {
+    this.terrain.update(this.camera);
+    for (const shadow of this.treeShadows || []) shadow.update();
+    for (const beauty of this.treeBeauties || []) beauty.update(this.camera);
     if (this.grass) this.grass.update(t, this.camera);
   }
 
@@ -488,17 +611,196 @@ export class Range {
   dispose() {
     this._disposed = true;
     this.scene.remove(this.group);
+    const geometries = [];
+    const materials = [];
+    // Every tree batch owns its own GPU resources and releases them below; the
+    // generic traversal must skip all of them, not just the first species'.
+    const treeOwned = new Set();
+    for (const shadow of this.treeShadows || []) treeOwned.add(shadow.mesh);
+    const beautyGroups = new Set((this.treeBeauties || []).map((beauty) => beauty.group));
     this.group.traverse((o) => {
-      if (o.geometry) o.geometry.dispose();
+      if (o === this.grass?.mesh || treeOwned.has(o) || beautyGroups.has(o.parent)) return;
+      if (o.geometry) geometries.push(o.geometry);
       const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
-      for (const m of mats) {
-        for (const k in m) { const v = m[k]; if (v && v.isTexture) v.dispose(); }
-        m.dispose?.();
-      }
+      materials.push(...mats);
     });
+    // Shared procedural geometries can be consumed by materials with different
+    // attribute subsets. Explicitly release the complete geometry attribute set;
+    // Three's first-render-object disposal listener only knows its own subset.
+    disposeWebGPUGeometries(this.renderer, geometries);
+    disposeMaterialTextures(materials);
+    // Target prop buckets are owned by this Range rebuild. Clear the cache after
+    // releasing the traversed meshes/materials so a retained diagnostic reference
+    // cannot keep yardage textures or shared geometry alive.
+    this._targetPropAssets = null;
+    // Terrain/grass node graphs contain texture and storage bindings that are not
+    // enumerable material fields. Their explicit ownership releases each shared GPU
+    // resource exactly once after the scene materials have been detached.
+    // `waterHeightAt` is an injected arrow closure over this Range. Three may retain
+    // a disposed Terrain briefly in pipeline caches, so sever it explicitly just like
+    // Terrain.dispose() severs heightFn/surfaceFn; otherwise the whole old Range stays
+    // reachable through Terrain -> callback -> Range.
+    if (this.terrain) this.terrain.waterHeightAt = null;
+    this.grass?.dispose();
+    for (const shadow of this.treeShadows || []) shadow.dispose();
+    for (const beauty of this.treeBeauties || []) beauty.dispose();
+    for (const surface of this._water || []) surface.dispose();
+    this.terrain?.dispose();
     this.grass = null;
+    this.treeShadows = null;
+    this.treeBeauties = null;
+    this.terrain = null;
     this.trees = null;
+    this.environmentProps = null;
+    this.backdrop = null;
+    this._water = null;
   }
+}
+
+// Deterministic structural landform shared by render and ball physics through the
+// baked Terrain heightfield. This is exported only so slope/curvature contracts can
+// sample the exact authored surface without constructing the WebGPU scene.
+export function courseLandformHeight(noise, x, z) {
+  const downrange = clamp01((-z - 8) / 316);
+  // Broad geologic datum: enough variation to avoid a planar horizon, deliberately
+  // lower-frequency and lower-amplitude than the former stacked-noise terrain.
+  let h = noise.fbm(x * 0.0042, z * 0.0047, { octaves: 4 }) * (1.35 + 1.15 * downrange);
+  h += noise.fbm(x * 0.012, z * 0.010, { octaves: 3 }) * (0.34 + 0.28 * downrange);
+
+  // A shallow, curving drainage line crosses the playable corridor rather than
+  // following its centre. Its 18–25 m half-width gives balls a credible lateral
+  // feed without turning the fairway into a trough or creating a waterless ditch.
+  const drainWindow = smoothWindow(z, -326, -24, 28);
+  const drainageX = 22 - 0.052 * (z + 128) + 0.00020 * (z + 128) * (z + 128);
+  const drainageWidth = 19 + 6 * downrange;
+  const drainCross = Math.exp(-0.5 * ((x - drainageX) / drainageWidth) ** 2);
+  h -= (0.82 + 0.42 * downrange) * drainCross * drainWindow;
+
+  // Alternating benches create strategic stances and long light gradients. These
+  // are broad lateral shelves gated by independent down-range windows, not pads
+  // centred on targets and not repeated ridges.
+  const leftBench = smoothWindow(z, -162, -52, 26)
+    * smoothstep01((-x - 8) / 31);
+  const rightBench = smoothWindow(z, -292, -154, 32)
+    * smoothstep01((x - 6) / 34);
+  h += leftBench * 0.92;
+  h += rightBench * 1.04;
+
+  // Four elongated rolls break up the otherwise constant foreground-to-target
+  // grade. Unequal centres, radii, rotations, and signs avoid a periodic washboard.
+  h += ellipticalRoll(x, z, -18, -70, 31, 48, 0.20, 0.55);
+  h += ellipticalRoll(x, z, 21, -137, 35, 54, -0.16, -0.48);
+  h += ellipticalRoll(x, z, -24, -214, 38, 58, -0.24, 0.62);
+  h += ellipticalRoll(x, z, 14, -286, 34, 45, 0.18, -0.54);
+
+  // A quiet overall fall toward the far drainage exit makes roll direction legible
+  // while staying below one percent longitudinal grade.
+  h -= downrange * 1.05;
+  return h;
+}
+
+function ellipticalRoll(x, z, cx, cz, radiusAcross, radiusDownrange, rotation, amplitude) {
+  const dx = x - cx;
+  const dz = z - cz;
+  const c = Math.cos(rotation);
+  const s = Math.sin(rotation);
+  const across = (dx * c - dz * s) / radiusAcross;
+  const along = (dx * s + dz * c) / radiusDownrange;
+  return amplitude * Math.exp(-0.5 * (across * across + along * along));
+}
+
+function smoothWindow(value, low, high, shoulder) {
+  return smoothstep01((value - low) / shoulder)
+    * smoothstep01((high - value) / shoulder);
+}
+
+function smoothstep01(value) {
+  const t = clamp01(value);
+  return t * t * (3 - 2 * t);
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function featureBounds(feature) {
+  let minX = feature.x - feature.r;
+  let maxX = feature.x + feature.r;
+  let minZ = feature.z - feature.r;
+  let maxZ = feature.z + feature.r;
+  for (const point of feature.shape || []) {
+    minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
+    minZ = Math.min(minZ, point.z); maxZ = Math.max(maxZ, point.z);
+  }
+  return Object.freeze({ minX, maxX, minZ, maxZ });
+}
+
+function inFeatureBounds(bounds, x, z, margin = 0) {
+  return x >= bounds.minX - margin && x <= bounds.maxX + margin
+    && z >= bounds.minZ - margin && z <= bounds.maxZ + margin;
+}
+
+// Resolve the actual local fall line from the same collision-authoritative course
+// form the bunker is cut into. The axis is cached on the compiled feature, so every
+// height sample receives one stable direction without repeating gradient probes.
+function bunkerDrainageAxis(noise, bunker, index) {
+  const step = 0.6;
+  const gx = (courseLandformHeight(noise, bunker.x + step, bunker.z)
+    - courseLandformHeight(noise, bunker.x - step, bunker.z)) / (step * 2);
+  const gz = (courseLandformHeight(noise, bunker.x, bunker.z + step)
+    - courseLandformHeight(noise, bunker.x, bunker.z - step)) / (step * 2);
+  const length = Math.hypot(gx, gz);
+  if (length > 1e-5) return { _drainageX: -gx / length, _drainageZ: -gz / length };
+  const fallback = (index + 1) * 2.399963229728653;
+  return { _drainageX: Math.cos(fallback), _drainageZ: Math.sin(fallback) };
+}
+
+// Resolve one shoreline elevation for a pond from the same authored outline
+// used by the terrain and water mesh.  A median is deliberate: a pond can sit on
+// a gentle cross-slope, but one noisy shoreline sample must not tilt the whole
+// water plane or make the opposite bank float.
+export function pondWaterDatum(pond, baseHeight, sampleCount = 48) {
+  const points = pondOutlineSamples(pond, sampleCount);
+  const elevations = points.map(({ x, z }) => baseHeight(x, z));
+  elevations.sort((a, b) => a - b);
+  const middle = Math.floor(elevations.length * 0.5);
+  return elevations.length % 2
+    ? elevations[middle]
+    : (elevations[middle - 1] + elevations[middle]) * 0.5;
+}
+
+// Pure grade function shared by focused geometry tests.  Positive SDF is the
+// authored basin, negative SDF is the natural outside grade.
+export function pondGradeAt({ pond, signedDistance, baseHeight, waterLevel }) {
+  const inset = Math.max(0.1, pond._centerInset || pond.r);
+  if (signedDistance >= 0) return waterLevel - pond.depth * smoothstep(0, inset, signedDistance);
+  return mix(baseHeight, waterLevel, smoothstep(-4, 0, signedDistance));
+}
+
+function pondOutlineSamples(pond, sampleCount) {
+  if (pond.shape?.length) {
+    // Resample the closed authored curve instead of treating control vertices as
+    // equally weighted observations. This makes one bad/noisy vertex affect only
+    // its short neighbouring arc, not the median elevation of the whole shore.
+    const samples = [];
+    for (let i = 0; i < sampleCount; i += 1) {
+      const position = (i / sampleCount) * pond.shape.length;
+      const index = Math.floor(position) % pond.shape.length;
+      const next = (index + 1) % pond.shape.length;
+      const t = position - Math.floor(position);
+      samples.push({
+        x: pond.shape[index].x * (1 - t) + pond.shape[next].x * t,
+        z: pond.shape[index].z * (1 - t) + pond.shape[next].z * t,
+      });
+    }
+    return samples;
+  }
+  const samples = [];
+  for (let i = 0; i < sampleCount; i += 1) {
+    const angle = (i / sampleCount) * Math.PI * 2;
+    samples.push({ x: pond.x + Math.cos(angle) * pond.r, z: pond.z + Math.sin(angle) * pond.r });
+  }
+  return samples;
 }
 
 // Smooth Hermite ramp: 0 below edge0, 1 above edge1, eased between. Used to give
@@ -508,102 +810,50 @@ function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
-// One legible internal green contour, returned as meters of relief. nx/nz are
-// green-local coords (~-1..1; +nz is toward the player/front). Amplitudes are
-// kept in a puttable range and fade to zero at the green edge via the caller's
-// `inside` mask. Grammar per the authoring skill's green-design reference.
-function greenContour(type, nx, nz) {
-  const ss = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-  const r2 = nx * nx + nz * nz;
-  switch (type) {
-    case 'tilt':      return -nz * 0.40;                       // back-high, feeds to front
-    case 'punchbowl': return (r2 - 0.5) * 0.50;                // edges high, gathers to center
-    case 'spine':     return (1 - Math.abs(nx)) * 0.42 - 0.15; // central ridge splits L/R pins
-    case 'tier':      return ss(-0.25, 0.25, nz) * 0.45;       // two shelves + broad ramp
-    case 'crown':     return (1 - r2) * 0.42;                  // pushed-up turtleback
-    case 'saddle':    return nx * nx * 0.50 - nz * nz * 0.12;  // twin shoulders, central pass
-    default:          return 0;
-  }
+function mix(a, b, amount) {
+  return a * (1 - amount) + b * amount;
 }
 
-// Synthetic-turf texture for the hitting mat: a fine green tuft grain with a
-// faint mow band, so the mat reads as real matting rather than flat plastic.
-function makeMatTexture() {
+// One shared, genuinely volumetric cloth profile for every target. The former
+// rectangular slab was thick enough to read as a board but had no cloth falloff.
+// A restrained free-edge taper and 2.6 cm billow preserve a stable silhouette and
+// PBR normals at range without per-target geometry, animation, or another draw.
+function makeTargetFlagGeometry() {
+  const width = 0.68;
+  const geometry = new BoxGeometry(width, 0.40, 0.016, 4, 2, 1);
+  const position = geometry.attributes.position;
+  for (let index = 0; index < position.count; index += 1) {
+    const x = position.getX(index);
+    const t = clamp01((x + width * 0.5) / width);
+    const y = position.getY(index) * (1 - 0.10 * t);
+    const z = position.getZ(index) + Math.sin(t * Math.PI) * 0.026;
+    position.setXYZ(index, x, y, z);
+  }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
+  geometry.name = 'target-flag-cloth-shared';
+  return geometry;
+}
+
+// Synthetic-turf texture for the hitting mat: a fine green tuft grain, so the mat
+// reads as real matting rather than flat plastic. No mow banding — the mat is 2.4 x
+// 1.6 m, so bands at any believable spacing read as stripes painted on a prop.
+function makeMatTexture(seed = 0x43474f4c) {
   const N = 256;
   const cv = document.createElement('canvas');
   cv.width = cv.height = N;
   const ctx = cv.getContext('2d');
   ctx.fillStyle = '#2f5228'; ctx.fillRect(0, 0, N, N);
+  const random = createRng(deriveSeed(seed, 'hitting-mat-texture'));
   // Fine tuft speckle.
   for (let i = 0; i < 9000; i++) {
-    const x = Math.random() * N, y = Math.random() * N;
-    const g = 60 + Math.random() * 90;
+    const x = random() * N, y = random() * N;
+    const g = 60 + random() * 90;
     ctx.fillStyle = `rgba(${Math.round(g * 0.5)},${Math.round(g)},${Math.round(g * 0.4)},0.5)`;
     ctx.fillRect(x, y, 1, 2);
-  }
-  // Subtle alternating mow bands.
-  for (let b = 0; b < N; b += 32) {
-    ctx.fillStyle = (b / 32) % 2 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.05)';
-    ctx.fillRect(0, b, N, 32);
   }
   const tex = new CanvasTexture(cv);
   tex.wrapS = tex.wrapT = RepeatWrapping;
   tex.anisotropy = 8;
-  return tex;
-}
-
-// Procedural dimple normal map for the golf ball. Concave spherical caps on a
-// jittered grid: each dimple tilts the surface normal toward its center, so the
-// sun rakes across the dimpling in close-ups. Generated once on a canvas.
-function makeDimpleNormal() {
-  const N = 256;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = N;
-  const ctx = cv.getContext('2d');
-  const img = ctx.createImageData(N, N);
-  const GRID = 14;                 // dimples across the texture
-  const cell = N / GRID;
-  const rad = cell * 0.46;
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      // Nearest dimple center on the jittered grid (check the 3x3 neighborhood
-      // and wrap so the map tiles seamlessly around the ball).
-      let best = 1e9, cx = 0, cy = 0;
-      const gx = Math.floor(x / cell), gy = Math.floor(y / cell);
-      for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
-        const jx = (gx + ox + GRID) % GRID, jy = (gy + oy + GRID) % GRID;
-        const h = Math.sin(jx * 12.9 + jy * 78.2) * 43758.5;
-        const jitx = (h - Math.floor(h)) - 0.5;
-        const h2 = Math.sin(jx * 39.3 + jy * 11.1) * 24634.6;
-        const jity = (h2 - Math.floor(h2)) - 0.5;
-        let px = (jx + 0.5 + jitx * 0.5) * cell;
-        let py = (jy + 0.5 + jity * 0.5) * cell;
-        let dx = x - px, dy = y - py;
-        // wrap distance
-        if (dx > N / 2) dx -= N; if (dx < -N / 2) dx += N;
-        if (dy > N / 2) dy -= N; if (dy < -N / 2) dy += N;
-        const d = dx * dx + dy * dy;
-        if (d < best) { best = d; cx = dx; cy = dy; }
-      }
-      const dist = Math.sqrt(best);
-      let nx = 0, ny = 0, nz = 1;
-      if (dist < rad && dist > 0.001) {
-        const t = dist / rad;
-        const slope = Math.sin(Math.PI * t) * 0.8; // 0 at center & rim, peak mid
-        nx = -(cx / dist) * slope;                 // tilt toward center (concave)
-        ny = -(cy / dist) * slope;
-        const inv = 1 / Math.hypot(nx, ny, nz);
-        nx *= inv; ny *= inv; nz *= inv;
-      }
-      const i = (y * N + x) * 4;
-      img.data[i] = (nx * 0.5 + 0.5) * 255;
-      img.data[i + 1] = (ny * 0.5 + 0.5) * 255;
-      img.data[i + 2] = (nz * 0.5 + 0.5) * 255;
-      img.data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new CanvasTexture(cv);
-  tex.wrapS = tex.wrapT = RepeatWrapping;
   return tex;
 }

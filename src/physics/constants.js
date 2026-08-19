@@ -16,9 +16,24 @@ export const GRAVITY = 9.80665; // m/s^2
 // Standard atmosphere at sea level, 15 C, dry air.
 export const STANDARD_AIR_DENSITY = 1.225; // kg/m^3
 
-// Spin decays roughly exponentially in flight from surface friction with the
-// air. Tour-measured decay is small over a single shot; tau ~ 20-30 s.
-export const SPIN_DECAY_TAU = 24; // s
+// Dynamic viscosity from Sutherland's law. Reynolds number depends on viscosity as
+// well as density; holding this at its 15 C value made hot/cold air only half-real.
+// Reference: dry air, mu0 = 1.716e-5 Pa*s at 273.15 K, S = 111 K.
+export function airViscosity(temperatureC = 15) {
+  if (!Number.isFinite(temperatureC)) throw new TypeError('temperatureC must be finite');
+  const temperatureK = Math.max(180, temperatureC + 273.15);
+  const referenceK = 273.15;
+  const referenceViscosity = 1.716e-5;
+  const sutherland = 111;
+  return referenceViscosity
+    * Math.pow(temperatureK / referenceK, 1.5)
+    * (referenceK + sutherland) / (temperatureK + sutherland);
+}
+
+// USGA/R&A Second Report on Spin Generation (2006), Appendix C eq. (5):
+// dω/dt = -Cw |u|/r ω. The report states Cw=2e-5 is consistent with the
+// Overall Distance Standard. The integrator applies this as a vector torque.
+export const SPIN_DECAY_COEFFICIENT = 2e-5;
 
 // Air density from altitude and temperature, so "playing at altitude" and
 // hot/cold days actually change carry the way they do in reality.

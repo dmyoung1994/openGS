@@ -28,11 +28,19 @@ const SHOTS = {
   wedge:   { ballSpeed: 92,  launchAngle: 29,   spinRate: 9600, spinAxis: 0 },
 };
 
-const env = makeEnv({ rho: airDensity({ altitude: 0, temperatureC: 15 }) });
+const stillWind = (_position, _time, out) => out.set(0, 0, 0);
 
-function runShot(shotName, surfaceName, slope = {}) {
+function environment(groundFirmness = 'medium') {
+  return makeEnv({
+    rho: airDensity({ altitude: 0, temperatureC: 15 }),
+    sampleWind: stillWind,
+    groundFirmness,
+  });
+}
+
+function runShot(shotName, surfaceName, slope = {}, groundFirmness = 'medium') {
   const terrain = makeTerrain(surfaceName, slope);
-  const ball = new Ball(terrain, env);
+  const ball = new Ball(terrain, environment(groundFirmness));
   let bounces = 0;
   let carryYards = 0;
   let descentDeg = 0;
@@ -125,6 +133,11 @@ const uphill = { gradZ: -0.08 };
 for (const shot of ['driver', 'sevenIron']) {
   console.log('DOWNHILL ' + line(runShot(shot, 'fairway', downhill)));
   console.log('UPHILL   ' + line(runShot(shot, 'fairway', uphill)));
+}
+
+console.log('\n=== FAIRWAY FIRMNESS (driver) ===');
+for (const firmness of ['soft', 'medium', 'firm']) {
+  console.log(firmness.toUpperCase().padEnd(8) + line(runShot('driver', 'fairway', {}, firmness)));
 }
 
 console.log('\n=== carry sanity (should be unchanged by ground model) ===');

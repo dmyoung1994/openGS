@@ -1,11 +1,7 @@
 import {
-  InstancedMesh, InstancedBufferAttribute, PlaneGeometry, MeshBasicMaterial,
-  CanvasTexture, SRGBColorSpace, DoubleSide, Color, MathUtils,
+  CanvasTexture, DataArrayTexture, SRGBColorSpace, Color, MathUtils,
+  RGBAFormat, UnsignedByteType, LinearFilter, LinearMipmapLinearFilter,
 } from 'three';
-import {
-  texture, vec4, positionLocal, modelWorldMatrix,
-  cameraViewMatrix, cameraProjectionMatrix, attribute,
-} from 'three/tsl';
 
 // ---------------------------------------------------------------------------
 // Billboard "imposter" trees  (WebGPU / TSL).
@@ -26,9 +22,10 @@ import {
 // tree texture / leaf albedo. Biased toward warm olive / forest greens (NOT
 // radioactive lime): deep forest, olive, muted green, and the odd early-autumn
 // tree. `b` is an overall brightness so some trees read darker than others.
-export function foliageTint(target = new Color()) {
-  const b = 0.56 + Math.random() * 0.4;       // 0.56–0.96 overall brightness
-  const t = Math.random();
+export function foliageTint(target = new Color(), random) {
+  if (typeof random !== 'function') throw new Error('foliageTint requires a seeded RNG');
+  const b = 0.56 + random() * 0.4;       // 0.56–0.96 overall brightness
+  const t = random();
   if (t < 0.12) return target.setRGB(b * 0.98, b * 0.86, b * 0.44);  // autumn yellow-green
   if (t < 0.44) return target.setRGB(b * 0.68, b * 0.78, b * 0.5);   // olive
   if (t < 0.76) return target.setRGB(b * 0.6, b * 0.82, b * 0.55);   // muted green
@@ -69,7 +66,7 @@ export function makeCanopyBillboardTexture(kind = 'deciduous', seed = 1) {
   const S = 256;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = S;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
   let s = seed * 9301 + 49297;
   const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
@@ -163,73 +160,53 @@ export function makeCanopyBillboardTexture(kind = 'deciduous', seed = 1) {
   return tex;
 }
 
-// A reusable billboard material (unlit — lighting is baked into the texture).
-// The camera-facing behaviour and per-instance tint are set per InstancedMesh in
-// instanceBillboards(); this helper just carries the shared material config.
-export function createBillboardMaterial(map) {
-  return new MeshBasicMaterial({
-    map,
-    alphaTest: 0.42,
-    transparent: false,
-    side: DoubleSide,
-    fog: true,
-    toneMapped: true,
-  });
-}
-
-// Build an InstancedMesh of billboard trees from placements
-// [{x, y, z, targetHeight, widthRatio?}]. Each card faces the camera (TSL
-// vertexNode) and gets a per-instance foliage tint (TSL colorNode) so the wall
-// reads as many different trees, not one repeated blob.
-export function instanceBillboards(placements, { texture: map, widthRatio = 0.78, tint = true } = {}) {
-  const N = placements.length;
-  // Bottom-centred unit quad (pivot at the trunk base): x∈[-0.5,0.5], y∈[0,1].
-  const geom = new PlaneGeometry(1, 1);
-  geom.translate(0, 0.5, 0);
-
-  // Per-instance data fed to the shader as instanced attributes.
-  const centerArr = new Float32Array(N * 3);  // world base position
-  const sizeArr = new Float32Array(N * 2);    // (width, height)
-  const tintArr = new Float32Array(N * 3);    // foliage tint
-  const c = new Color();
-  for (let i = 0; i < N; i++) {
-    const p = placements[i];
-    centerArr[i * 3] = p.x; centerArr[i * 3 + 1] = p.y; centerArr[i * 3 + 2] = p.z;
-    sizeArr[i * 2] = p.targetHeight * (p.widthRatio || widthRatio);
-    sizeArr[i * 2 + 1] = p.targetHeight;
-    if (tint) foliageTint(c);
-    else c.setRGB(1, 1, 1);
-    tintArr[i * 3] = c.r; tintArr[i * 3 + 1] = c.g; tintArr[i * 3 + 2] = c.b;
+// Six isolated 256² array layers are the sole far-tree texture representation.
+// Unlike a padded atlas, mip generation can never blend one silhouette/tint into a
+// neighbour; WebGPU's texture-array sampling chooses the integer layer explicitly.
+export function makeBillboardArray(deciduous, pine) {
+  const tiles = [...deciduous, ...pine];
+  if (tiles.length !== 6 || tiles.some((tile) => !tile?.image || tile.image.width !== 256 || tile.image.height !== 256)) {
+    throw new Error('Tree billboard array requires six 256px canopy textures.');
   }
-  // Per-instance data as InstancedBufferAttributes read via the attribute() node
-  // (steps once per instance under WebGPU).
-  geom.setAttribute('bCenter', new InstancedBufferAttribute(centerArr, 3));
-  geom.setAttribute('bSize', new InstancedBufferAttribute(sizeArr, 2));
-  geom.setAttribute('bTint', new InstancedBufferAttribute(tintArr, 3));
-  const centerN = attribute('bCenter', 'vec3');
-  const sizeN = attribute('bSize', 'vec2');
-  const tintN = attribute('bTint', 'vec3');
-
-  const mat = createBillboardMaterial(map);
-
-  // Camera-facing (view-plane billboard): place the instance's world centre in
-  // view space, then add the quad's local x/y scaled by (width,height). The card
-  // always faces the camera and its base stays pinned to the ground.
-  const worldCenter = modelWorldMatrix.mul(vec4(centerN, 1.0));
-  const viewCenter = cameraViewMatrix.mul(worldCenter);
-  const off = positionLocal.xy.mul(sizeN);
-  const viewPos = vec4(viewCenter.x.add(off.x), viewCenter.y.add(off.y), viewCenter.z, viewCenter.w);
-  mat.vertexNode = cameraProjectionMatrix.mul(viewPos);
-
-  // Albedo = baked texture × per-tree tint; keep the texture alpha for alphaTest.
-  const tex = texture(map);
-  mat.colorNode = vec4(tex.rgb.mul(tintN), tex.a);
-
-  const inst = new InstancedMesh(geom, mat, N);
-  inst.castShadow = false;        // cheap backdrop; the real trees carry the shadows
-  inst.receiveShadow = false;
-  // Positions come from the vertexNode, not instanceMatrix, so the auto bounding
-  // sphere is meaningless here — keep the whole wall unculled (it's always on).
-  inst.frustumCulled = false;
-  return inst;
+  const sourceSize = 256;
+  const pixels = new Uint8Array(sourceSize * sourceSize * 4 * tiles.length);
+  const canvas = document.createElement('canvas');
+  canvas.width = sourceSize;
+  canvas.height = sourceSize;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  tiles.forEach((tile, index) => {
+    ctx.clearRect(0, 0, sourceSize, sourceSize);
+    ctx.drawImage(tile.image, 0, 0, sourceSize, sourceSize);
+    const layer = ctx.getImageData(0, 0, sourceSize, sourceSize).data;
+    // RGB dilation into transparent texels prevents black/fringe colour from
+    // contaminating averaged mip levels. Alpha is deliberately untouched, so
+    // alpha-hash keeps the original statistical canopy coverage.
+    for (let pass = 0; pass < 16; pass++) {
+      const prev = new Uint8ClampedArray(layer);
+      for (let y = 1; y < sourceSize - 1; y++) for (let x = 1; x < sourceSize - 1; x++) {
+        const at = (y * sourceSize + x) * 4;
+        if (prev[at + 3] !== 0) continue;
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+          const near = ((y + oy) * sourceSize + x + ox) * 4;
+          if (prev[near + 3] !== 0) { layer[at] = prev[near]; layer[at + 1] = prev[near + 1]; layer[at + 2] = prev[near + 2]; oy = 2; break; }
+        }
+      }
+    }
+    pixels.set(layer, index * sourceSize * sourceSize * 4);
+  });
+  const array = new DataArrayTexture(pixels, sourceSize, sourceSize, tiles.length);
+  array.name = 'far-tree-billboard-array';
+  array.format = RGBAFormat;
+  array.type = UnsignedByteType;
+  array.colorSpace = SRGBColorSpace;
+  array.magFilter = LinearFilter;
+  array.minFilter = LinearMipmapLinearFilter;
+  array.anisotropy = 4;
+  array.generateMipmaps = true;
+  // CanvasTexture uploads source canvases flipped; preserve the same upright UV
+  // convention for top-row-first getImageData array layers.
+  array.flipY = true;
+  array.needsUpdate = true;
+  array.userData.billboardArray = { sourceSize, layers: tiles.length };
+  return array;
 }

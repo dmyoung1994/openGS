@@ -28,13 +28,26 @@ const ENV_FIELDS = [
   { key: 'windDir', label: 'Wind from', unit: '°', min: 0, max: 360, step: 5, def: 0 },
   { key: 'altitude', label: 'Altitude', unit: 'm', min: 0, max: 3000, step: 50, def: 0 },
   { key: 'temperatureC', label: 'Temp', unit: '°C', min: -5, max: 45, step: 1, def: 15 },
+  // Percent here, 0-1 in the environment frame. 70 is the validator's ceiling
+  // (EnvironmentFrameState clamps coverage to [0, 0.7]); 0 is clear sky.
+  { key: 'cloudCover', label: 'Cloud cover', unit: '%', min: 0, max: 70, step: 5, def: 38 },
+];
+
+const ENV_SELECTS = [
+  { key: 'groundFirmness', label: 'Fairway', def: 'medium', options: [
+    ['soft', 'Soft'], ['medium', 'Medium'], ['firm', 'Firm'],
+  ] },
 ];
 
 export class MetricsPanel {
-  constructor({ onHit }) {
+  constructor({ onHit, onEnvironmentChange }) {
     this.onHit = onHit;
+    this.onEnvironmentChange = onEnvironmentChange;
     this.values = { ...PRESETS['7-iron'] };
-    this.env = Object.fromEntries(ENV_FIELDS.map((f) => [f.key, f.def]));
+    this.env = Object.fromEntries([
+      ...ENV_FIELDS.map((f) => [f.key, f.def]),
+      ...ENV_SELECTS.map((f) => [f.key, f.def]),
+    ]);
     this._injectStyles();
     this._build();
     this.applyPreset('7-iron');
@@ -58,6 +71,7 @@ export class MetricsPanel {
       ['Apex', `${(r.apexMeters * 3.28084).toFixed(0)} ft`],
       ['Offline', `${(r.offlineYards >= 0 ? 'R ' : 'L ') + Math.abs(r.offlineYards).toFixed(1)} yds`],
       ['Descent', `${r.descentDeg.toFixed(0)}°`],
+      ['Landing', `${r.landingSpeedMph.toFixed(0)} mph`],
       ['Lie', r.surface],
     ];
     this.hud.innerHTML = rows
@@ -103,7 +117,12 @@ export class MetricsPanel {
     for (const f of FIELDS) fieldsEl.appendChild(this._field(f, this.values, f.key));
 
     const envEl = panel.querySelector('#gs-env');
-    for (const f of ENV_FIELDS) envEl.appendChild(this._field(f, this.env, f.key, f.def));
+    for (const f of ENV_FIELDS) {
+      envEl.appendChild(this._field(f, this.env, f.key, f.def, () => {
+        this.onEnvironmentChange?.(this.getEnv());
+      }));
+    }
+    for (const f of ENV_SELECTS) envEl.appendChild(this._selectField(f));
 
     panel.querySelector('#gs-hit').addEventListener('click', () => this.onHit?.());
 
@@ -125,7 +144,7 @@ export class MetricsPanel {
     });
   }
 
-  _field(f, store, key, def) {
+  _field(f, store, key, def, onInput) {
     const wrap = document.createElement('div');
     wrap.className = 'gs-field';
     const val = store[key] ?? def ?? 0;
@@ -139,6 +158,21 @@ export class MetricsPanel {
       const v = parseFloat(input.value);
       store[key] = v;
       out.textContent = `${fmt(v)} ${f.unit}`;
+      onInput?.();
+    });
+    return wrap;
+  }
+
+  _selectField(field) {
+    const wrap = document.createElement('label');
+    wrap.className = 'gs-field gs-select-field';
+    wrap.innerHTML = `<div class="gs-field-top"><span>${field.label}</span></div>
+      <select data-key="${field.key}">${field.options.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select>`;
+    const select = wrap.querySelector('select');
+    select.value = this.env[field.key];
+    select.addEventListener('change', () => {
+      this.env[field.key] = select.value;
+      this.onEnvironmentChange?.(this.getEnv());
     });
     return wrap;
   }
@@ -157,20 +191,24 @@ export class MetricsPanel {
     s.textContent = `
       .gs-panel{position:fixed;top:16px;left:16px;width:280px;padding:16px;z-index:20;
         background:rgba(14,20,26,.82);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);
-        border-radius:14px;color:#dbe7e0;font:13px/1.3 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.4)}
-      .gs-title{font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:11px;opacity:.65;margin-bottom:12px}
-      .gs-preset{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;opacity:.9}
+        border-radius:14px;color:#e7f0eb;font:500 14px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+        box-shadow:0 12px 40px rgba(0,0,0,.4)}
+      .gs-title{font-weight:750;letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:rgba(231,240,235,.82);margin-bottom:12px}
+      .gs-preset{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:rgba(231,240,235,.92)}
       .gs-preset select{flex:1;background:#0d151b;color:#dbe7e0;border:1px solid rgba(255,255,255,.12);
-        border-radius:8px;padding:6px 8px;font:12px system-ui}
+        border-radius:8px;padding:6px 8px;font:500 13px -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
       .gs-field{margin-bottom:11px}
-      .gs-field-top{display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px}
-      .gs-field-top span{opacity:.7}.gs-field-top output{font-variant-numeric:tabular-nums;font-weight:600;color:#8fe0a6}
+      .gs-field-top{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
+      .gs-field-top span{color:rgba(231,240,235,.78)}.gs-field-top output{font-variant-numeric:tabular-nums;font-weight:700;color:#9aebae}
       .gs-field input[type=range]{width:100%;accent-color:#4caf72;height:16px}
-      .gs-env{margin:6px 0 12px}.gs-env summary{cursor:pointer;font-size:11px;opacity:.7;padding:4px 0}
+      .gs-select-field{display:flex;align-items:center;justify-content:space-between;gap:12px}
+      .gs-select-field .gs-field-top{margin:0}.gs-select-field select{min-width:112px;background:#0d151b;color:#dbe7e0;
+        border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;font:500 12px system-ui}
+      .gs-env{margin:6px 0 12px}.gs-env summary{cursor:pointer;font-size:12px;color:rgba(231,240,235,.78);padding:4px 0}
       #gs-hit{width:100%;padding:11px;border:0;border-radius:10px;cursor:pointer;
         background:linear-gradient(180deg,#39b56a,#2b8a50);color:#04160c;font-weight:800;font-size:14px;letter-spacing:.03em}
       #gs-hit:hover{filter:brightness(1.08)}#gs-hit:active{transform:translateY(1px)}
-      .gs-hint{margin-top:9px;font-size:10px;opacity:.45;text-align:center}
+      .gs-hint{margin-top:9px;font-size:11px;color:rgba(231,240,235,.62);text-align:center}
       .gs-hud{position:fixed;top:16px;right:16px;width:190px;z-index:20;padding:14px 16px;
         background:rgba(14,20,26,.82);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);
         border-radius:14px;color:#dbe7e0;font:13px system-ui;opacity:0;transform:translateY(-6px);

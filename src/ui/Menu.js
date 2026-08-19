@@ -12,7 +12,12 @@ export class Menu {
     this.view = 'menu';
     this._injectCSS();
     this._build();
-    this.setView('menu');
+    // ?view=practice (or creator / play) opens straight into that view instead of the
+    // landing menu. Mainly so an offline capture can shoot the real course without
+    // driving the shell — `node scripts/shot.mjs --game` relies on it — but it is also
+    // just useful when you are iterating on the range and reloading all day.
+    const wanted = new URL(window.location).searchParams.get('view');
+    this.setView(['practice', 'creator', 'play'].includes(wanted) ? wanted : 'menu');
     // Refresh the creator stats HUD a couple times a second while it's visible.
     setInterval(() => { if (this.view === 'creator') this._renderStats(); }, 500);
   }
@@ -204,7 +209,7 @@ export class Menu {
         display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
       #gs-menu-btn { display: flex; align-items: center; gap: 8px;
         padding: 9px 15px 9px 13px; cursor: pointer; color: var(--ink);
-        font: 600 13px/1 var(--sans); letter-spacing: .04em;
+        font: 700 14px/1 var(--sans); letter-spacing: .035em;
         background: rgba(255,255,255,.4); border: 1px solid rgba(255,255,255,.6); border-radius: 999px;
         backdrop-filter: blur(12px) saturate(1.1); box-shadow: 0 6px 20px rgba(0,0,0,.12);
         transition: background .25s, transform .2s; }

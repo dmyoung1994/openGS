@@ -1,0 +1,164 @@
+{
+ "bk_grand_fir": [
+  {
+   "lod": 0,
+   "file": "public/assets/trees/bk_grand_fir_lod0.glb",
+   "sha256": "732526af5a17e8a5d3373dfebd73902da3e9091405ef9c7fc567b930a998d2ae",
+   "bytes": 17207016,
+   "tris": {
+    "trunk": 9000,
+    "branches": 26000,
+    "foliage": 78000,
+    "foliage_2": 52000
+   },
+   "width": 5.782,
+   "height": 8.109,
+   "depth": 5.495,
+   "baseY": 0.034,
+   "topY": 8.143
+  },
+  {
+   "lod": 1,
+   "file": "public/assets/trees/bk_grand_fir_lod1.glb",
+   "sha256": "d7789442fd36bf476f1d4885913fd18547e5724485764d2dcd3d04effe1b2e7e",
+   "bytes": 6872508,
+   "tris": {
+    "trunk": 2499,
+    "branches": 6000,
+    "foliage": 18000,
+    "foliage_2": 12000
+   },
+   "width": 5.782,
+   "height": 8.109,
+   "depth": 5.495,
+   "baseY": 0.034,
+   "topY": 8.143
+  }
+ ],
+ "bk_golden_larch": [
+  {
+   "lod": 0,
+   "file": "public/assets/trees/bk_golden_larch_lod0.glb",
+   "sha256": "d5d5e3a27c838253bb7614d588f29296f52a38be4893f37cf58e7cf39f01152d",
+   "bytes": 11655564,
+   "tris": {
+    "foliage": 90000,
+    "branches": 50000
+   },
+   "width": 20.511,
+   "height": 39.09,
+   "depth": 22.788,
+   "baseY": -0.0,
+   "topY": 39.09
+  },
+  {
+   "lod": 1,
+   "file": "public/assets/trees/bk_golden_larch_lod1.glb",
+   "sha256": "035b246c9b392005ed63b71c8fbad2aff6ba9e39cbe8779276c22d123a5e01c1",
+   "bytes": 3997396,
+   "tris": {
+    "foliage": 22000,
+    "branches": 19066
+   },
+   "width": 20.511,
+   "height": 39.09,
+   "depth": 22.788,
+   "baseY": -0.0,
+   "topY": 39.09
+  }
+ ],
+ "bk_dense_conifer": [
+  {
+   "lod": 0,
+   "file": "public/assets/trees/bk_dense_conifer_lod0.glb",
+   "sha256": "9587e54e90fa16bdbd98e630339b769320683484352c793be4bced5b9fd2fbf4",
+   "bytes": 14775680,
+   "tris": {
+    "foliage": 85000,
+    "branches": 34999
+   },
+   "width": 4.099,
+   "height": 5.557,
+   "depth": 4.3,
+   "baseY": -0.0,
+   "topY": 5.557
+  },
+  {
+   "lod": 1,
+   "file": "public/assets/trees/bk_dense_conifer_lod1.glb",
+   "sha256": "a1aa5d9d34384a647c503c09ebd94e99dfdff80ab49e02b3e0735c1f5444dd77",
+   "bytes": 8844124,
+   "tris": {
+    "foliage": 20000,
+    "branches": 8000
+   },
+   "width": 4.098,
+   "height": 5.558,
+   "depth": 4.3,
+   "baseY": -0.001,
+   "topY": 5.557
+  }
+ ],
+ "bk_spruce": [
+  {
+   "lod": 0,
+   "file": "public/assets/trees/bk_spruce_lod0.glb",
+   "sha256": "f4454bbabe3ef5ae6e72e39d0edb1257b33109f277a83486e5280d785964b76d",
+   "bytes": 7221408,
+   "tris": {
+    "foliage": 95000
+   },
+   "width": 3.182,
+   "height": 4.836,
+   "depth": 3.066,
+   "baseY": 0.058,
+   "topY": 4.894
+  },
+  {
+   "lod": 1,
+   "file": "public/assets/trees/bk_spruce_lod1.glb",
+   "sha256": "b3549b652f7c16a7ac766abdf03ae0ab08ddcc07f39330c7d8282dbbbb5e51fd",
+   "bytes": 1541400,
+   "tris": {
+    "foliage": 22000
+   },
+   "width": 3.182,
+   "height": 4.836,
+   "depth": 3.066,
+   "baseY": 0.058,
+   "topY": 4.894
+  }
+ ],
+ "bk_scots_pine": [
+  {
+   "lod": 0,
+   "file": "public/assets/trees/bk_scots_pine_lod0.glb",
+   "sha256": "ec73e21c4aeb82187432d5ec7e54550d0ed35f327a59c0fba366340af7d0dd2b",
+   "bytes": 42649460,
+   "tris": {
+    "trunk": 26000,
+    "foliage": 348760
+   },
+   "width": 7.548,
+   "height": 29.367,
+   "depth": 8.914,
+   "baseY": -0.039,
+   "topY": 29.328
+  },
+  {
+   "lod": 1,
+   "file": "public/assets/trees/bk_scots_pine_lod1.glb",
+   "sha256": "c2b0a6406f248139e129e2e1100916320248262507d34be057719a6521c58fed",
+   "bytes": 12099460,
+   "tris": {
+    "trunk": 5999,
+    "foliage": 86030
+   },
+   "width": 7.384,
+   "height": 29.366,
+   "depth": 8.852,
+   "baseY": -0.039,
+   "topY": 29.328
+  }
+ ]
+}

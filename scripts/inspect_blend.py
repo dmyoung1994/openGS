@@ -1,36 +1,50 @@
-# Headless inspector: dump what a BlenderKit .blend actually contains so we can
-# decide the Three.js pipeline (bake procedural material -> PBR maps, vs. export
-# real grass geometry). Usage:
-#   Blender --background <file.blend> --python inspect_blend.py
+#!/usr/bin/env python3
+"""Inventory a BlenderKit .blend candidate: size, tris, materials, textures."""
+import sys
+
 import bpy
+from mathutils import Vector
 
-print("=== OBJECTS ===")
-for o in bpy.data.objects:
-    mods = [m.type for m in o.modifiers] if hasattr(o, "modifiers") else []
-    ngons = len(o.data.polygons) if o.type == 'MESH' and o.data else 0
-    print(f"  {o.type:8} '{o.name}'  polys={ngons}  modifiers={mods}")
 
-print("=== MATERIALS ===")
-for m in bpy.data.materials:
-    if not m.use_nodes:
-        print(f"  '{m.name}' (no nodes)"); continue
-    ntypes = {}
-    has_disp = False
-    for n in m.node_tree.nodes:
-        ntypes[n.type] = ntypes.get(n.type, 0) + 1
-        if n.type == 'OUTPUT_MATERIAL':
-            disp = n.inputs.get('Displacement')
-            if disp and disp.is_linked:
-                has_disp = True
-    print(f"  '{m.name}'  displacement_linked={has_disp}")
-    print(f"      nodes={dict(sorted(ntypes.items()))}")
+def main(path: str) -> None:
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.wm.open_mainfile(filepath=path)
+    minv = Vector((1e18, 1e18, 1e18))
+    maxv = Vector((-1e18, -1e18, -1e18))
+    total_tris = 0
+    meshes = 0
+    for obj in bpy.data.objects:
+        if obj.type != 'MESH':
+            continue
+        meshes += 1
+        mesh = obj.data
+        total_tris += sum(len(p.vertices) - 2 for p in mesh.polygons)
+        for corner in obj.bound_box:
+            w = obj.matrix_world @ Vector(corner)
+            minv.x = min(minv.x, w.x)
+            minv.y = min(minv.y, w.y)
+            minv.z = min(minv.z, w.z)
+            maxv.x = max(maxv.x, w.x)
+            maxv.y = max(maxv.y, w.y)
+            maxv.z = max(maxv.z, w.z)
+    print(f'== {path}')
+    print(f'meshes={meshes} tris={total_tris}')
+    print(f'width={maxv.x - minv.x:.2f} height={maxv.z - minv.z:.2f} depth={maxv.y - minv.y:.2f}')
+    print(f'baseZ={minv.z:.2f} topZ={maxv.z:.2f}')
+    mats = set()
+    for obj in bpy.data.objects:
+        if obj.type != 'MESH':
+            continue
+        for slot in obj.material_slots:
+            if slot.material is None:
+                continue
+            mats.add(slot.material.name)
+            for node in slot.material.node_tree.nodes:
+                if node.type == 'TEX_IMAGE' and node.image:
+                    img = node.image
+                    print(f'  mat={slot.material.name!r} tex={img.name} {img.size[0]}x{img.size[1]} packed={img.packed_file is not None}')
+    print(f'materials={sorted(mats)}')
 
-print("=== NODE GROUPS (geometry/shader) ===")
-for g in bpy.data.node_groups:
-    print(f"  {g.bl_idname}  '{g.name}'  nodes={len(g.nodes)}")
 
-print("=== IMAGES ===")
-for img in bpy.data.images:
-    if img.name in ('Render Result', 'Viewer Node'):
-        continue
-    print(f"  '{img.name}'  size={tuple(img.size)}  file='{img.filepath}'")
+if __name__ == '__main__':
+    main(sys.argv[sys.argv.index('--') + 1])

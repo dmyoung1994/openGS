@@ -1,0 +1,25 @@
+{
+  "catalogId": "claude-golfsim-backdrop-community",
+  "version": 1,
+  "asset": {
+    "id": "polyhaven-fir-sapling-community",
+    "category": "tree",
+    "biomes": ["temperate-alpine"],
+    "license": { "spdx": "CC0-1.0", "sourceUrl": "https://polyhaven.com/a/fir_tree_01" },
+    "derivativeLineage": {
+      "sourceAssetId": "polyhaven-fir-sapling-medium",
+      "sourceUrl": "https://polyhaven.com/a/fir_tree_01",
+      "sourceHash": "172bb2935dcada2c686b0e19e0b5962b79f921e19d9f0277fbfd503464c7ca48",
+      "pipelineVersion": "scripts/build_backdrop_conifer_community.py@backdrop-community-impostor-v1"
+    },
+    "impostor": {
+      "kind": "baked-atlas",
+      "url": "/assets/trees/conifer_community_v1_impostor.png",
+      "sha256": "30d9c0567b92ee7be3e429982887881c3598950ed445f54bfefbf1f00e6b6d79",
+      "columns": 4,
+      "rows": 2,
+      "frameSize": 512,
+      "normalDepth": false
+    }
+  }
+}

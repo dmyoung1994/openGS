@@ -3,11 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>Claude GolfSim — Range</title>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0e12; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0e12;
+        text-rendering: optimizeLegibility; -webkit-text-size-adjust: 100%; }
       #app { position: fixed; inset: 0; }
       canvas { display: block; width: 100%; height: 100%; }
       #loading {
@@ -19,6 +21,10 @@
       #loading.hidden { opacity: 0; pointer-events: none; }
       #loading .brand { letter-spacing: .18em; text-transform: uppercase; font-size: 12px; opacity: .7; }
       #loading .title { font-size: 22px; margin-top: 8px; font-weight: 700; }
+      #loading .stage { margin-top: 24px; color: #f0f7ed; text-transform: capitalize; }
+      #loading .detail { max-width: 34rem; margin: 5px auto 0; color: #a9c2b0; font-size: 13px; }
+      #loading progress { width: min(20rem, 72vw); height: 5px; margin-top: 15px; accent-color: #a8d6a8; }
+      #loading progress[hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -26,7 +32,10 @@
     <div id="loading">
       <div style="text-align:center">
         <div class="brand">Claude GolfSim</div>
-        <div class="title">Warming up the range…</div>
+        <div class="title">Preparing the range…</div>
+        <div id="loading-stage" class="stage">WebGPU initializing</div>
+        <div id="loading-detail" class="detail">Acquiring the strict WebGPU device…</div>
+        <progress id="loading-progress" max="1" value="0" hidden aria-label="Environment loading progress"></progress>
       </div>
     </div>
     <!-- Bare specifiers ("three", "three/webgpu", "three/tsl", "three/addons/*")

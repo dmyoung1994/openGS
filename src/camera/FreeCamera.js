@@ -3,8 +3,8 @@ import { Vector3, Euler, Quaternion } from 'three';
 // Debug / spectator free-fly camera. A toggle mode that DETACHES the camera from
 // the cinematic CameraDirector and hands control to the keyboard + mouse:
 //   WASD   - move (fly where you look)
-//   Space  - rise      Shift - fall   (always world-vertical)
-//   Ctrl   - speed boost (hold)
+//   Space  - rise      Ctrl - fall   (always world-vertical)
+//   Shift  - speed boost (hold)
 //   drag   - click-drag the canvas to look around (yaw + pitch, level horizon)
 //
 // It owns its own input listeners, all of which early-return while inactive, so it
@@ -27,7 +27,7 @@ export class FreeCamera {
 
     // Tunables.
     this.baseSpeed = 12;         // m/s
-    this.boost = 4;              // Ctrl multiplier
+    this.boost = 4;              // Shift multiplier
     this.sensitivity = 0.0025;   // rad per pixel of drag
     this.pitchLimit = Math.PI / 2 - 0.02;   // ~89deg, avoid gimbal flip at straight up/down
 
@@ -107,10 +107,13 @@ export class FreeCamera {
     if (k.has('KeyD')) this._move.add(this._right);
     if (k.has('KeyA')) this._move.sub(this._right);
     if (k.has('Space')) this._move.add(this._worldUp);
-    if (k.has('ShiftLeft') || k.has('ShiftRight')) this._move.sub(this._worldUp);
+    // Ctrl descends, Shift boosts. Swapped from the original (Shift descended) because
+    // Shift is held by every OS screenshot shortcut — framing a shot used to drop the
+    // camera through the turf the moment you reached for Cmd-Shift-4.
+    if (k.has('ControlLeft') || k.has('ControlRight')) this._move.sub(this._worldUp);
 
     if (this._move.lengthSq() > 0) {
-      const boosted = (k.has('ControlLeft') || k.has('ControlRight')) ? this.boost : 1;
+      const boosted = (k.has('ShiftLeft') || k.has('ShiftRight')) ? this.boost : 1;
       this._move.normalize().multiplyScalar(this.baseSpeed * boosted * dt);
       this.camera.position.add(this._move);
     }

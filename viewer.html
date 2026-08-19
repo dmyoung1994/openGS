@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Asset Viewer — Claude GolfSim</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0d0f0d; overflow: hidden; }
+      #app { position: fixed; inset: 0; }
+      #picker {
+        position: fixed; top: 12px; left: 12px; z-index: 60; display: flex; gap: 8px;
+        align-items: center; background: rgba(18,20,18,.88); color: #e8eee6;
+        border-radius: 10px; padding: 10px 12px; backdrop-filter: blur(8px);
+        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        box-shadow: 0 8px 30px rgba(0,0,0,.4);
+      }
+      #picker select {
+        background: #1e241d; color: #e8eee6; border: 1px solid #3a4436;
+        border-radius: 5px; padding: 4px 6px; font: inherit;
+      }
+      #hint { position: fixed; bottom: 12px; left: 12px; z-index: 60; color: #b9c7b4;
+        font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; opacity: .75;
+        text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+      #err { position: fixed; top: 70px; left: 12px; z-index: 60; max-width: 460px;
+        color: #ffb4a8; background: rgba(40,16,12,.9); border-radius: 8px; padding: 10px 12px;
+        font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="picker">
+      <span style="opacity:.55; letter-spacing:.12em">ASSET</span>
+      <select id="asset"></select>
+    </div>
+    <div id="hint">WASD move &middot; Space up &middot; Ctrl down &middot; Shift boost &middot; drag to look &middot; G turf panel &middot; F frame asset</div>
+    <div id="err"></div>
+    <script type="module" src="/src/viewer/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "polyhaven-alps-field-2k",
+  "url": "/assets/environment/alps_field_2k.hdr",
+  "md5": "5abfeb43c4d60566973da21483e8cfbd",
+  "sha256": "90ef5a4e0c46d0177a06406b59142a6bb426176a85c195fa23d2e443383a9e12",
+  "source": "https://polyhaven.com/a/alps_field",
+  "api": "https://api.polyhaven.com/files/alps_field",
+  "license": "CC0",
+  "authors": ["Andreas Mischok"],
+  "resolution": [2048, 1024],
+  "sourceSunDirection": [0.599337, 0.670422, 0.437413],
+  "rotationRadians": -2.929351,
+  "notes": "2K Radiance HDR from the official Poly Haven Alps Field capture. Source solar core is replaced in IBL/visible sun sampling because source elevation differs from the authoritative sun."
+}

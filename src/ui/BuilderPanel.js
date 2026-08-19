@@ -126,6 +126,11 @@ export class BuilderPanel {
     this._status(`Updated · ${name} · ${c ? c.greens.length : 0} greens · ${c ? c.bunkers.length : 0} bunkers`, 'ok');
   }
 
+  onCourseReloadFailed(error) {
+    this._setBusy(false);
+    this._status(`Course could not be applied: ${error?.message || error}`, 'err');
+  }
+
   _setBusy(b) { this.busy = b; this.buildBtn.disabled = b; }
   _status(html, kind = '') { this.statusEl.className = `gb-status ${kind}`; this.statusEl.innerHTML = html; }
 }

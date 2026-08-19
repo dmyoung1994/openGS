@@ -1,87 +1,170 @@
-import { Vector3 } from 'three';
+import { Matrix4, Quaternion, Vector3 } from 'three';
 
-// Cinematic camera. It never snaps: a critically-damped spring chases a desired
-// pose that changes with the shot phase, giving a broadcast tracer feel.
-//
-// Phases:
-//   address  - over-the-shoulder behind the tee, looking down the target line
-//   chase    - trails behind and just below the ball so we look *up* at the
-//              rising shot, pulling back as ball speed increases
-//   descent  - as the ball falls, the rig lifts and eases back to reveal the
-//              landing zone
-//   result   - a slow 3/4 push-in on the ball at rest
+const GRAVITY = 9.80665;
+const CHASE_MIN_DOWN_PITCH = 0;
+const DESCENT_MIN_DOWN_PITCH = 4 * Math.PI / 180;
+const RETURN_DURATION = 3.6;
+
+// Cinematic camera. A damped rig chases a desired pose through four continuous
+// phases: address, rising flight, landing reveal, and the result orbit. Automatic
+// reset uses a fifth `return` phase so the landing view glides back to the tee.
 export class CameraDirector {
   constructor(camera) {
     this.camera = camera;
     this.pos = camera.position.clone();
     this.look = new Vector3(0, 1, -30);
     this._look = this.look.clone();
+    this._viewLook = this.look.clone();
     this.phase = 'address';
     this.aim = new Vector3(0, 0, -1);
-    this._tmp = new Vector3();
+    this._horizontal = new Vector3();
     this._resultAngle = 0;
+    this._launchDir = new Vector3(0, 0, -1);
+    this._launchY = 0;
+    this._apexY = 0;
+    this._returnElapsed = 0;
+    this._returnStartPosition = new Vector3();
+    this._returnStartQuaternion = new Quaternion();
+    this._returnEndQuaternion = new Quaternion();
+    this._returnLookMatrix = new Matrix4();
   }
 
   setAddress(ballPos, aimDir, firstTargetZ = -50) {
+    void firstTargetZ;
     this.phase = 'address';
-    this.aim.copy(aimDir).normalize();
-    // Behind and above the ball, offset to the trail side (over the shoulder).
-    const back = this.aim.clone().multiplyScalar(-4.5);
-    this.pos.copy(ballPos).add(back).add(new Vector3(1.6, 2.0, 0));
-    this.look.copy(ballPos).add(this.aim.clone().multiplyScalar(30));
-    this.look.y = ballPos.y + 1.2;
+    this._setAddressPose(ballPos, aimDir);
     this._snap();
+  }
+
+  returnToAddress(ballPos, aimDir) {
+    this.phase = 'return';
+    this._returnElapsed = 0;
+    this._returnStartPosition.copy(this.camera.position);
+    this._returnStartQuaternion.copy(this.camera.quaternion);
+    this._setAddressPose(ballPos, aimDir);
+    this._returnLookMatrix.lookAt(this.pos, this.look, this.camera.up);
+    this._returnEndQuaternion.setFromRotationMatrix(this._returnLookMatrix);
+  }
+
+  _setAddressPose(ballPos, aimDir) {
+    this.aim.copy(aimDir).normalize();
+    // Start directly on the target line behind the ball so the opening composition
+    // reads straight down-range rather than as an offset over-the-shoulder view.
+    this.pos.copy(ballPos).addScaledVector(this.aim, -4.5);
+    this.pos.y += 2.0;
+    this.look.copy(ballPos).addScaledVector(this.aim, 30);
+    this.look.y = ballPos.y + 1.2;
   }
 
   onLaunch(ball) {
     this.phase = 'chase';
-    this._launchDir = new Vector3(ball.velocity.x, 0, ball.velocity.z).normalize();
+    this._launchDir.set(ball.velocity.x, 0, ball.velocity.z);
+    if (this._launchDir.lengthSq() > 1e-4) this._launchDir.normalize();
+    else this._launchDir.copy(this.aim);
+    this._launchY = ball.start?.y ?? ball.position.y;
+    this._apexY = ball.position.y;
   }
 
   update(dt, ball) {
     if (this.phase === 'chase' || this.phase === 'descent') this._flight(ball);
     else if (this.phase === 'result') this._result(dt, ball);
-    // address pose is static until launch
+    // Address and return poses are static targets.
 
-    // Damp toward the desired pose. Rate chosen for a smooth but responsive rig.
-    const kp = this.phase === 'result' ? 1.6 : 3.2;
-    const a = 1 - Math.exp(-kp * dt);
-    this.camera.position.lerp(this.pos, a);
-    this._look.lerp(this.look, 1 - Math.exp(-4.5 * dt));
-    this.camera.lookAt(this._look);
+    if (this.phase === 'return') {
+      this._returnElapsed = Math.min(RETURN_DURATION, this._returnElapsed + dt);
+      const linear = this._returnElapsed / RETURN_DURATION;
+      const eased = linear * linear * (3 - 2 * linear);
+      this.camera.position.lerpVectors(this._returnStartPosition, this.pos, eased);
+      this.camera.quaternion.slerpQuaternions(
+        this._returnStartQuaternion,
+        this._returnEndQuaternion,
+        eased,
+      );
+      this._look.lerpVectors(this._returnStartPosition, this.look, eased);
+      if (linear >= 1) this.phase = 'address';
+      return;
+    }
+
+    const positionRate = this.phase === 'result' ? 1.6 : 3.2;
+    const lookRate = 4.5;
+    this.camera.position.lerp(this.pos, 1 - Math.exp(-positionRate * dt));
+    this._look.lerp(this.look, 1 - Math.exp(-lookRate * dt));
+
+    if (this.phase === 'chase' || this.phase === 'descent') {
+      // A fast-rising ball can outrun an ordinary spring. Keep the flight camera above
+      // it explicitly; horizontal motion remains damped, while vertical motion climbs
+      // with the shot until the apex and is free to descend afterward.
+      this.camera.position.y = Math.max(this.camera.position.y, ball.position.y + 1.5);
+      this._applyFlightLookConstraint();
+    } else {
+      this.camera.lookAt(this._look);
+    }
+  }
+
+  _applyFlightLookConstraint() {
+    this._viewLook.copy(this._look);
+    const dx = this._viewLook.x - this.camera.position.x;
+    const dz = this._viewLook.z - this.camera.position.z;
+    const horizontalDistance = Math.max(0.01, Math.hypot(dx, dz));
+    const minPitch = this.phase === 'descent' ? DESCENT_MIN_DOWN_PITCH : CHASE_MIN_DOWN_PITCH;
+    const highestTargetY = this.camera.position.y - Math.tan(minPitch) * horizontalDistance;
+    this._viewLook.y = Math.min(this._viewLook.y, highestTargetY);
+    this.camera.lookAt(this._viewLook);
   }
 
   _flight(ball) {
     const p = ball.position;
     const v = ball.velocity;
-    const speed = v.length();
-    const hv = this._tmp.set(v.x, 0, v.z);
+    const hv = this._horizontal.set(v.x, 0, v.z);
     const hs = hv.length();
     if (hs > 0.1) hv.multiplyScalar(1 / hs);
     else hv.copy(this._launchDir);
 
+    this._apexY = Math.max(this._apexY, p.y);
     const rising = v.y > 0.5;
     this.phase = rising ? 'chase' : 'descent';
 
-    // Trail distance and height scale with speed; while rising we stay lower
-    // than the ball (look up), while descending we lift to open up the landing.
     const dist = Math.min(9 + hs * 0.9, 42);
-    const baseH = rising ? 1.4 : 4.5 + Math.min(hs * 0.4, 14);
-
     this.pos.copy(p).addScaledVector(hv, -dist);
-    this.pos.y = p.y * (rising ? 0.35 : 0.7) + baseH + ball.start.y;
-    // Slight lateral so the ball isn't dead-center (broadcast framing).
-    this.pos.x += 1.0;
+    // Keep a touch of broadcast offset on ascent, then move closer to the shot line
+    // during descent so the falling ball sits nearer the centre of the frame.
+    this.pos.x += rising ? 0.8 : 0.2;
 
-    // Look slightly ahead of the ball along its path for lead room.
-    this.look.copy(p).addScaledVector(hv, Math.min(hs * 0.25, 8));
-    this.look.y = p.y + 0.5;
+    if (rising) {
+      // Rise with the shot while remaining above it. This keeps the horizon and course
+      // in frame instead of making the audience look up into empty sky.
+      this.pos.y = p.y + 3.5;
+      this.look.copy(p).addScaledVector(hv, Math.min(hs * 0.22, 7));
+      this.look.y = p.y - 0.35;
+      return;
+    }
+
+    // After apex, ease downward from the acquired height and lead the view toward an
+    // estimated landing point. Terrain is sampled when available, so the reveal reads
+    // correctly over elevated greens and rolling fairways rather than assuming y=0.
+    const altitude = Math.max(0, p.y - this._launchY);
+    this.pos.y = this._launchY + 6 + altitude * 0.72;
+
+    let landingX = p.x;
+    let landingZ = p.z;
+    let landingY = this._launchY;
+    for (let iteration = 0; iteration < 2; iteration++) {
+      if (ball.terrain?.heightAt) landingY = ball.terrain.heightAt(landingX, landingZ) + (ball.radius || 0);
+      const fall = Math.max(0, p.y - landingY);
+      const timeToGround = (v.y + Math.sqrt(Math.max(0, v.y * v.y + 2 * GRAVITY * fall))) / GRAVITY;
+      const lead = Math.min(Math.max(0, hs * timeToGround), 36);
+      landingX = p.x + hv.x * lead;
+      landingZ = p.z + hv.z * lead;
+    }
+    // Bias strongly toward the ball while retaining a modest look-ahead cue. The
+    // pitch constraint below still guarantees that the ground/landing zone remains
+    // visible instead of letting the camera tilt back up at the descending ball.
+    this.look.set(landingX, landingY + 0.25, landingZ).lerp(p, 0.68);
   }
 
   onRest(ball) {
     this.phase = 'result';
     this._resultAngle = Math.atan2(ball.velocity.x || 1, ball.velocity.z || -1) + 2.4;
-    this._restPos = ball.position.clone();
   }
 
   _result(dt, ball) {

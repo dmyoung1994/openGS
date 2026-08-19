@@ -1,0 +1,543 @@
+{
+  "version": 2,
+  "catalogId": "claude-golfsim-cc0-environment",
+  "assets": [
+    {
+      "id": "polyhaven-tree-small-02",
+      "category": "tree",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/tree_small_02"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-tree-small-02",
+        "sourceUrl": "https://polyhaven.com/a/tree_small_02",
+        "sourceHash": "3062a709614c05b80fdc1e56583998bc3cb1027b0d52f956c8ecfb882ff8ca6d",
+        "pipelineVersion": "gltf-transform-4.4.2-meshoptimizer-r0.12@3+baked-impostor@1"
+      },
+      "dimensions": {
+        "width": 4.3,
+        "height": 4.56,
+        "depth": 4.3
+      },
+      "bounds": {
+        "radius": 2.3,
+        "baseY": -0.024,
+        "topY": 4.533
+      },
+      "placement": {
+        "minSpacing": 5,
+        "maxSlopeDegrees": 28,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/tree_small_02_lod0.glb",
+          "sha256": "1566c2de9c40cfa4d144089c818f7c67b4cd4283a237e89a3a05b5464f895813",
+          "maxDistance": 75,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/tree_small_02_lod1.glb",
+          "sha256": "ac3e7ab2bbec249e55ce330c24d7460d01ce10e8ce2435ce11c84e186616a211",
+          "maxDistance": 4000,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "baked-atlas",
+        "url": "/assets/trees/tree_small_02_impostor.png",
+        "sha256": "04de7c72460a6e7f30831abd4e901e9cf82152e2f711c770de40480e7b8c4bb6",
+        "sourceLod": 0,
+        "generator": "scripts/bake_tree_impostor.py@1",
+        "azimuthFrames": 8,
+        "elevationFrames": 1,
+        "columns": 4,
+        "rows": 2,
+        "frameSize": 512,
+        "normalDepth": false
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.9,
+        "branchStiffness": 0.58,
+        "leafStiffness": 0.18,
+        "gustResponse": 0.72
+      }
+    },
+    {
+      "id": "polyhaven-island-tree-01",
+      "category": "tree",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/island_tree_01"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-island-tree-01",
+        "sourceUrl": "https://polyhaven.com/a/island_tree_01",
+        "sourceHash": "1faa817b46e24ed6fc90d3ec72188a0dc5ac75e82c89b3dd3c5fdaecf7cc005c",
+        "pipelineVersion": "blender-decimate-multimaterial@1+gltf-transform-4.4.2"
+      },
+      "dimensions": {
+        "width": 4.705,
+        "height": 4.978,
+        "depth": 4.7
+      },
+      "bounds": {
+        "radius": 2.5,
+        "baseY": -0.011,
+        "topY": 4.967
+      },
+      "placement": {
+        "minSpacing": 7,
+        "maxSlopeDegrees": 24,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.015
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/island_tree_01_lod1.glb",
+          "sha256": "bbe3139a4b6b54d2b8fa932824f6afa1ca1dfef8a0df29d5ace89f786a10fc58",
+          "maxDistance": 240,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "none"
+      }
+    },
+    {
+      "id": "polyhaven-fern-02",
+      "category": "groundcover",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/fern_02"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-fern-02",
+        "sourceUrl": "https://polyhaven.com/a/fern_02",
+        "sourceHash": "fe1abb762bcbbc7ad9e86925c8080437a62add257d9280e9142fdc85c226e64c",
+        "pipelineVersion": "gltf-transform-4.4.2-weld+simplify-0.35@1"
+      },
+      "dimensions": {
+        "width": 1.973,
+        "height": 0.428,
+        "depth": 1.724
+      },
+      "bounds": {
+        "radius": 1.4,
+        "baseY": -0.031,
+        "topY": 0.397
+      },
+      "placement": {
+        "minSpacing": 1.8,
+        "maxSlopeDegrees": 34,
+        "clearance": {
+          "tee": 8,
+          "green": 4,
+          "bunker": 3,
+          "water": 2,
+          "fairway": 6
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.02
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/environment/models/fern_02.glb",
+          "sha256": "b148554745a6a8e47c77b7dda20cd933d5d677832b0579e0283cae7c5d5446ff",
+          "maxDistance": 90,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "none"
+      }
+    },
+    {
+      "id": "polyhaven-boulder-01",
+      "category": "rock",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/boulder_01"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-boulder-01",
+        "sourceUrl": "https://polyhaven.com/a/boulder_01",
+        "sourceHash": "7f5b06503d62bd95bfe9c6b8a354a5cc8ff04a4d271a8cf87a3e3125db4232d7",
+        "pipelineVersion": "gltf-transform-4.4.2-weld+simplify-0.38@1"
+      },
+      "dimensions": {
+        "width": 1.272,
+        "height": 1.004,
+        "depth": 1.83
+      },
+      "bounds": {
+        "radius": 1.0,
+        "baseY": -0.074,
+        "topY": 0.93
+      },
+      "placement": {
+        "minSpacing": 2.2,
+        "maxSlopeDegrees": 38,
+        "clearance": {
+          "tee": 12,
+          "green": 14,
+          "bunker": 5,
+          "water": 3,
+          "fairway": 5
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.2
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/environment/models/boulder_01.glb",
+          "sha256": "b64a8aac295ba31f6beefec74393858a973df6a6effab006e440c74102536de2",
+          "maxDistance": 180,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "none"
+      }
+    },
+    {
+      "id": "polyhaven-dead-tree-trunk",
+      "category": "deadwood",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/dead_tree_trunk"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-dead-tree-trunk",
+        "sourceUrl": "https://polyhaven.com/a/dead_tree_trunk",
+        "sourceHash": "c1ac6b3195246e8647a28eee2fbfdd4712a045c7cf2dcb4f5abcc2d40a446ca6",
+        "pipelineVersion": "gltf-transform-4.4.2-weld+simplify-0.34+simplify-0.16@1"
+      },
+      "dimensions": {
+        "width": 3.051,
+        "height": 0.29,
+        "depth": 0.278
+      },
+      "bounds": {
+        "radius": 1.55,
+        "baseY": -0.028,
+        "topY": 0.263
+      },
+      "placement": {
+        "minSpacing": 4,
+        "maxSlopeDegrees": 32,
+        "clearance": {
+          "tee": 12,
+          "green": 12,
+          "bunker": 5,
+          "water": 3,
+          "fairway": 7
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.05
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/environment/models/dead_tree_trunk.glb",
+          "sha256": "d56b5b7dbb618274f8b86e298aee3925a615e1646ba03f508cb66fd937c329ae",
+          "maxDistance": 140,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "none"
+      }
+    },
+    {
+      "id": "polyhaven-fir-sapling-medium",
+      "category": "tree",
+      "biomes": [
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/fir_tree_01"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-fir-tree-01",
+        "sourceUrl": "https://polyhaven.com/a/fir_tree_01",
+        "sourceHash": "72e49eefb4ed4db6a8ca5e17fb10980f8463dd300d94589ac774cde95ade7709",
+        "pipelineVersion": "source-macro-cluster-conifer-v8+alpha-hull+neutral-impostor@1"
+      },
+      "dimensions": {
+        "width": 8.687,
+        "height": 18.833,
+        "depth": 8.616
+      },
+      "bounds": {
+        "radius": 6.118,
+        "baseY": -0.007,
+        "topY": 18.826
+      },
+      "placement": {
+        "minSpacing": 7,
+        "maxSlopeDegrees": 32,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 8
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.025
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/conifer_v8_lod0.glb",
+          "sha256": "a2557e64685bb3c4e1d0354c986e8724f84b4e91284877a170771251636dd925",
+          "maxDistance": 28,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/conifer_v8_lod1.glb",
+          "sha256": "7d67ec2113b2eff760ec03648c903c630c5ce0854374f964b5c0dbe414fa9fac",
+          "maxDistance": 6000,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "baked-atlas",
+        "url": "/assets/trees/conifer_v8_impostor.png",
+        "sha256": "029e6badad5b1983c16ab175928b991f3646054e220db580480b71957d67c593",
+        "sourceLod": 0,
+        "generator": "build_conifer_v8@1-alpha-footprint-hulls-production",
+        "azimuthFrames": 8,
+        "elevationFrames": 1,
+        "columns": 4,
+        "rows": 2,
+        "frameSize": 512,
+        "normalDepth": false
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.96,
+        "branchStiffness": 0.76,
+        "leafStiffness": 0.42,
+        "gustResponse": 0.48
+      }
+    },
+    {
+      "id": "blenderkit-grand-fir",
+      "category": "tree",
+      "biomes": [
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "LicenseRef-BlenderKit-RoyaltyFree",
+        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/89409ff4-ba59-44c1-b482-4da17ed3f718/"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "blenderkit-grand-fir-8m",
+        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/89409ff4-ba59-44c1-b482-4da17ed3f718/",
+        "sourceHash": "9e30585f4ddeabe5eb9233a5731783dbf905ea642350f10cd7cca993212b5d3f",
+        "pipelineVersion": "build_bk_tree@2-role-split-node-graph-tile-bake+neutral-impostor@2"
+      },
+      "dimensions": {
+        "width": 5.782,
+        "height": 8.109,
+        "depth": 5.495
+      },
+      "bounds": {
+        "radius": 2.891,
+        "baseY": 0.034,
+        "topY": 8.143
+      },
+      "placement": {
+        "minSpacing": 6,
+        "maxSlopeDegrees": 30,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 8
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.02
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/bk_grand_fir_lod0.glb",
+          "sha256": "732526af5a17e8a5d3373dfebd73902da3e9091405ef9c7fc567b930a998d2ae",
+          "maxDistance": 28,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/bk_grand_fir_lod1.glb",
+          "sha256": "d7789442fd36bf476f1d4885913fd18547e5724485764d2dcd3d04effe1b2e7e",
+          "maxDistance": 6000,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "baked-atlas",
+        "url": "/assets/trees/bk_grand_fir_impostor.png",
+        "sha256": "bcb2540dac930f36ed0d2de6eb082550f97fa38fc6a8f19642588e88fe096ebe",
+        "sourceLod": 0,
+        "generator": "scripts/bake_tree_impostor.py@2-hard-cutout",
+        "azimuthFrames": 8,
+        "elevationFrames": 1,
+        "columns": 4,
+        "rows": 2,
+        "frameSize": 512,
+        "normalDepth": false
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.94,
+        "branchStiffness": 0.72,
+        "leafStiffness": 0.38,
+        "gustResponse": 0.52
+      }
+    },
+    {
+      "id": "blenderkit-golden-larch",
+      "category": "tree",
+      "biomes": [
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "LicenseRef-BlenderKit-RoyaltyFree",
+        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/33e69cd4-2035-4718-aad1-fdfe3618cf01/"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "blenderkit-larch-tree-fall-season",
+        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/33e69cd4-2035-4718-aad1-fdfe3618cf01/",
+        "sourceHash": "d69d45112aac9160e8e4be1463159d11feb1e6527bd955ce61b8248ced6a84bb",
+        "pipelineVersion": "build_bk_tree@2-role-split-node-graph-tile-bake+neutral-impostor@2"
+      },
+      "dimensions": {
+        "width": 20.511,
+        "height": 39.09,
+        "depth": 22.788
+      },
+      "bounds": {
+        "radius": 11.394,
+        "baseY": 0,
+        "topY": 39.09
+      },
+      "placement": {
+        "minSpacing": 9,
+        "maxSlopeDegrees": 28,
+        "clearance": {
+          "tee": 14,
+          "green": 20,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.015
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/bk_golden_larch_lod0.glb",
+          "sha256": "d5d5e3a27c838253bb7614d588f29296f52a38be4893f37cf58e7cf39f01152d",
+          "maxDistance": 32,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/bk_golden_larch_lod1.glb",
+          "sha256": "035b246c9b392005ed63b71c8fbad2aff6ba9e39cbe8779276c22d123a5e01c1",
+          "maxDistance": 6000,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "baked-atlas",
+        "url": "/assets/trees/bk_golden_larch_impostor.png",
+        "sha256": "9c40aa9003c8b576a974c3a381e93aedffe090413a9d00f625dcaed9796c46f5",
+        "sourceLod": 0,
+        "generator": "scripts/bake_tree_impostor.py@2-hard-cutout",
+        "azimuthFrames": 8,
+        "elevationFrames": 1,
+        "columns": 4,
+        "rows": 2,
+        "frameSize": 512,
+        "normalDepth": false
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.9,
+        "branchStiffness": 0.62,
+        "leafStiffness": 0.28,
+        "gustResponse": 0.66
+      }
+    }
+  ]
+}

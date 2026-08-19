@@ -31,21 +31,71 @@ import { BALL } from './constants.js';
 //                   (turf yields more when struck harder).
 //   stopSpeed       m/s below which a rolling ball is considered stopped.
 export const SURFACES = {
-  tee:       { restitution: 0.42, friction: 0.52, rollResistance: 0.14, rollDrag: 0.040, spinCoupling: 0.55, spinRetain: 0.85, plush: 0.30, speedCOR: 0.32, stopSpeed: 0.20, color: 0x4f7a34 },
-  fairway:   { restitution: 0.40, friction: 0.52, rollResistance: 0.130, rollDrag: 0.045, spinCoupling: 0.55, spinRetain: 0.80, plush: 0.36, speedCOR: 0.34, stopSpeed: 0.18, color: 0x5c8a3a },
-  green:     { restitution: 0.33, friction: 0.46, rollResistance: 0.065, rollDrag: 0.024, spinCoupling: 0.24, spinRetain: 0.93, plush: 0.46, speedCOR: 0.30, stopSpeed: 0.11, color: 0x6ba24a },
-  fringe:    { restitution: 0.34, friction: 0.52, rollResistance: 0.11, rollDrag: 0.060, spinCoupling: 0.42, spinRetain: 0.82, plush: 0.40, speedCOR: 0.32, stopSpeed: 0.15, color: 0x5f9540 },
-  rough:     { restitution: 0.20, friction: 0.72, rollResistance: 0.44, rollDrag: 0.150, spinCoupling: 0.85, spinRetain: 0.30, plush: 0.68, speedCOR: 0.42, stopSpeed: 0.36, color: 0x3f6b2c },
-  deepRough: { restitution: 0.13, friction: 0.85, rollResistance: 0.78, rollDrag: 0.280, spinCoupling: 0.95, spinRetain: 0.14, plush: 0.88, speedCOR: 0.52, stopSpeed: 0.52, color: 0x2f5824 },
-  sand:      { restitution: 0.09, friction: 0.90, rollResistance: 1.05, rollDrag: 0.450, spinCoupling: 1.00, spinRetain: 0.05, plush: 0.97, speedCOR: 0.58, stopSpeed: 0.60, color: 0xcdb98b },
-  hardpan:   { restitution: 0.60, friction: 0.32, rollResistance: 0.055, rollDrag: 0.010, spinCoupling: 0.70, spinRetain: 0.55, plush: 0.05, speedCOR: 0.18, stopSpeed: 0.12, color: 0x9a8a5f },
-  cartpath:  { restitution: 0.72, friction: 0.20, rollResistance: 0.03, rollDrag: 0.004, spinCoupling: 0.80, spinRetain: 0.45, plush: 0.00, speedCOR: 0.10, stopSpeed: 0.10, color: 0x8f8f92 },
+  tee:       { restitution: 0.42, friction: 0.52, rollResistance: 0.14, rollDrag: 0.040, spinCoupling: 0.55, spinRetain: 0.85, plush: 0.30, speedCOR: 0.32, stopSpeed: 0.20, canopy: 0.01, color: 0x4f7a34 },
+  fairway:   { restitution: 0.40, friction: 0.52, rollResistance: 0.130, rollDrag: 0.045, spinCoupling: 0.55, spinRetain: 0.80, plush: 0.36, speedCOR: 0.34, stopSpeed: 0.18, canopy: 0.011, color: 0x5c8a3a },
+  green:     { restitution: 0.33, friction: 0.46, rollResistance: 0.065, rollDrag: 0.024, spinCoupling: 0.24, spinRetain: 0.93, plush: 0.46, speedCOR: 0.30, stopSpeed: 0.11, canopy: 0.004, color: 0x6ba24a },
+  fringe:    { restitution: 0.34, friction: 0.52, rollResistance: 0.11, rollDrag: 0.060, spinCoupling: 0.42, spinRetain: 0.82, plush: 0.40, speedCOR: 0.32, stopSpeed: 0.15, canopy: 0.02, color: 0x5f9540 },
+  rough:     { restitution: 0.20, friction: 0.72, rollResistance: 0.44, rollDrag: 0.150, spinCoupling: 0.85, spinRetain: 0.30, plush: 0.68, speedCOR: 0.42, stopSpeed: 0.36, canopy: 0.055, color: 0x3f6b2c },
+  deepRough: { restitution: 0.13, friction: 0.85, rollResistance: 0.78, rollDrag: 0.280, spinCoupling: 0.95, spinRetain: 0.14, plush: 0.88, speedCOR: 0.52, stopSpeed: 0.52, canopy: 0.075, color: 0x2f5824 },
+  sand:      { restitution: 0.09, friction: 0.90, rollResistance: 1.05, rollDrag: 0.450, spinCoupling: 1.00, spinRetain: 0.05, plush: 0.97, speedCOR: 0.58, stopSpeed: 0.60, canopy: 0.0, color: 0xcdb98b },
+  hardpan:   { restitution: 0.60, friction: 0.32, rollResistance: 0.055, rollDrag: 0.010, spinCoupling: 0.70, spinRetain: 0.55, plush: 0.05, speedCOR: 0.18, stopSpeed: 0.12, canopy: 0.0, color: 0x9a8a5f },
+  cartpath:  { restitution: 0.72, friction: 0.20, rollResistance: 0.03, rollDrag: 0.004, spinCoupling: 0.80, spinRetain: 0.45, plush: 0.00, speedCOR: 0.10, stopSpeed: 0.10, canopy: 0.0, color: 0x8f8f92 },
   water:     { restitution: 0.0,  friction: 1.0,  rollResistance: 1.0,  rollDrag: 1.0,   spinCoupling: 1.0,  spinRetain: 0.0,  plush: 1.0,  speedCOR: 1.0,  stopSpeed: 999,  color: 0x2f6f86, hazard: 'water' },
 };
 
-export function surface(name) {
-  return SURFACES[name] || SURFACES.fairway;
+export const GROUND_FIRMNESS = Object.freeze({
+  soft: Object.freeze({
+    restitution: 0.78, friction: 1.08, rollResistance: 1.30, rollDrag: 1.28,
+    spinCoupling: 1.08, spinRetain: 0.92, plush: 1.22, speedCOR: 1.12,
+  }),
+  medium: Object.freeze({
+    restitution: 1, friction: 1, rollResistance: 1, rollDrag: 1,
+    spinCoupling: 1, spinRetain: 1, plush: 1, speedCOR: 1,
+  }),
+  firm: Object.freeze({
+    restitution: 1.20, friction: 0.90, rollResistance: 0.72, rollDrag: 0.70,
+    spinCoupling: 0.90, spinRetain: 1.06, plush: 0.72, speedCOR: 0.86,
+  }),
+});
+
+const FIRM_SURFACES = Object.freeze(Object.fromEntries(Object.keys(GROUND_FIRMNESS).map((firmness) => {
+  const multiplier = GROUND_FIRMNESS[firmness];
+  const surfaces = Object.fromEntries(Object.entries(SURFACES).map(([name, base]) => {
+    if (base.hazard || name === 'cartpath' || name === 'hardpan') return [name, Object.freeze({ ...base })];
+    const scaled = { ...base };
+    for (const key of ['restitution', 'friction', 'rollResistance', 'rollDrag', 'spinCoupling', 'spinRetain', 'plush', 'speedCOR']) {
+      scaled[key] = base[key] * multiplier[key];
+    }
+    scaled.restitution = Math.min(0.95, scaled.restitution);
+    scaled.friction = Math.min(1.2, scaled.friction);
+    scaled.spinCoupling = Math.min(1, scaled.spinCoupling);
+    scaled.spinRetain = Math.min(0.99, scaled.spinRetain);
+    scaled.plush = Math.min(1, scaled.plush);
+    scaled.speedCOR = Math.min(1, scaled.speedCOR);
+    return [name, Object.freeze(scaled)];
+  }));
+  return [firmness, Object.freeze(surfaces)];
+})));
+
+export function surface(name, firmness = 'medium') {
+  const family = FIRM_SURFACES[firmness];
+  if (!family) throw new RangeError(`Unknown ground firmness "${firmness}"`);
+  return family[name] || family.fairway;
 }
+
+// How far a ball at rest settles DOWN INTO the canopy, metres.
+//
+// Physics treats the heightfield as the contact plane (ball centre = ground +
+// radius), which is right for roll and bounce — but it puts the ball tangent to a
+// mathematical surface, so at ball-level it reads as perched on a painted plane
+// rather than nestled in grass. This is the RENDER offset that fixes that: a fairway
+// swallows ~4 mm of the ball, a green barely 2, and rough genuinely buries it.
+// Capped short of the ball's diameter so even deep rough never hides it completely.
+export function sitDepth(name) {
+  const s = surface(name);
+  return Math.min((s.canopy || 0) * s.plush, BALL_D * 0.62);
+}
+const BALL_D = 0.04267;
 
 // Solid-sphere constants. The impulse needed to bring a slipping contact to
 // pure rolling is (2/7)|u| per unit mass; the angular response uses I = 2/5 m r^2.
@@ -56,7 +106,7 @@ const GRIP = 2 / 7;
 //
 //   vel     incoming velocity (m/s), mutated in place to the outgoing velocity
 //   normal  unit surface normal at the contact point
-//   spin    { axis: Vector3(unit), omega: rad/s } - mutated on exit
+//   spin    { angularVelocity: Vector3(rad/s) } - mutated on exit
 //   surf    a SURFACES entry
 //
 // The tangential behaviour models the ball SKIDDING and, if the contact grabs,
@@ -77,6 +127,9 @@ const _slipHat = new Vector3();
 const _dOmega = new Vector3();
 
 export function resolveBounce(vel, normal, spin, surf) {
+  if (!spin || !(spin.angularVelocity instanceof Vector3)) {
+    throw new TypeError('resolveBounce requires spin.angularVelocity Vector3');
+  }
   _n.copy(normal).normalize();
   const speed = vel.length();
 
@@ -101,7 +154,7 @@ export function resolveBounce(vel, normal, spin, surf) {
   // Contact-point velocity contributed by spin: u_spin = omega x r, with the
   // contact arm r = -n * radius. For backspin this points DOWN range, so the
   // contact slips forward and friction acts backward.
-  _omega.copy(spin.axis).multiplyScalar(spin.omega);
+  _omega.copy(spin.angularVelocity);
   _r.copy(_n).multiplyScalar(-RADIUS);
   _vspin.copy(_omega).cross(_r);
   _vspin.addScaledVector(_n, -_vspin.dot(_n)); // keep purely tangential
@@ -143,8 +196,7 @@ export function resolveBounce(vel, normal, spin, surf) {
 
   // Extra multiplicative spin decay per bounce (grass shear, ball deformation).
   _omega.multiplyScalar(surf.spinRetain);
-  spin.omega = _omega.length();
-  if (spin.omega > 1e-4) spin.axis.copy(_omega).multiplyScalar(1 / spin.omega);
+  spin.angularVelocity.copy(_omega);
 
   // Reassemble outgoing velocity (rebound along +normal, plus tangential).
   _vn.copy(_n).multiplyScalar(reboundVn);

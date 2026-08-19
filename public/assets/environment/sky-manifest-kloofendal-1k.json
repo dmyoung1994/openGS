@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "polyhaven-kloofendal-48d-partly-cloudy-puresky-1k",
+  "url": "/assets/environment/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
+  "sha256": "fd94c84997b8a3c353b62c2125a9b44e19509956986a126e472684432a02d798",
+  "source": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
+  "api": "https://api.polyhaven.com/files/kloofendal_48d_partly_cloudy_puresky",
+  "license": "CC0",
+  "authors": ["Greg Zaal", "Jarod Guest"],
+  "resolution": [1024, 512],
+  "sourceSunDirection": [0.55304, 0.74301, 0.37694],
+  "rotationRadians": -2.962,
+  "notes": "Retained rollback manifest; source solar core is removed in IBL and replaced by the authoritative analytic sun."
+}

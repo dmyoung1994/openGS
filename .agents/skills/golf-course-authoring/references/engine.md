@@ -31,13 +31,25 @@ automatically — you do not set it.
 ```jsonc
 {
   "meta":   { "name": "…", "mode": "realistic|spectacle|hybrid" },
+  "catalogVersion": 2,
+  "placementAlgorithmVersion": 1,
+  "biome": "temperate-maritime",
+  "environmentSeed": 1128746828,
   "bounds": { "minX": -110, "maxX": 110, "minZ": -340, "maxZ": 30 },
   "tee":    { "x": 0, "z": 2, "boxHalfX": 3.2, "z0": -2, "z1": 6 },
   "corridor": { "c0": 32, "k": 0.11, "rough": 26 },  // fairway half-width(m) = c0 + (-z)*k; then a rough band of width `rough`; beyond that, deep rough
   "fringeW": 2.2,                                     // green collar width (m)
   "greens":  [ { "yards": 150, "x": -14, "r": 9, "contour": "spine" } ],
   "bunkers": [ { "x": 20, "z": -86, "r": 5.0, "depth": 1.0, "pot": false } ],
-  "ponds":   [ { "x": 55, "z": -122, "r": 15, "depth": 1.6 } ]
+  "ponds":   [ { "x": 55, "z": -122, "r": 15, "depth": 1.6 } ],
+  "environment": {
+    "objectBudget": 700,
+    "placements": [ { "id": "hero-tree", "assetId": "polyhaven-island-tree-01", "x": -72, "z": -70, "rotationY": 1.15, "scale": 1.55 } ],
+    "scatter": [],
+    "assembly": [],
+    "edgeDressing": [],
+    "exclusions": []
+  }
 }
 ```
 
@@ -57,12 +69,14 @@ automatically — you do not set it.
 - **ponds** — `x`, `z`, `r`, `depth`. A dished water basin with a deterministic
   surface level.
 
-## Not authorable in this engine (yet)
+## Environment dressing
 
-Individual trees / rocks / props (the tree line is procedural and frames the
-corridor automatically), raw terrain elevation, and materials. Requests for those
-map to nothing here — say so rather than faking them. (A future feature may add
-feature-level vegetation; today it is out of scope.)
+Catalog-backed trees, shrubs/groundcover, rocks, and deadwood are authorable through
+`environment.placements`, `scatter`, `assembly`, and `edgeDressing`. Asset IDs must
+exist in `public/assets/environment/catalog.json`; placement is deterministic from
+the course and record seeds, constrained by catalog spacing/slope data, protected
+playing surfaces, exclusions, and the hard object budget. Raw terrain elevation and
+materials remain intentionally non-authorable.
 
 ## Two authoring paths (same course.json)
 

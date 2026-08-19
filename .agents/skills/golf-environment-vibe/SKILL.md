@@ -5,12 +5,10 @@ description: Dress playable golf holes with cohesive, strategic vegetation, rock
 
 # Golf Environment Vibe
 
-> **Not usable in the current claude-golfsim engine.** This skill places props from a
-> licensed external-model catalog via `environmentAssembly` / `scatter` /
-> `dressCourseEdge` commands — none of which exist here. This engine renders a
-> procedural tree line that frames the fairway corridor automatically; there is no
-> per-prop placement API yet. Kept for when feature-level vegetation is added. For
-> course authoring today, use `golf-course-authoring` (see its `references/engine.md`).
+> **Engine mapping:** claude-golfsim supports catalog-backed environment records in
+> `course.json` under `environment.placements`, `scatter`, `assembly`, and
+> `edgeDressing`. Read `golf-course-authoring/references/engine.md` first and map the
+> design guidance below onto those records rather than the legacy command names.
 
 Place real catalog models as a golf architect and landscape ecologist. Never
 create geometric substitutes.
@@ -20,11 +18,10 @@ create geometric substitutes.
 1. Read `references/vibe-recipes.md` to select a palette and composition.
 2. Read `references/placement-zones.md` before emitting placements.
 3. Read `references/composite-assemblies.md` before building an outcrop, tree community, dense edge, or other multi-piece landmark.
-4. Read `references/agent-engine-tools.md` and `references/agent-environment-commands.md` before emitting course-agent commands.
-5. Inspect `apps/web/src/environment-kit.ts` and
-   `apps/web/public/environment-kit/provenance.json`. Use only IDs present in
-   both. Respect each entry's biome, dimensions, slope, spacing, and cluster
-   metadata.
+4. Read the current engine mapping in
+   `../golf-course-authoring/references/engine.md` before editing the course.
+5. Inspect `public/assets/environment/catalog.json`. Use only cataloged IDs and
+   respect each entry's biome, dimensions, slope, spacing, grounding, and provenance.
 6. Classify the prompt on four axes: biome, realistic/spectacle/hybrid,
    sparse/balanced/lush density, and manicured/naturalized finish. Infer only
    when the request is silent.
@@ -33,11 +30,11 @@ create geometric substitutes.
 8. Choose 5–9 compatible IDs with distinct jobs: canopy anchors, middle-story
    masses, low drifts, and optional rock/deadwood punctuation. Use several age
    scales and rotations without exceeding catalog ranges.
-9. Use `environmentAssembly` for signature tree communities and rock outcrops.
-   Use `dressCourseEdge` for layered native-to-maintained transitions. Reserve
-   `place` for a deliberate solitary accent and `scatter` for broad secondary
-   masses, each limited to 2–4 related catalog IDs. Never scatter the whole
-   biome catalog at once.
+9. Use `environment.assembly` for signature communities and rock outcrops.
+   Use `environment.edgeDressing` for layered native-to-maintained transitions.
+   Reserve `environment.placements` for deliberate accents and `scatter` for broad
+   secondary masses, each limited to 2–4 related catalog IDs. Never scatter the
+   whole biome catalog at once.
 10. Use a stable integer seed derived from course name, hole number, zone, and
     palette. Repeating the same request on unchanged terrain must reproduce the
     same layout.

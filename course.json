@@ -2,29 +2,350 @@
   "meta": {
     "name": "Practice Range",
     "mode": "realistic",
-    "schema": 1,
-    "notes": "Feature-level course spec. The engine BAKES terrain from these features (see src/scene/Range.js _height/_surface). There is no raw heightfield here on purpose — authoring is by features, never by terrain editing."
+    "schema": 2,
+    "notes": "Balanced-naturalized alpine practice range with terrain-grounded woodland communities, open strategic corridors, and layered foreground, midground, and mountain-basin depth."
   },
+  "catalogVersion": 2,
+  "placementAlgorithmVersion": 1,
+  "biome": "temperate-alpine",
+  "environmentSeed": 1128746828,
   "bounds": { "minX": -110, "maxX": 110, "minZ": -340, "maxZ": 30 },
   "tee": { "x": 0, "z": 2, "boxHalfX": 3.2, "z0": -2, "z1": 6 },
   "corridor": { "c0": 32, "k": 0.11, "rough": 26 },
   "fringeW": 2.2,
   "greens": [
-    { "yards": 50, "x": -6, "r": 7, "contour": "tilt" },
-    { "yards": 100, "x": 10, "r": 8, "contour": "punchbowl" },
-    { "yards": 150, "x": -14, "r": 9, "contour": "spine" },
-    { "yards": 200, "x": 8, "r": 10, "contour": "tier" },
-    { "yards": 250, "x": -4, "r": 11, "contour": "crown" },
-    { "yards": 300, "x": 16, "r": 11, "contour": "saddle" }
+    { "yards": 50, "x": -6, "r": 7, "contour": "tilt", "shape": [
+      {"x":-12.5,"z":-44.0},{"x":-10.0,"z":-49.8},{"x":-5.0,"z":-52.0},{"x":0.3,"z":-48.2},{"x":0.8,"z":-42.9},{"x":-2.7,"z":-38.9},{"x":-8.4,"z":-39.4}
+    ] },
+    { "yards": 100, "x": 10, "r": 8, "contour": "punchbowl", "shape": [
+      {"x":2.5,"z":-90.0},{"x":5.0,"z":-97.5},{"x":11.5,"z":-100.2},{"x":17.6,"z":-96.0},{"x":18.4,"z":-89.4},{"x":13.6,"z":-84.0},{"x":6.6,"z":-84.8}
+    ] },
+    { "yards": 150, "x": -14, "r": 9, "contour": "spine", "shape": [
+      {"x":-22.7,"z":-136.0},{"x":-20.0,"z":-144.5},{"x":-12.5,"z":-147.0},{"x":-5.2,"z":-141.6},{"x":-5.8,"z":-133.8},{"x":-11.0,"z":-128.4},{"x":-18.8,"z":-130.0}
+    ] },
+    { "yards": 200, "x": 8, "r": 10, "contour": "tier", "shape": [
+      {"x":-1.4,"z":-181.0},{"x":2.1,"z":-190.0},{"x":10.8,"z":-193.0},{"x":18.1,"z":-187.0},{"x":17.3,"z":-178.8},{"x":11.2,"z":-173.0},{"x":3.4,"z":-175.0}
+    ] },
+    { "yards": 250, "x": -4, "r": 11, "contour": "crown", "shape": [
+      {"x":-14.4,"z":-225.0},{"x":-11.8,"z":-234.8},{"x":-2.4,"z":-239.0},{"x":6.6,"z":-233.1},{"x":6.1,"z":-223.8},{"x":0.0,"z":-217.2},{"x":-8.8,"z":-218.5}
+    ] },
+    { "yards": 300, "x": 16, "r": 11, "contour": "saddle", "shape": [
+      {"x":5.7,"z":-272.8},{"x":9.2,"z":-283.0},{"x":18.6,"z":-286.8},{"x":27.3,"z":-280.2},{"x":26.0,"z":-270.2},{"x":19.8,"z":-264.1},{"x":10.8,"z":-265.7}
+    ] }
   ],
   "bunkers": [
-    { "x": 20, "z": -86, "r": 5.0, "depth": 1.0, "pot": false },
+    { "x": 20, "z": -86, "r": 5.0, "depth": 1.0, "pot": false, "shape": [
+      {"x":15.1,"z":-85.0},{"x":17.2,"z":-90.1},{"x":21.9,"z":-91.0},{"x":25.3,"z":-87.2},{"x":23.7,"z":-82.1},{"x":18.9,"z":-81.3}
+    ] },
     { "x": 1, "z": -99, "r": 3.0, "depth": 2.0, "pot": true },
-    { "x": -25, "z": -132, "r": 5.4, "depth": 1.1, "pot": false },
-    { "x": -30, "z": -119, "r": 4.6, "depth": 0.7, "pot": false },
-    { "x": 6, "z": -190, "r": 5.6, "depth": 1.0, "pot": false }
+    { "x": -25, "z": -132, "r": 5.4, "depth": 1.1, "pot": false, "shape": [
+      {"x":-30.3,"z":-130.8},{"x":-28.0,"z":-136.7},{"x":-22.4,"z":-137.0},{"x":-19.4,"z":-132.7},{"x":-22.0,"z":-127.0},{"x":-27.4,"z":-127.3}
+    ] },
+    { "x": -30, "z": -119, "r": 4.6, "depth": 0.7, "pot": false, "shape": [
+      {"x":-34.4,"z":-118.1},{"x":-32.7,"z":-123.2},{"x":-28.1,"z":-123.5},{"x":-25.2,"z":-120.0},{"x":-27.2,"z":-114.6},{"x":-31.7,"z":-114.8}
+    ] },
+    { "x": 6, "z": -190, "r": 5.6, "depth": 1.0, "pot": false, "shape": [
+      {"x":0.6,"z":-189.0},{"x":2.6,"z":-195.4},{"x":8.4,"z":-195.7},{"x":11.9,"z":-191.4},{"x":9.8,"z":-184.4},{"x":4.1,"z":-184.5}
+    ] },
+    { "x": 4, "z": -276, "r": 5.6, "depth": 1.1, "pot": false, "shape": [
+      {"x":-1.8,"z":-274.8},{"x":0.7,"z":-281.0},{"x":6.4,"z":-282.2},{"x":9.8,"z":-278.0},{"x":7.4,"z":-272.4},{"x":2.0,"z":-271.0}
+    ] },
+    { "x": 28, "z": -267, "r": 4.4, "depth": 0.85, "pot": false, "shape": [
+      {"x":23.6,"z":-266.2},{"x":25.4,"z":-271.1},{"x":29.8,"z":-271.5},{"x":32.4,"z":-268.1},{"x":30.7,"z":-263.4},{"x":26.2,"z":-263.2}
+    ] }
   ],
   "ponds": [
-    { "x": 55, "z": -122, "r": 15, "depth": 1.6 }
-  ]
+    { "x": 55, "z": -122, "r": 15, "depth": 1.6, "shape": [
+      { "x": 71, "z": -124 },
+      { "x": 69, "z": -115 },
+      { "x": 63, "z": -110 },
+      { "x": 57, "z": -112 },
+      { "x": 52, "z": -114 },
+      { "x": 52, "z": -115 },
+      { "x": 47, "z": -112 },
+      { "x": 41, "z": -114 },
+      { "x": 38, "z": -121 },
+      { "x": 41, "z": -129 },
+      { "x": 48, "z": -134 },
+      { "x": 57, "z": -136 },
+      { "x": 66, "z": -132 },
+      { "x": 70, "z": -126 }
+    ] }
+  ],
+  "environment": {
+    "objectBudget": 700,
+    "placements": [
+      { "id": "alpine-anchor-left-front", "assetId": "polyhaven-fir-sapling-medium", "x": -76, "z": -70, "rotationY": 1.15, "scale": 1.2 },
+      { "id": "alpine-anchor-right-pond", "assetId": "polyhaven-fir-sapling-medium", "x": 82, "z": -104, "rotationY": 4.35, "scale": 1.12 },
+      { "id": "alpine-anchor-left-mid", "assetId": "polyhaven-fir-sapling-medium", "x": -94, "z": -205, "rotationY": 2.4, "scale": 1.28 },
+      { "id": "alpine-anchor-right-back", "assetId": "polyhaven-fir-sapling-medium", "x": 99, "z": -250, "rotationY": 5.2, "scale": 1.08 },
+      { "id": "alpine-frame-left", "assetId": "polyhaven-fir-sapling-medium", "x": -80, "z": -120, "rotationY": 0.72, "scale": 1.34 },
+      { "id": "alpine-frame-right", "assetId": "polyhaven-fir-sapling-medium", "x": 84, "z": -152, "rotationY": 3.86, "scale": 1.3 },
+      { "id": "alpine-larch-accent-left-mid", "assetId": "blenderkit-golden-larch", "x": -96, "z": -150, "rotationY": 1.4, "scale": 0.46 },
+      { "id": "alpine-larch-accent-right-front", "assetId": "blenderkit-golden-larch", "x": 98, "z": -66, "rotationY": 3.9, "scale": 0.4 },
+      { "id": "alpine-larch-accent-left-back", "assetId": "blenderkit-golden-larch", "x": -92, "z": -262, "rotationY": 5.6, "scale": 0.5 },
+      { "id": "alpine-midtier-left", "assetId": "blenderkit-grand-fir", "x": -84, "z": -96, "rotationY": 2.1, "scale": 1.95 },
+      { "id": "alpine-midtier-right", "assetId": "blenderkit-grand-fir", "x": 86, "z": -186, "rotationY": 4.4, "scale": 1.85 },
+      { "id": "alpine-understory-left-tee", "assetId": "blenderkit-grand-fir", "x": -76, "z": -28, "rotationY": 5.3, "scale": 1.31 },
+      { "id": "alpine-understory-right-tee", "assetId": "blenderkit-grand-fir", "x": 76, "z": -34, "rotationY": 1.1, "scale": 1.45 },
+      { "id": "alpine-understory-left-pond", "assetId": "blenderkit-grand-fir", "x": -76, "z": -128, "rotationY": 2.9, "scale": 1.59 },
+      { "id": "alpine-understory-right-pond", "assetId": "blenderkit-grand-fir", "x": 88, "z": -144, "rotationY": 4.8, "scale": 1.35 },
+      { "id": "alpine-understory-left-back", "assetId": "blenderkit-grand-fir", "x": -78, "z": -226, "rotationY": 0.55, "scale": 1.49 },
+      { "id": "alpine-understory-right-back", "assetId": "blenderkit-grand-fir", "x": 78, "z": -242, "rotationY": 3.7, "scale": 1.26 },
+      { "id": "fallen-trunk-left-front", "assetId": "polyhaven-dead-tree-trunk", "x": -62, "z": -55, "rotationY": 0.42, "scale": 1.08 },
+      { "id": "fallen-trunk-right-mid", "assetId": "polyhaven-dead-tree-trunk", "x": 82, "z": -145, "rotationY": 2.65, "scale": 0.92 },
+      { "id": "fallen-trunk-left-back", "assetId": "polyhaven-dead-tree-trunk", "x": -90, "z": -225, "rotationY": 5.55, "scale": 1.16 }
+    ],
+    "scatter": [
+      {
+        "id": "fern-drift-left-foreground",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 715031,
+        "count": 32,
+        "region": { "kind": "bounds", "minX": -60, "maxX": -51, "minZ": -84, "maxZ": -42 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-drift-right-moisture",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 448219,
+        "count": 30,
+        "region": { "kind": "bounds", "minX": 80, "maxX": 89, "minZ": -155, "maxZ": -106 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-drift-left-mid",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 291774,
+        "count": 38,
+        "region": { "kind": "bounds", "minX": -78, "maxX": -67, "minZ": -205, "maxZ": -155 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-drift-right-mid",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 903315,
+        "count": 34,
+        "region": { "kind": "bounds", "minX": 76, "maxX": 86, "minZ": -225, "maxZ": -170 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-drift-left-backdrop",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 185227,
+        "count": 32,
+        "region": { "kind": "bounds", "minX": -90, "maxX": -78, "minZ": -302, "maxZ": -250 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-drift-right-backdrop",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 672943,
+        "count": 32,
+        "region": { "kind": "bounds", "minX": 82, "maxX": 96, "minZ": -320, "maxZ": -250 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-contact-left-front-log",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 810443,
+        "count": 6,
+        "region": { "kind": "bounds", "minX": -66, "maxX": -59, "minZ": -61, "maxZ": -51 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-contact-right-mid-log",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 375184,
+        "count": 6,
+        "region": { "kind": "bounds", "minX": 81, "maxX": 88, "minZ": -151, "maxZ": -141 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-contact-left-back-log",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 529661,
+        "count": 6,
+        "region": { "kind": "bounds", "minX": -95, "maxX": -86, "minZ": -231, "maxZ": -220 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-contact-left-outcrop",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 694082,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": -66, "maxX": -54, "minZ": -107, "maxZ": -80 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-contact-pond-outcrop",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 247901,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": 76, "maxX": 82, "minZ": -114, "maxZ": -107 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-contact-back-outcrop",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 951623,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": -84, "maxX": -69, "minZ": -252, "maxZ": -223 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-understory-left-foreground",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 404817,
+        "count": 28,
+        "region": { "kind": "bounds", "minX": -104, "maxX": -76, "minZ": -105, "maxZ": 10 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-understory-right-foreground",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 736205,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": 78, "maxX": 106, "minZ": -70, "maxZ": 10 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-understory-left-midground",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 148639,
+        "count": 24,
+        "region": { "kind": "bounds", "minX": -106, "maxX": -86, "minZ": -220, "maxZ": -120 },
+        "minSpacing": 1.8
+      },
+      {
+        "id": "fern-understory-right-midground",
+        "assetIds": ["polyhaven-fern-02"],
+        "seed": 863941,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": 95, "maxX": 107, "minZ": -220, "maxZ": -90 },
+        "minSpacing": 1.8
+      }
+    ],
+    "assembly": [
+      {
+        "id": "alpine-rock-outcrop-left",
+        "assetIds": ["polyhaven-boulder-01"],
+        "seed": 630411,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": -64, "maxX": -55, "minZ": -105, "maxZ": -82 },
+        "minSpacing": 2.2,
+        "semantic": "rock-outcrop"
+      },
+      {
+        "id": "alpine-rock-outcrop-pond",
+        "assetIds": ["polyhaven-boulder-01"],
+        "seed": 888047,
+        "count": 3,
+        "region": { "kind": "bounds", "minX": 76, "maxX": 82, "minZ": -114, "maxZ": -107 },
+        "minSpacing": 2.2,
+        "semantic": "rock-outcrop"
+      },
+      {
+        "id": "alpine-rock-outcrop-back",
+        "assetIds": ["polyhaven-boulder-01"],
+        "seed": 377514,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": -82, "maxX": -70, "minZ": -250, "maxZ": -225 },
+        "minSpacing": 2.2,
+        "semantic": "rock-outcrop"
+      },
+      {
+        "id": "habitat-deadwood-left-midground",
+        "assetIds": ["polyhaven-dead-tree-trunk"],
+        "seed": 590337,
+        "count": 3,
+        "region": { "kind": "bounds", "minX": -103, "maxX": -89, "minZ": -190, "maxZ": -145 },
+        "minSpacing": 4,
+        "semantic": "habitat-cluster"
+      },
+      {
+        "id": "habitat-deadwood-right-midground",
+        "assetIds": ["polyhaven-dead-tree-trunk"],
+        "seed": 206754,
+        "count": 3,
+        "region": { "kind": "bounds", "minX": 95, "maxX": 107, "minZ": -205, "maxZ": -145 },
+        "minSpacing": 4,
+        "semantic": "habitat-cluster"
+      },
+      {
+        "id": "forest-cluster-left-foreground",
+        "assetIds": ["polyhaven-fir-sapling-medium", "blenderkit-grand-fir"],
+        "seed": 103841,
+        "count": 6,
+        "region": { "kind": "bounds", "minX": -105, "maxX": -68, "minZ": -112, "maxZ": 8 },
+        "minSpacing": 7,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "forest-cluster-right-foreground",
+        "assetIds": ["polyhaven-fir-sapling-medium", "blenderkit-grand-fir"],
+        "seed": 970301,
+        "count": 5,
+        "region": { "kind": "bounds", "minX": 68, "maxX": 105, "minZ": -78, "maxZ": 8 },
+        "minSpacing": 7,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "forest-cluster-left-midground",
+        "assetIds": ["polyhaven-fir-sapling-medium", "blenderkit-grand-fir"],
+        "seed": 516029,
+        "count": 6,
+        "region": { "kind": "bounds", "minX": -106, "maxX": -78, "minZ": -220, "maxZ": -132 },
+        "minSpacing": 7,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "forest-cluster-right-midground",
+        "assetIds": ["polyhaven-fir-sapling-medium", "blenderkit-grand-fir"],
+        "seed": 331907,
+        "count": 5,
+        "region": { "kind": "bounds", "minX": 96, "maxX": 107, "minZ": -220, "maxZ": -96 },
+        "minSpacing": 7,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "forest-cluster-left-shoulder",
+        "assetIds": ["polyhaven-fir-sapling-medium"],
+        "seed": 128907,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": -106, "maxX": -70, "minZ": -178, "maxZ": -130 },
+        "minSpacing": 7,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "forest-cluster-right-shoulder",
+        "assetIds": ["polyhaven-fir-sapling-medium"],
+        "seed": 721643,
+        "count": 3,
+        "region": { "kind": "bounds", "minX": 96, "maxX": 106, "minZ": -170, "maxZ": -102 },
+        "minSpacing": 7,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "grandfir-grove-left-tee",
+        "assetIds": ["blenderkit-grand-fir"],
+        "seed": 604117,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": -100, "maxX": -80, "minZ": -60, "maxZ": -14 },
+        "minSpacing": 6,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "grandfir-grove-right-mid",
+        "assetIds": ["blenderkit-grand-fir"],
+        "seed": 285093,
+        "count": 4,
+        "region": { "kind": "bounds", "minX": 80, "maxX": 100, "minZ": -132, "maxZ": -88 },
+        "minSpacing": 6,
+        "semantic": "forest-cluster"
+      }
+    ],
+    "edgeDressing": [],
+    "exclusions": []
+  }
 }
