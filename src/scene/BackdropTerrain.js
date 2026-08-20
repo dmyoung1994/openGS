@@ -252,7 +252,7 @@ function alpineSampler(terrain, bounds, seed, composition) {
     // leaving its two flanking shoulders standing; at 0.68 the lobe was still
     // at 0.78 a half-radian off centre, so the fade that opens the U was also
     // flattening the shoulders that frame it.
-    const openingWindow = angularLobe(azimuth, composition.openingAzimuth, 0.52)
+    const openingWindow = angularLobe(azimuth, composition.openingAzimuth, 0.60)
       * smootherstep(220, 820, radial) * (1 - smootherstep(1320, 2100, radial));
     const openingSaddle = openingWindow * (68 + smootherstep(500, 1220, radial) * 14);
     // The broad U-window frames the basin, but its centre must fall below the
@@ -1640,10 +1640,10 @@ function worldMaterial(name, biome, {
   const directBandJitter = macroValue.sub(0.5).mul(150.0);
   const directAltitudeExposure = smoothstep(125.0, 405.0,
     altitude.add(directBandJitter));
-  const directRockSignal = rockGate.mul(0.42).add(cliffGate.mul(0.36))
-    .add(directSlopeExposure.mul(0.30)).add(directAltitudeExposure.mul(0.28))
-    .add(benchGate.mul(0.10)).sub(treeGate.mul(0.38));
-  const directRock = smoothstep(0.28, 0.68, directRockSignal);
+  const directRockSignal = rockGate.mul(0.48).add(cliffGate.mul(0.42))
+    .add(directSlopeExposure.mul(0.45)).add(directAltitudeExposure.mul(0.20))
+    .add(benchGate.mul(0.12)).sub(treeGate.mul(0.18));
+  const directRock = smoothstep(0.24, 0.62, directRockSignal);
   const depositionalSlope = smoothstep(0.12, 0.30, slope)
     .mul(float(1.0).sub(smoothstep(0.48, 0.72, slope)));
   const directScreeSource = screeGate.mul(0.62).add(washGate.mul(0.34))
@@ -1691,8 +1691,9 @@ function worldMaterial(name, biome, {
   const directWeathering = jointShoulder.mul(0.62)
     .add(directCavity.mul(0.38)).clamp(0.0, 1.0);
 
-  const directConifer = linearRGB(0x344438);
-  const directMeadow = linearRGB(0x687656);
+  const directForestShade = linearRGB(0x465748);
+  const directForestLit = linearRGB(0x68745a);
+  const directMeadow = linearRGB(0x7d8864);
   const directGraniteBase = linearRGB(0x474c4e);
   const directGraniteFresh = linearRGB(0x747a7c);
   const directGraniteCavity = linearRGB(0x252a2d);
@@ -1703,10 +1704,18 @@ function worldMaterial(name, biome, {
   const directSnowLit = linearRGB(0xe4edf1);
   const directSnowShade = linearRGB(0x8ca2b0);
 
-  const directMeadowShare = smoothstep(0.30, 0.72,
-    float(1.0).sub(treeGate).mul(0.62).add(macroValue.mul(0.24))
-      .add(smoothstep(80.0, 250.0, altitude).mul(0.14)));
-  let directAlbedo = mix(directConifer, directMeadow, directMeadowShare);
+  const directForestVariation = macroValue.mul(0.42).add(mesoValue.mul(0.38))
+    .add(fineValue.mul(0.20));
+  const directForest = mix(directForestShade, directForestLit,
+    smoothstep(0.26, 0.74, directForestVariation))
+    // The near toe is a mixed alpine ground surface, not a solid conifer card.
+    // Reuse the registered 90 m scan as restrained ground-value breakup while
+    // preserving the forest hue and the exclusive rock/scree substrate masks.
+    .mul(rockScanValue.mul(0.30).add(0.82));
+  const directMeadowShare = smoothstep(0.24, 0.70,
+    float(1.0).sub(treeGate).mul(0.54).add(macroValue.mul(0.18))
+      .add(benchGate.mul(0.16)).add(smoothstep(65.0, 230.0, altitude).mul(0.12)));
+  let directAlbedo = mix(directForest, directMeadow, directMeadowShare);
   let directRockColor = mix(directGraniteBase, directGraniteFresh,
     rockScanValue.mul(0.68).add(directSlab.mul(0.18)).clamp(0.0, 0.86));
   const rockScanChroma = rockScan.div(rockScanLuma.add(0.025)).clamp(0.72, 1.32);

@@ -621,7 +621,7 @@ test('alpine opening reveals a smooth near-wall U-shaped saddle', async () => {
   // Coefficients retuned with the landform model. The window is narrower so the
   // shoulders that frame the U survive it, and the cut is shallower because the
   // surrounding wall is no longer 880 m of radial ramp it had to fight.
-  assert.match(source, /const openingWindow = angularLobe\(azimuth, composition\.openingAzimuth, 0\.52\)/);
+  assert.match(source, /const openingWindow = angularLobe\(azimuth, composition\.openingAzimuth, 0\.60\)/);
   assert.match(source, /const openingSaddle = openingWindow \* \(68 \+ smootherstep\(500, 1220, radial\) \* 14\)/);
   assert.match(source, /const openingShoulderFade = 1 - openingWindow \* 0\.50/);
   assert.match(source, /const openingLandformFade = 1 - openingWindow \* 0\.40/);

@@ -188,9 +188,9 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
   assert.match(source, /const exposureByAltitude\s*=\s*0\.36\s*\+\s*smootherstep/, 'rock exposure must transition through alpine vegetation and retain lower-wall outcrops');
   assert.match(source, /const directSlopeExposure = smoothstep\(0\.22, 0\.62, slope\)/,
     'shared PBR must expose rock from the analytic surface slope');
-  assert.match(source, /const directRockSignal = rockGate\.mul\(0\.42\)\.add\(cliffGate\.mul\(0\.36\)\)/,
+  assert.match(source, /const directRockSignal = rockGate\.mul\(0\.48\)\.add\(cliffGate\.mul\(0\.42\)\)/,
     'one authored substrate signal must classify exposed rock');
-  assert.match(source, /const directRock = smoothstep\(0\.28, 0\.68, directRockSignal\)/,
+  assert.match(source, /const directRock = smoothstep\(0\.24, 0\.62, directRockSignal\)/,
     'rock ownership needs a bounded transition into vegetation');
   assert.match(source, /material\.positionNode = vec3\(vertexX, vertexY, vertexZ\)[\s\S]*?\.add\(normalGeometry\.mul\(vertexDisplacement\.mul\(shellFade\)\)\)/,
     'alpine shell must carry bounded GPU vertex relief through the existing topology');
