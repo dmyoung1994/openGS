@@ -4,7 +4,7 @@ import {
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { Storage3DTexture } from 'three/webgpu';
 import {
-  cameraPosition, exp, float, fract, Fn, globalId, If,
+  Break, cameraPosition, exp, float, fract, Fn, globalId, If, Loop,
   max, min, mix, mx_noise_float, mx_worley_noise_float, oneMinus, equirectUV,
   positionWorldDirection, screenCoordinate, smoothstep,
   texture as textureNode, texture3D, textureStore, uniform, vec2, vec3, vec4,
@@ -16,11 +16,11 @@ import { EnvironmentGpuBindings } from '../environment/EnvironmentGpuBindings.js
 // optional HDR is only a clear-sky/IBL source; it never supplies cloud data.
 
 const MIN_RAY_STEPS = 4;
-const MAX_RAY_STEPS = 20;
+const MAX_RAY_STEPS = 32;
 const MIN_LIGHT_SAMPLES = 1;
 const MAX_LIGHT_SAMPLES = 1;
 const MIN_LIGHT_PROBE_STEPS = 3;
-const MAX_LIGHT_PROBE_STEPS = 3;
+const MAX_LIGHT_PROBE_STEPS = 16;
 const MIN_NOISE_OCTAVES = 2;
 const MAX_NOISE_OCTAVES = 4;
 const MIN_INTERNAL_SCALE = 0.125;
@@ -30,6 +30,7 @@ const CLOUD_TARGET_SCALE = 0.25;
 // Finite X/Z bounds prevent horizon rays from marching forever. The extent covers
 // the playable range and distant alpine wall while keeping the AABB arithmetic small.
 const CLOUD_HORIZONTAL_EXTENT = 24000;
+const CLOUD_VISIBLE_DISTANCE = 5000;
 const CLOUD_EMPTY_THRESHOLD = 0.018;
 // Extinction is in inverse world metres. Keep optical thickness in the stable range
 // of the bounded low-resolution raymarch so crowns retain gray cores and bases.
@@ -142,13 +143,13 @@ export const WEATHER_SKY_WORKLOADS = Object.freeze({
   // One low-resolution target performs a global AABB/slab march. The history node
   // ping-pongs that same target before the full-resolution scene TRAA.
   high: Object.freeze({
-    id: 'high', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, lightProbeSteps: 3, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'high', internalScale: CLOUD_TARGET_SCALE, raySteps: 16, lightTransportSamples: 1, lightProbeSteps: 8, noiseOctaves: 2, jitterPeriod: 64,
   }),
   balanced: Object.freeze({
-    id: 'balanced', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, lightProbeSteps: 3, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'balanced', internalScale: CLOUD_TARGET_SCALE, raySteps: 16, lightTransportSamples: 1, lightProbeSteps: 8, noiseOctaves: 2, jitterPeriod: 64,
   }),
   conservative: Object.freeze({
-    id: 'conservative', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, lightProbeSteps: 3, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'conservative', internalScale: CLOUD_TARGET_SCALE, raySteps: 16, lightTransportSamples: 1, lightProbeSteps: 8, noiseOctaves: 2, jitterPeriod: 64,
   }),
 });
 
@@ -221,6 +222,7 @@ export class WeatherSky {
 
     // IBL intentionally excludes the measured solar disc; the authoritative
     // DirectionalLight owns direct sun/shadows and visible sky adds its analytic disc.
+    this.clearBackgroundNode = this._buildSkyRadianceNode({ includeSun: true });
     this.iblBackgroundNode = this._buildSkyRadianceNode({ includeSun: false });
     this.backgroundNode = this._buildBackgroundNode();
     this.outputNode = this.backgroundNode;
@@ -260,13 +262,33 @@ export class WeatherSky {
       const cellBillow = oneMinus(smoothstep(0.10, 0.68, cellDistance));
       const weatherNoise = mx_noise_float(carrierXZ.mul(0.58).add(vec2(13.7, 41.9)))
         .mul(0.5).add(0.5);
-      const weatherGate = smoothstep(0.24, 0.58,
-        cellBillow.mul(0.80).add(weatherNoise.mul(0.20)));
+      const parcelDistance = mx_worley_noise_float(
+        seededDomain.mul(vec3(0.72, 0.94, 0.72)).add(vec3(7.1, 19.3, 3.7)), 1,
+      ).max(0).sqrt();
+      const parcelBillow = oneMinus(smoothstep(0.12, 0.70, parcelDistance));
+      const weather3D = mx_noise_float(
+        seededDomain.mul(vec3(0.46, 0.58, 0.46)).add(vec3(9.7, 2.1, 27.3)),
+      ).mul(0.5).add(0.5);
+      const lobeDistance = mx_worley_noise_float(
+        seededDomain.mul(vec3(3.05, 2.42, 3.05)).add(vec3(31.7, 5.3, 17.9)), 1,
+      ).max(0).sqrt();
+      const lobeBillow = oneMinus(smoothstep(0.09, 0.66, lobeDistance));
+      const macroCarrier = parcelBillow.mul(0.76).add(weather3D.mul(0.24));
+      const macroWeather = smoothstep(0.16, 0.54,
+        macroCarrier.mul(0.88).add(weatherNoise.mul(0.12)));
+      const lobeGate = smoothstep(0.16, 0.62,
+        lobeBillow.mul(0.82).add(weatherNoise.mul(0.18)));
+      // The lobe field must own enough of the boundary to break kilometre-scale
+      // carrier balloons into connected cauliflower towers. This is a remap of an
+      // already generated channel, so it adds no runtime raymarch samples.
+      const weatherGate = macroWeather.mul(float(0.60).add(lobeGate.mul(0.40)));
       const columnNoise = mx_noise_float(weatherXZ.mul(0.82).add(vec2(73.1, 19.4)))
         .mul(0.5).add(0.5);
       const cloudTop = float(0.60).add(columnNoise.mul(0.27));
       const normalizedHeight = uv.y;
-      const baseProfile = smoothstep(0.025, 0.15, normalizedHeight);
+      const localBase = oneMinus(parcelBillow).mul(0.065)
+        .add(oneMinus(weatherNoise).mul(0.025));
+      const baseProfile = smoothstep(localBase, localBase.add(0.14), normalizedHeight);
       const shoulderProfile = smoothstep(0.10, 0.34, normalizedHeight);
       const topProfile = oneMinus(smoothstep(
         cloudTop.sub(0.14), cloudTop.add(0.035), normalizedHeight,
@@ -282,18 +304,19 @@ export class WeatherSky {
       const billow = base.mul(0.54).add(worleyBillow.mul(0.31)).add(broad.mul(0.15)).clamp(0, 1);
       const cauliflower = worleyBillow.mul(0.74).add(base.mul(0.16)).add(broad.mul(0.10));
       const billowShape = cauliflower.mul(0.66).add(billow.mul(0.22)).add(broad.mul(0.12));
-      const detail = mx_noise_float(domain.mul(4.40).add(vec3(11.7, 31.2, 7.4)))
+      const detail = mx_noise_float(domain.mul(2.55).add(vec3(11.7, 31.2, 7.4)))
         .mul(0.5).add(0.5);
-      const erosion = mx_noise_float(domain.mul(6.20).add(vec3(23.1, 4.7, 11.9)))
+      const erosion = mx_noise_float(domain.mul(3.65).add(vec3(23.1, 4.7, 11.9)))
         .mul(0.5).add(0.5);
       const billowBoundary = smoothstep(0.18, 0.48, billowShape)
         .mul(oneMinus(smoothstep(0.58, 0.86, billowShape)));
       const boundaryErosion = float(0.74).mix(erosion, billowBoundary);
       const occupancy = weatherGate.mul(towerProfile)
         .mul(float(0.72).add(cauliflower.mul(0.28))).clamp(0, 1);
-      const density = occupancy.mul(
-        smoothstep(0.15, 0.48, billowShape).mul(0.76).add(0.24),
-      );
+      // Keep intrinsic billow density independent from occupancy. Runtime combines
+      // R × A exactly once; baking occupancy into R here squared the carrier,
+      // erasing margins and leaving broad, posterized interior plateaus.
+      const density = smoothstep(0.15, 0.48, billowShape).mul(0.76).add(0.24);
       textureStore(volume, voxel, vec4(density, detail, boundaryErosion, occupancy)).toWriteOnly();
     })().compute(
       [CLOUD_VOLUME_DISPATCH, CLOUD_VOLUME_DISPATCH, CLOUD_VOLUME_DISPATCH],
@@ -393,11 +416,16 @@ export class WeatherSky {
     const advected = worldPosition.sub(localWind.mul(localAdvectionTime));
     const rotatedX = advected.x.mul(0.8480).sub(advected.z.mul(0.5299));
     const rotatedZ = advected.x.mul(0.5299).add(advected.z.mul(0.8480));
-    return fract(vec3(
-      rotatedX.mul(0.00032),
+    const phase = vec3(
+      rotatedX.mul(0.00018),
       advected.y.mul(0.00030),
-      rotatedZ.mul(0.00032),
-    ).add(vec3(0.37, 0.13, 0.61)));
+      rotatedZ.mul(0.00018),
+    ).add(vec3(0.37, 0.13, 0.61));
+    // Mirror the finite volume instead of fract-wrapping a non-tileable field.
+    // The old discontinuity jumped between unrelated edge voxels and produced
+    // kilometer-tall rectangular seams. Triangle folding is continuous at both
+    // ends and costs no additional volume sample.
+    return oneMinus(fract(phase.mul(0.5)).mul(2).sub(1).abs());
   }
 
   _cloudVolumeSample(worldPosition, time, wind = null, advectionTime = null) {
@@ -424,7 +452,7 @@ export class WeatherSky {
   // remain empty without a coverage floor or a near-zero remap.
   _cloudDensityFromVolume(volume, normalizedHeight, clouds, detail = true) {
     const rawCarrier = volume.x.mul(volume.w).clamp(0, 1);
-    const coverageThreshold = float(0.10).add(oneMinus(clouds.x.clamp(0, 1)).mul(0.06));
+    const coverageThreshold = float(0.08).add(oneMinus(clouds.x.clamp(0, 1)).mul(0.06));
     const baseCarrier = smoothstep(coverageThreshold, coverageThreshold.add(0.18), rawCarrier);
     const vertical = this._heightGradient(normalizedHeight, volume);
     const detailSignal = volume.y.mul(0.58).add(volume.z.mul(0.42));
@@ -432,9 +460,9 @@ export class WeatherSky {
     // Only the carrier margin is allowed to move. Dense interiors have a saturated
     // baseCarrier and therefore zero edgeWindow, preserving their core extinction;
     // sparse parcels inherit bounded detail/erosion breakup at the boundary.
-    const edgeWindow = oneMinus(smoothstep(0.48, 0.84, baseCarrier));
-    const thresholdShift = detailSignal.sub(0.5).mul(0.035)
-      .add(erosion.sub(0.5).mul(0.025)).mul(edgeWindow);
+    const edgeWindow = oneMinus(smoothstep(0.56, 0.94, baseCarrier));
+    const thresholdShift = detailSignal.sub(0.5).mul(0.080)
+      .add(erosion.mul(0.105)).mul(edgeWindow);
     const shiftedThreshold = coverageThreshold.add(thresholdShift);
     const carrier = smoothstep(shiftedThreshold, shiftedThreshold.add(0.18), rawCarrier);
     // The carrier controls parcel occupancy; this second bounded field controls
@@ -442,13 +470,15 @@ export class WeatherSky {
     // creates rounded crowns and shadow pockets instead of a uniform translucent
     // sheet while still using only channels from the same GPU-generated voxel.
     const fineShape = smoothstep(
-      0.28, 0.68,
-      volume.x.mul(0.35).add(volume.y.mul(0.42)).add(oneMinus(volume.z).mul(0.23)),
+      0.44, 0.61,
+      volume.y.mul(0.62).add(oneMinus(volume.z).mul(0.38)),
     );
+    const solidCore = smoothstep(0.84, 0.98, baseCarrier);
+    const carvedShape = max(solidCore, fineShape.mul(float(0.38).add(baseCarrier.mul(0.62))));
     const variation = detail
-      ? float(0.06).add(fineShape.mul(0.76)).add(detailSignal.mul(0.18))
+      ? carvedShape.mul(0.94).add(detailSignal.mul(0.06))
       : float(0.72).add(volume.y.mul(0.08));
-    return carrier.mul(vertical).mul(variation).mul(clouds.y).clamp(0, 1);
+    return carrier.mul(vertical).mul(variation).mul(clouds.y.mul(1.55)).clamp(0, 1);
   }
 
   _cloudDensity(worldPosition, time, wind = null, advectionTime = null,
@@ -528,8 +558,7 @@ export class WeatherSky {
     // Integrate the complete finite AABB interval. The authored horizontal bounds
     // make even a grazing sky ray finite; truncating this interval creates a hard
     // 2.8 km horizon slice that reads as a rectangular cloud card.
-    const marchLength = rayLength;
-    const stepLength = marchLength.div(steps);
+    const marchLength = rayLength.min(CLOUD_VISIBLE_DISTANCE);
     const centre = cameraOrigin.add(direction.mul(rayEntry.add(marchLength.mul(0.5))));
     const wind = this.environment.windAt(centre, time);
     const advectionTime = time.mul(this.environment.cloudAdvectionScale);
@@ -550,10 +579,12 @@ export class WeatherSky {
     const sunTint = this.environment.sunColor
       .mul(this.environment.sunIlluminanceScale.max(0).pow(0.35));
     const ambientTop = this.environment.skyRadiance(vec3(0, 1, 0), { includeSun: false });
+    const ambientLuma = ambientTop.dot(vec3(0.2126, 0.7152, 0.0722));
+    const cloudAmbient = mix(ambientTop, vec3(ambientLuma), 0.75);
 
-    // Static unrolled samples use six primary taps grouped into three adjacent
-    // pairs. Each pair shares one midpoint sun probe (9 volume fetches worst case),
-    // while optical transmittance is still updated independently per segment.
+    // Adaptive marcher: empty macro cells advance coarsely; occupied cells use
+    // short integration steps and a paired sun probe. This follows the production
+    // SDF/coarse-to-fine pattern without a CPU cloud proxy or texture readback.
     const hasMarchState = marchState && typeof marchState === 'object';
     const representativeDistance = hasMarchState ? float(0).toVar() : null;
     if (hasMarchState) {
@@ -577,50 +608,65 @@ export class WeatherSky {
         this.currentJitter.x.mul(1.7).add(this.currentJitter.y.mul(2.3)).add(0.5),
       );
       const pixelGradient = fract(pixel.dot(vec2(0.06711056, 0.00583715)));
-      const pixelPhase = fract(pixelGradient.mul(52.9829189)).mul(0.17).add(0.5);
+      const pixelPhase = fract(pixelGradient.mul(52.9829189));
       const jitter = fract(framePhase.add(pixelPhase)).mul(0.84).add(0.08);
       If(validRay.and(horizonMask.greaterThan(0.002)), () => {
-        for (let pair = 0; pair < 3; pair++) {
-          // The probe is deliberately at the midpoint between this pair's two
-          // stratified view samples, so its sun transmittance is coherent for both.
-          const probeDistance = rayEntry.add(stepLength
-            .mul(float(pair * 2).add(0.5).add(jitter))).clamp(rayEntry, rayExit);
-          const probePosition = cameraOrigin.add(direction.mul(probeDistance));
-          // Estimate the remaining vertical sun path through the authored slab.
-          // The one paired probe follows a bounded fraction of that path, so
-          // elevated crowns and deep bases receive materially different Beer loss.
-          const cloudTop = clouds.z.add(slab);
-          const sunPath = cloudTop.sub(probePosition.y)
-            .div(sunDirection.y.max(0.15)).clamp(240, 1400);
-          const sunProbeDistance = sunPath.mul(0.45).min(600);
-          const sunProbePosition = probePosition.add(sunDirection.mul(sunProbeDistance));
-          const sunProbe = this._cloudVolumeSample(
-            sunProbePosition, time, wind, advectionTime,
-          );
-          const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
-          const neighborDensity = this._cloudDensityFromVolume(
-            sunProbe, probeHeight, clouds, false,
-          );
-          const sunTransmittance = exp(neighborDensity.mul(sunPath).mul(SUN_EXTINCTION).negate());
-          for (let segment = 0; segment < 2; segment++) {
-            const step = pair * 2 + segment;
-            // Stratify one phase inside each of the six AABB intervals.
-            const sampleDistance = rayEntry.add(stepLength
-              .mul(float(step).add(jitter))).clamp(rayEntry, rayExit);
-            const position = cameraOrigin.add(direction.mul(sampleDistance));
-            const normalizedHeight = position.y.sub(clouds.z).div(slab).clamp(0, 1);
-            const volume = this._cloudVolumeSample(position, time, wind, advectionTime);
-            const density = this._cloudDensityFromVolume(volume, normalizedHeight, clouds, true);
-            If(density.greaterThan(CLOUD_EMPTY_THRESHOLD), () => {
+        // Cover the complete bounded interval even when the conservative envelope
+        // remains occupied for every iteration. A fixed 170 m step exhausted the
+        // loop after 3.4 km and visibly cropped long rays into hanging columns.
+        const fineStep = marchLength.div(float(steps)).clamp(140, 280);
+        const coarseStep = float(480);
+        const rayEnd = rayEntry.add(marchLength);
+        // Jitter by at most one occupied step. Offsetting by the 480 m empty-space
+        // stride made the first hit jump between whole cloud lobes frame-to-frame,
+        // exposing the quarter-resolution phase lattice after reconstruction.
+        const sampleDistance = rayEntry.add(fineStep.mul(jitter)).toVar();
+        const pairedSunTransmittance = float(1).toVar();
+        Loop(steps, ({ i }) => {
+          If(sampleDistance.greaterThanEqual(rayEnd).or(transmittance.lessThan(0.018)), () => {
+            Break();
+          });
+          const position = cameraOrigin.add(direction.mul(sampleDistance));
+          const normalizedHeight = position.y.sub(clouds.z).div(slab).clamp(0, 1);
+          const volume = this._cloudVolumeSample(position, time, wind, advectionTime);
+          const density = this._cloudDensityFromVolume(volume, normalizedHeight, clouds, true);
+          const occupied = density.greaterThan(CLOUD_EMPTY_THRESHOLD);
+          // Step finely through the conservative macro envelope, not only samples
+          // that already survived detail erosion. A 480 m jump across a thin lobe
+          // otherwise produces detached horizontal slices and missing silhouettes.
+          const potentialCloud = volume.w.greaterThan(0.055)
+            .and(volume.x.greaterThan(0.035));
+          If(occupied, () => {
+            If(i.mod(2).equal(0), () => {
+              const cloudTop = clouds.z.add(slab);
+              const sunPath = cloudTop.sub(position.y)
+                .div(sunDirection.y.max(0.15)).clamp(240, 1400);
+              const sunProbeDistance = sunPath.mul(0.45).min(600);
+              const sunProbePosition = position.add(sunDirection.mul(sunProbeDistance));
+              const sunProbe = this._cloudVolumeSample(
+                sunProbePosition, time, wind, advectionTime,
+              );
+              const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
+              const neighborDensity = this._cloudDensityFromVolume(
+                sunProbe, probeHeight, clouds, false,
+              );
+              pairedSunTransmittance.assign(
+                exp(neighborDensity.mul(sunPath).mul(SUN_EXTINCTION).negate()),
+              );
+            });
               const viewDepth = sampleDistance.sub(rayEntry).div(rayLength.max(1)).clamp(0, 1);
-              const powder = oneMinus(exp(density.mul(-2.2))).mul(0.30);
               const crown = smoothstep(0.18, 0.78, normalizedHeight);
-              const ambient = ambientTop.mul(float(0.48).add(normalizedHeight.mul(0.52)))
-                .mul(float(0.72).add(powder));
-              const direct = sunTint.mul(sunTransmittance).mul(phase)
-                .mul(float(0.72).add(crown.mul(0.28))).mul(1.9);
+              const underside = oneMinus(smoothstep(0.10, 0.58, normalizedHeight));
+              const ambientOcclusion = oneMinus(
+                density.mul(float(0.28).add(underside.mul(0.30))),
+              ).clamp(0.45, 1);
+              const ambient = cloudAmbient.mul(float(0.25).add(normalizedHeight.mul(0.40)))
+                .mul(ambientOcclusion);
+              const edgeLight = oneMinus(density).mul(0.75).add(0.55);
+              const direct = sunTint.mul(pairedSunTransmittance).mul(phase)
+                .mul(float(0.54).add(crown.mul(0.46))).mul(edgeLight).mul(1.90);
               const radiance = ambient.add(direct).mul(float(0.86).add(viewDepth.mul(0.10)));
-              const opticalDepth = density.mul(stepLength).mul(CLOUD_EXTINCTION);
+              const opticalDepth = density.mul(fineStep).mul(CLOUD_EXTINCTION);
               const segmentTransmittance = exp(opticalDepth.negate());
               const segmentAlpha = oneMinus(segmentTransmittance);
               const segmentScatter = transmittance.mul(segmentAlpha).mul(radiance);
@@ -634,9 +680,9 @@ export class WeatherSky {
                 scatterWeight.addAssign(segmentWeight);
               }
               transmittance.mulAssign(segmentTransmittance);
-            });
-          }
-        }
+          });
+          sampleDistance.addAssign(potentialCloud.select(fineStep, coarseStep));
+        });
       });
       // Fade both terms together near the finite horizon gate. Returning the
       // actual layer transmittance (rather than opacity) keeps composition

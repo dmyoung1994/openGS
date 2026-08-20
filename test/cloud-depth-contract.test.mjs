@@ -23,22 +23,25 @@ test('deterministic cloud slab depth evaluator proves front-cloud and behind-geo
   });
 });
 
-test('depth-aware cloud source contracts sample MRT depth and compose transport before TRAA', async () => {
-  const [scene, temporal, weather, traa] = await Promise.all([
+test('depth-aware cloud source contracts sample MRT depth and compose transport in the final pass', async () => {
+  const [scene, temporal, weather] = await Promise.all([
     readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/scene/CloudTemporalNode.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8'),
-    readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8'),
   ]);
 
   assert.match(scene, /const scenePass = pass\(this\.scene, this\.camera/);
   assert.match(scene, /const depth = scenePass\.getTextureNode\('depth'\)/);
   assert.match(scene, /new CloudTemporalNode\([\s\S]*depth,/,
     'cloud pass must consume the authoritative Scene MRT depth texture');
-  assert.match(scene, /sceneRadiance \* cloudTransmittance \+ cloudScatter/);
+  assert.match(scene, /this\.scene\.backgroundNode = this\.weatherSky\.clearBackgroundNode/);
+  assert.match(scene, /resolvedScene\.mul\(cloudTransport\.a\)\.add\(cloudTransport\.rgb\)/,
+    'the existing final pass must apply scene*T+scatter exactly once');
+  assert.match(scene, /compatibleCount\.greaterThan\(3\.5\)/,
+    'full-resolution reconstruction must preserve source depth classes at silhouettes');
 
-  assert.match(temporal, /sceneDepthNode\.sample\(currentUv\)/,
-    'every cloud fragment must sample scene depth, including background pixels');
+  assert.match(temporal, /sceneDepthNode\.load\(sceneDepthTexel\)/,
+    'every cloud fragment must load one exact authoritative scene-depth texel');
   assert.match(temporal, /getViewPosition\(/);
   assert.match(temporal, /opaqueWorldPosition/);
   assert.match(temporal, /opaqueRayDistance/);
@@ -58,14 +61,6 @@ test('depth-aware cloud source contracts sample MRT depth and compose transport 
   assert.match(weather, /marchState\.representativeDistance/);
   assert.match(weather, /scatterDistanceWeight/);
 
-  assert.match(traa, /cloudNode\.sample\( sampleUV \)/);
-  assert.match(traa, /cloudSourceNode\.load/);
-  assert.match(traa, /classCompatible/);
-  assert.match(traa, /distanceCompatible/);
-  assert.match(traa, /boundedFallback/);
-  assert.match(traa, /neutralTransport/);
-  assert.match(traa, /const sceneRadiance = finiteGeometry\.select\( sceneColor\.rgb, analyticSky \)/);
-  assert.match(traa, /sceneRadiance\.mul\( cloudTransmittance \)\.add\( cloudScatter \)/);
-  assert.doesNotMatch(traa, /cloudNode\.sample\( sampleUV \)[\s\S]{0,400}select\( sceneColor, backgroundColor \)/,
-    'cloud transport must not be selected as a background replacement');
+  assert.match(scene, /resettableTraa\(color, depth, vel, this\.camera, null\)/,
+    'TRAA must resolve opaque beauty without repeating cloud transport reads');
 });

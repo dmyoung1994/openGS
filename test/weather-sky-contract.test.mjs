@@ -73,9 +73,9 @@ test('WeatherSky accepts only the authoritative GPU environment bridge and expos
   assert.equal(diagnostics.proceduralNoise, true);
   assert.equal(diagnostics.gpuOnly, true);
   assert.equal(diagnostics.raySteps, sky.workload.raySteps);
-  assert.equal(WEATHER_SKY_WORKLOADS.high.raySteps, 6);
+  assert.equal(WEATHER_SKY_WORKLOADS.high.raySteps, 16);
   assert.equal(diagnostics.lightTransportSamples, sky.workload.lightTransportSamples);
-  assert.equal(diagnostics.lightProbeSteps, 3);
+  assert.equal(diagnostics.lightProbeSteps, 8);
   assert.equal(diagnostics.lightTransportMode, 'paired-sun-offset-volume-probe');
   assert.equal(Object.hasOwn(diagnostics, 'hasSkyPass'), false);
   assert.equal(diagnostics.renderTopology, 'fused-temporal-volume');
@@ -184,7 +184,7 @@ test('all weather tiers retain the same cloud/atmosphere contract and differ onl
     assert.ok(Object.isFrozen(workload));
     assert.ok(workload.raySteps >= 4);
     assert.equal(workload.lightTransportSamples, 1);
-    assert.equal(workload.lightProbeSteps, 3);
+    assert.equal(workload.lightProbeSteps, workload.raySteps / 2);
     assert.ok(workload.noiseOctaves >= 2);
   }
 });
@@ -235,9 +235,9 @@ test('WeatherSky uses one GPU sky-volume path and never a proxy/fallback rendere
     'cloud occupancy must use the initialized joint R/A carrier');
   assert.match(source, /const baseCarrier = smoothstep\(coverageThreshold, coverageThreshold\.add\(0\.18\), rawCarrier\)/,
     'joint R/A carrier must establish an unshifted core before boundary erosion');
-  assert.match(source, /const edgeWindow = oneMinus\(smoothstep\(0\.48, 0\.84, baseCarrier\)\)/,
+  assert.match(source, /const edgeWindow = oneMinus\(smoothstep\(0\.56, 0\.94, baseCarrier\)\)/,
     'detail threshold shifts must be limited to the carrier margin');
-  assert.match(source, /const thresholdShift = detailSignal\.sub\(0\.5\)\.mul\(0\.035\)/,
+  assert.match(source, /const thresholdShift = detailSignal\.sub\(0\.5\)\.mul\(0\.080\)/,
     'existing detail and erosion channels must perturb the carrier threshold');
   assert.match(source, /const carrier = smoothstep\(shiftedThreshold, shiftedThreshold\.add\(0\.18\), rawCarrier\)/,
     'joint R/A carrier must use the shifted material threshold');
@@ -270,11 +270,14 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
   const source = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
   assert.match(source, /boundsMin[\s\S]*boundsMax/);
   assert.match(source, /inverseDirection/);
-  assert.match(source, /sampleDistance = rayEntry\.add\(stepLength/);
-  assert.match(source, /const marchLength = rayLength;/,
-    'cloud rays must integrate the complete bounded AABB interval');
-  assert.match(source, /\.mul\(float\(step\)\.add\(jitter\)\)/,
-    'view samples must use one deterministic phase inside each stratified interval');
+  assert.match(source, /const fineStep = marchLength\.div\(float\(steps\)\)\.clamp\(140, 280\)/,
+    'occupied cloud parcels must span the full interval with bounded fine steps');
+  assert.match(source, /const coarseStep = float\(480\)/,
+    'empty cloud space must advance with larger bounded steps');
+  assert.match(source, /sampleDistance = rayEntry\.add\(fineStep\.mul\(jitter\)\)/,
+    'the adaptive march must begin at a temporally rotated position in the slab');
+  assert.match(source, /const marchLength = rayLength\.min\(CLOUD_VISIBLE_DISTANCE\)/,
+    'cloud rays must integrate a bounded world-space visibility interval');
   assert.match(source, /const framePhase = fract\(/,
     'cloud sampling must rotate its phase with the deterministic temporal sequence');
   assert.match(source, /const pixelGradient = fract\(pixel\.dot\(vec2\(0\.06711056, 0\.00583715\)\)\)/,
@@ -286,6 +289,14 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
   assert.doesNotMatch(source, /rayLength\.min\(steps \* 700\)/,
     'cloud rays must not truncate the authored slab to a card-like horizon slice');
   assert.match(source, /const position = cameraOrigin\.add\(direction\.mul\(sampleDistance\)\)/);
+  assert.match(source, /Loop\(steps, \(\{ i \}\) =>/,
+    'the bounded adaptive march must compile as a GPU loop');
+  assert.match(source, /sampleDistance\.greaterThanEqual\(rayEnd\)[\s\S]*Break\(\)/,
+    'the adaptive march must actually stop at the opaque or slab boundary');
+  assert.match(source, /potentialCloud\.select\(fineStep, coarseStep\)/,
+    'the march must skip empty space without changing cloud topology');
+  assert.match(source, /i\.mod\(2\)\.equal\(0\)/,
+    'sun transport probes must stay bounded to every other occupied iteration');
   assert.match(source, /segmentTransmittance = exp\(opticalDepth\.negate\(\)\)/);
   assert.match(source, /scattered\.addAssign\(transmittance\.mul\(segmentAlpha\)/);
   assert.match(source, /transmittance\.mulAssign\(segmentTransmittance\)/);
@@ -296,7 +307,7 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
   assert.match(source, /clouds\.w/);
   assert.match(source, /cloudAdvectionScale/);
   assert.match(source, /sunProbe = this\._cloudVolumeSample/);
-  assert.match(source, /const sunPath = cloudTop\.sub\(probePosition\.y\)[\s\S]*\.clamp\(240, 1400\)/,
+  assert.match(source, /const sunPath = cloudTop\.sub\(position\.y\)[\s\S]*\.clamp\(240, 1400\)/,
     'cloud self-shadowing must use the height-aware Beer path through the slab');
   assert.match(source, /const sunProbeDistance = sunPath\.mul\(0\.45\)\.min\(600\)/,
     'the paired probe must remain a bounded fraction of the physical sun path');
@@ -306,12 +317,8 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
     'cloud transport must not use a fixed 240 m probe offset');
   assert.doesNotMatch(source, /localSunTransmittance/,
     'cloud transport must not double-count a second per-primary attenuation path');
-  assert.match(source, /for \(let pair = 0; pair < 3; pair\+\+\)/,
-    'six primary samples must be grouped into three adjacent probe-sharing pairs');
-  assert.match(source, /float\(pair \* 2\)\.add\(0\.5\)\.add\(jitter\)/,
-    'each paired sun probe must be sampled at the adjacent-segment midpoint');
-  assert.match(source, /for \(let segment = 0; segment < 2; segment\+\+\)/,
-    'each pair must update front-to-back transmittance for both primary segments');
+  assert.match(source, /transmittance\.lessThan\(0\.018\)[\s\S]*Break\(\)/,
+    'opaque cloud cores must terminate the view march instead of predicating dead work');
 });
 
 test('cloud formation has no static noise texture, bake, readback, or renderer fallback', async () => {
@@ -323,8 +330,8 @@ test('cloud formation has no static noise texture, bake, readback, or renderer f
   assert.doesNotMatch(source, /noiseVolume|_noiseInitCompute|copyTextureToBuffer/);
   assert.doesNotMatch(source, /WebGLRenderer|WebGLBackend|createFallback|fallback\s*:/);
   assert.match(source, /const base = mx_noise_float\(domain\.mul\(0\.78\)\)/);
-  assert.match(source, /const detail = mx_noise_float\(domain\.mul\(4\.40\)/);
-  assert.match(source, /const erosion = mx_noise_float\(domain\.mul\(6\.20\)/);
+  assert.match(source, /const detail = mx_noise_float\(domain\.mul\(2\.55\)/);
+  assert.match(source, /const erosion = mx_noise_float\(domain\.mul\(3\.65\)/);
   assert.match(source, /mx_worley_noise_float/);
   assert.match(source, /const domain = uv\.mul\(vec3\(4\.6, 2\.3, 4\.6\)\)/);
 });

@@ -46,7 +46,8 @@ test('delayed return after a still result orbit invalidates TRAA on its first mo
 test('post stack does not reintroduce a second jittered or glare copy', async () => {
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /golfBloom\(/);
-  assert.match(source, /const rgb = resolvedScene/);
+  assert.match(source, /const rgb = cloudTransport[\s\S]*resolvedScene\.mul\(cloudTransport\.a\)/,
+    'the existing final output may compose cloud transport but must not add a glare copy');
 });
 
 test('analytic environment fill remains subordinate to the shared sun', async () => {

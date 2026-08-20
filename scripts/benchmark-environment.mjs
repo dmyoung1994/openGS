@@ -878,7 +878,7 @@ async function collectScenario(scenario) {
       && weatherDiagnostics.cloudHistory?.transmittanceAware === true
       && weatherDiagnostics.raySteps > 0
       && weatherDiagnostics.lightTransportSamples > 0
-      && weatherDiagnostics.lightProbeSteps === 3
+      && weatherDiagnostics.lightProbeSteps === weatherDiagnostics.raySteps / 2
       && weatherDiagnostics.lightTransportMode === cloudLightTransportMode
       && weatherDiagnostics.noiseOctaves >= 2
       && volume?.dimensions?.join('x') === cloudVolumeDimensions
@@ -966,7 +966,7 @@ try {
       // before full-resolution scene TRAA. Both paths share a valid PMREM and fail closed.
       atmosphere: !!sm.weatherSky
         && (sm.weatherSky.usesVolumetricClouds
-          ? sm.scene.backgroundNode === null
+          ? sm.scene.backgroundNode === sm.weatherSky.clearBackgroundNode
             && sm._cloudTemporal !== null
           : sm.scene.backgroundNode === sm.weatherSky.backgroundNode
             && sm._cloudTemporal === null)

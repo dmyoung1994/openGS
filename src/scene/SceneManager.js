@@ -5,7 +5,7 @@ import {
 } from 'three';
 import { PMREMGenerator, RenderPipeline, Renderer, StandardNodeLibrary } from 'three/webgpu';
 import {
-  pass, mrt, output, velocity, uniform,
+  pass, mrt, output, velocity, uniform, uv, Fn, If, float, vec2,
 } from 'three/tsl';
 import { GpuPassProfiler } from '../diagnostics/GpuPassProfiler.js';
 import { CloudTemporalNode } from './CloudTemporalNode.js';
@@ -156,26 +156,19 @@ export class SceneManager {
       );
       cloudLayer = this._cloudTemporal.getTextureNode();
       cloudSourceLayer = this._cloudTemporal.getSourceMetadataNode();
-      this.scene.backgroundNode = null;
+      // Scene beauty owns the analytic daylight sky. The quarter-resolution cloud
+      // pass remains depth-clamped world transport and is composed once in the
+      // existing final pass, outside TRAA's expensive neighborhood reconstruction.
+      this.scene.backgroundNode = this.weatherSky.clearBackgroundNode;
     } else {
       // Clear weather allocates and submits no cloud pass or cloud history target.
       this._cloudTemporal = null;
       this.scene.backgroundNode = this.weatherSky?.backgroundNode ?? null;
     }
 
-    // Compose sceneRadiance * cloudTransmittance + cloudScatter inside the
-    // full-resolution TRAA current frame, then resolve that composited result
-    // against history. Clear weather keeps the zero-cost scene path above.
-    const aa = resettableTraa(
-      color,
-      depth,
-      vel,
-      this.camera,
-      null,
-      cloudLayer,
-      this.weatherSky?.usesVolumetricClouds ? this.weatherSky : null,
-      cloudSourceLayer,
-    );
+    // Resolve opaque scene beauty independently. The existing final pass applies
+    // the cloud transport once, avoiding cloud work in TRAA's neighborhood taps.
+    const aa = resettableTraa(color, depth, vel, this.camera, null);
     // Thin, high-contrast blades are precisely the case where TRAA's optional
     // subpixel correction turns a stable history into a changing per-pixel weight.
     // Keep normal motion/disocclusion handling, but avoid that documented square/
@@ -195,7 +188,42 @@ export class SceneManager {
     // The former 6.5% bloom was visually negligible in the fixed suite but forced
     // another offscreen render and full-screen composition on this hardware.
     this._bloomPass = null;
-    const rgb = resolvedScene;
+    const cloudTransport = cloudLayer ? Fn(() => {
+      const sampleUv = uv();
+      const lowSize = cloudLayer.size();
+      const coordinate = sampleUv.mul(lowSize).sub(0.5)
+        .clamp(vec2(0), lowSize.sub(1));
+      const base = coordinate.floor();
+      const fraction = coordinate.fract();
+      const depthValue = depth.sample(sampleUv).r;
+      const finiteGeometry = this.renderer.reversedDepthBuffer
+        ? depthValue.greaterThan(0.000001)
+        : depthValue.lessThan(0.999999);
+      const selectedTexel = sampleUv.mul(lowSize).floor().toVar();
+      const selectedMetric = float(1e9).toVar();
+      const selectedFound = float(0).toVar();
+      const compatibleCount = float(0).toVar();
+      for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+        const texel = base.add(vec2(x, y)).clamp(vec2(0), lowSize.sub(1));
+        const sourceFinite = cloudSourceLayer.load(texel).r.greaterThan(0.5);
+        const compatible = sourceFinite.notEqual(finiteGeometry).not();
+        const metric = vec2(x, y).sub(fraction).length();
+        If(compatible.and(metric.lessThan(selectedMetric)), () => {
+          selectedTexel.assign(texel);
+          selectedMetric.assign(metric);
+          selectedFound.assign(1);
+        });
+        If(compatible, () => { compatibleCount.addAssign(1); });
+      }
+      const pointTransport = cloudLayer.load(sampleUv.mul(lowSize).floor());
+      const edgeTransport = selectedFound.greaterThan(0.5)
+        .select(cloudLayer.load(selectedTexel), pointTransport);
+      return compatibleCount.greaterThan(3.5)
+        .select(cloudLayer.sample(sampleUv), edgeTransport);
+    })() : null;
+    const rgb = cloudTransport
+      ? resolvedScene.mul(cloudTransport.a).add(cloudTransport.rgb)
+      : resolvedScene;
     // Neutral and the shared daylight state own the final palette and shoulder. The
     // former luminance-keyed split tone plus vignette was a cosmetic full-screen
     // grade after TRAA, duplicated contrast work, and could manufacture hue edges

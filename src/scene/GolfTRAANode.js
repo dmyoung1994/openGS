@@ -847,7 +847,7 @@ class TRAANode extends TempNode {
 			// atmosphere fetches at every full-resolution pixel. Static thin edges retain
 			// their completed Halton average below, so their stability does not depend on
 			// inflating this moving-history clip neighborhood.
-			const offsets = [
+			const offsets = this.cloudNode ? [] : [
 				[ 1, 0 ],
 				[ 0, - 1 ],
 				[ 0, 1 ],
@@ -990,7 +990,15 @@ class TRAANode extends TempNode {
 
 			const backgroundColor = this.backgroundNode ? this.backgroundNode.sample( uvNode ) : vec4( 0 );
 			let currentColor = this.beautyNode.sample( uvNode );
-			if ( this.backgroundNode ) {
+			if ( this.cloudNode ) {
+
+				// The center sample must use the same depth-aware transport composition
+				// as the variance neighborhood. Leaving it as raw MRT beauty turns every
+				// clear-depth pixel black because cloudy weather intentionally disables
+				// the scene background.
+				currentColor = sampleCloudComposite( positionTexel, textureSize );
+
+			} else if ( this.backgroundNode ) {
 
 				// The sky varies slowly over a 3x3 full-resolution footprint, so one
 				// filtered quarter-resolution sample is shared by the center and variance

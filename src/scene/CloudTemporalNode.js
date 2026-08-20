@@ -97,8 +97,8 @@ export class CloudTemporalNode extends TempNode {
       opaqueDistance: 'reconstructed-world-ray-distance',
       rayInterval: 'opaque-clamped-or-full-aabb',
       outputRepresentation: 'scattered-radiance+transmittance',
-      compositeStage: 'inside-full-resolution-traa',
-      passOrder: Object.freeze(['Scene MRT', 'Weather clouds [ fused raymarch + temporal resolve ]', 'TRAA']),
+      compositeStage: 'existing-final-pass-after-traa',
+      passOrder: Object.freeze(['Scene MRT', 'Weather clouds [ fused raymarch + temporal resolve ]', 'TRAA', 'Final']),
       history: 'quarter-res-fused-ping-pong',
       sourceMetadata: 'quarter-res-mrt-rgba16f(depth-class,distance)',
       cloudUpsampling: 'depth-aware-2x2-compatible-taps',
@@ -205,7 +205,13 @@ export class CloudTemporalNode extends TempNode {
       // reconstructing a world point and Euclidean camera-ray distance.
       // Keep the center fetch explicit: this is the authoritative depth sample
       // for the current cloud pixel, not a cached scene/background predicate.
-      let sceneDepth = this.sceneDepthNode.sample(currentUv).r.toVar();
+      // Own one exact full-resolution depth texel per quarter-resolution cloud
+      // pixel. Filtering depth across a ridge invents fractional geometry and
+      // produces bright omission halos during transport reconstruction.
+      const sceneDepthSize = this.sceneDepthNode.size();
+      const sceneDepthTexel = currentUv.mul(sceneDepthSize).floor()
+        .clamp(vec2(0), sceneDepthSize.sub(1));
+      let sceneDepth = this.sceneDepthNode.load(sceneDepthTexel).r.toVar();
       if (builder.renderer.reversedDepthBuffer) sceneDepth.assign(sceneDepth.oneMinus());
       if (builder.renderer.logarithmicDepthBuffer) {
         const viewZ = logarithmicDepthToViewZ(
@@ -285,7 +291,7 @@ export class CloudTemporalNode extends TempNode {
       // is a cloud disocclusion (or an advected parcel crossing the ray), so
       // reject history before it can leave a ghost trail. Keep the legacy alias
       // in the graph name because diagnostics/tools refer to opacity agreement.
-      const transmittanceAgreement = oneMinus(smoothstep(0.12, 0.42,
+      const transmittanceAgreement = oneMinus(smoothstep(0.20, 0.55,
         currentColor.a.sub(historyColor.a).abs()));
       const opacityAgreement = transmittanceAgreement;
       // Fade history for large projected parcel/camera motion so advection does not
@@ -293,7 +299,7 @@ export class CloudTemporalNode extends TempNode {
       const reprojectionMotion = previousUv.sub(currentUv).mul(this._renderSize).length();
       const motionAgreement = oneMinus(smoothstep(2.5, 8.0, reprojectionMotion));
       // This is transmittance-aware temporal reconstruction, not a fixed color overwrite.
-      const historyWeight = this._historyValid.mul(0.86)
+      const historyWeight = this._historyValid.mul(0.94)
         .mul(inside.select(1, 0)).mul(sourceDepthAgreement)
         .mul(opacityAgreement).mul(motionAgreement);
       const resolvedColor = mix(currentColor, historyColor, historyWeight);
