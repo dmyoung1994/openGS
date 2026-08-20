@@ -536,7 +536,14 @@ export class WeatherSky {
           const probeDistance = rayEntry.add(stepLength
             .mul(float(pair * 2).add(0.5).add(jitter))).clamp(rayEntry, rayExit);
           const probePosition = cameraOrigin.add(direction.mul(probeDistance));
-          const sunProbePosition = probePosition.add(sunDirection.mul(240));
+          // Estimate the remaining vertical sun path through the authored slab.
+          // The one paired probe follows a bounded fraction of that path, so
+          // elevated crowns and deep bases receive materially different Beer loss.
+          const cloudTop = clouds.z.add(slab);
+          const sunPath = cloudTop.sub(probePosition.y)
+            .div(sunDirection.y.max(0.15)).clamp(240, 1400);
+          const sunProbeDistance = sunPath.mul(0.45).min(600);
+          const sunProbePosition = probePosition.add(sunDirection.mul(sunProbeDistance));
           const sunProbe = this._cloudVolumeSample(
             sunProbePosition, time, wind, advectionTime,
           );
@@ -544,7 +551,7 @@ export class WeatherSky {
           const neighborDensity = this._cloudDensityFromVolume(
             sunProbe, probeHeight, clouds, false,
           );
-          const sunTransmittance = exp(neighborDensity.mul(240).mul(SUN_EXTINCTION).negate());
+          const sunTransmittance = exp(neighborDensity.mul(sunPath).mul(SUN_EXTINCTION).negate());
           for (let segment = 0; segment < 2; segment++) {
             const step = pair * 2 + segment;
             // Stratify one phase inside each of the six AABB intervals.
@@ -560,13 +567,7 @@ export class WeatherSky {
               const crown = smoothstep(0.18, 0.78, normalizedHeight);
               const ambient = ambientTop.mul(float(0.48).add(normalizedHeight.mul(0.52)))
                 .mul(float(0.72).add(powder));
-              // Reuse the primary density as a short local sun segment. This
-              // preserves bright low-density rims while giving dense cores a
-              // physically bounded self-shadow instead of uniform haze.
-              const localSunTransmittance = exp(
-                density.mul(360).mul(SUN_EXTINCTION).negate(),
-              );
-              const direct = sunTint.mul(sunTransmittance).mul(localSunTransmittance).mul(phase)
+              const direct = sunTint.mul(sunTransmittance).mul(phase)
                 .mul(float(0.72).add(crown.mul(0.28))).mul(1.9);
               const radiance = ambient.add(direct).mul(float(0.86).add(viewDepth.mul(0.10)));
               const opticalDepth = density.mul(stepLength).mul(CLOUD_EXTINCTION);

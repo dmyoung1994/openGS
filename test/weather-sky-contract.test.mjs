@@ -296,10 +296,16 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
   assert.match(source, /clouds\.w/);
   assert.match(source, /cloudAdvectionScale/);
   assert.match(source, /sunProbe = this\._cloudVolumeSample/);
-  assert.match(source, /const localSunTransmittance = exp\(\s*density\.mul\(360\)\.mul\(SUN_EXTINCTION\)/,
-    'cloud cores must reuse primary density for bounded local self-shadowing');
-  assert.match(source, /sunTransmittance\)\.mul\(localSunTransmittance\)/,
-    'direct light must preserve bright edges while attenuating dense cores');
+  assert.match(source, /const sunPath = cloudTop\.sub\(probePosition\.y\)[\s\S]*\.clamp\(240, 1400\)/,
+    'cloud self-shadowing must use the height-aware Beer path through the slab');
+  assert.match(source, /const sunProbeDistance = sunPath\.mul\(0\.45\)\.min\(600\)/,
+    'the paired probe must remain a bounded fraction of the physical sun path');
+  assert.match(source, /neighborDensity\.mul\(sunPath\)\.mul\(SUN_EXTINCTION\)/,
+    'sun transmittance must vary with the sampled Beer path length');
+  assert.doesNotMatch(source, /sunDirection\.mul\(240\)/,
+    'cloud transport must not use a fixed 240 m probe offset');
+  assert.doesNotMatch(source, /localSunTransmittance/,
+    'cloud transport must not double-count a second per-primary attenuation path');
   assert.match(source, /for \(let pair = 0; pair < 3; pair\+\+\)/,
     'six primary samples must be grouped into three adjacent probe-sharing pairs');
   assert.match(source, /float\(pair \* 2\)\.add\(0\.5\)\.add\(jitter\)/,
