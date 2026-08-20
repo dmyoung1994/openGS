@@ -1160,6 +1160,9 @@ function buildMassifSegment(azimuths, rect, centerX, centerZ, sample) {
   geometry.setAttribute('backdropCover', new Float32BufferAttribute(cover, 4));
   geometry.setIndex(new Uint32BufferAttribute(indices, 1));
   geometry.computeBoundingSphere();
+  // Band B is built by the ribbon path rather than buildPatch; include the
+  // same bounded shader-only structural displacement in its culling sphere.
+  geometry.boundingSphere.radius += 72;
   return geometry;
 }
 
@@ -1501,7 +1504,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
     // can carry a displaced face across that belt. Fade the added structural
     // relief to the shared sampler over a continuous 240 m boundary so both
     // meshes meet with the same undeformed edge instead of exposing a slit.
-    ? smoothstep(0.0, 240.0, shellEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
+    ? smoothstep(72.0, 162.0, shellEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
     : float(1.0);
   const joinedVertexRelief = vertexDisplacement.mul(shellFade).mul(shellJoinFade);
   material.positionNode = vec3(vertexX, vertexY, vertexZ)
@@ -1897,7 +1900,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
         .sub((bounds.maxZ - bounds.minZ) * 0.5)).max(0.0)
     : float(0.0);
   const worldJoinFade = bounds
-    ? smoothstep(0.0, 240.0, worldEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
+    ? smoothstep(72.0, 162.0, worldEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
     : float(1.0);
   const vertexReliefBump = vec3(
     structuralGradientVarying.x, 0.0, structuralGradientVarying.y,

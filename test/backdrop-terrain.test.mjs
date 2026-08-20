@@ -651,10 +651,12 @@ test('alpine high faces carry oriented fault blocks, chutes, and coupled PBR str
     'vertex displacement and finite-difference structural gradient must share amplitudes');
   assert.match(source, /geometry\.boundingSphere\.radius \+= 72/,
     'frustum bounds must include the maximum shader-only structural displacement');
-  assert.match(source, /smoothstep\(0\.0, 240\.0, shellEdgeDistance\.sub\(ALPINE_BAND_A_OUTER\)\.abs\(\)\)/,
-    'structural displacement must fade across the full overlap boundary');
-  assert.match(source, /smoothstep\(0\.0, 240\.0, worldEdgeDistance\.sub\(ALPINE_BAND_A_OUTER\)\.abs\(\)\)/,
-    'structural gradient lighting must share the same continuity fade');
+  assert.match(source, /smoothstep\(72\.0, 162\.0, shellEdgeDistance\.sub\(ALPINE_BAND_A_OUTER\)\.abs\(\)\)/,
+    'structural displacement must be zero throughout the 72 m overlap belt');
+  assert.match(source, /smoothstep\(72\.0, 162\.0, worldEdgeDistance\.sub\(ALPINE_BAND_A_OUTER\)\.abs\(\)\)/,
+    'structural gradient lighting must share the same dead belt');
+  assert.equal((source.match(/geometry\.boundingSphere\.radius \+= 72/g) || []).length, 2,
+    'both Band A and Band B bounds must include shader displacement');
   assert.match(source, /const vertexDisplacement[\s\S]*vertexStructuralRelief/);
   assert.match(source, /const structuralFace = structuralFaceVarying/);
   assert.match(source, /const structuralCavity = structuralCavityVarying/);
