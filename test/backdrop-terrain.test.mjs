@@ -646,8 +646,8 @@ test('alpine high faces carry oriented fault blocks, chutes, and coupled PBR str
   assert.match(source, /const vertexStructuralCavity = float\(0\.0\)\.sub\(strikeRelief\)/);
   assert.match(source, /const structuralFaceVarying = varying\(vertexStructuralFace, 'vAlpineStructuralFace'\)/);
   assert.match(source, /const structuralCavityVarying = varying\(vertexStructuralCavity, 'vAlpineStructuralCavity'\)/);
-  assert.match(source, /const vertexStructuralRelief = vertexStructuralFace\.mul\(70\.0\)/);
-  assert.match(source, /return face\.mul\(70\.0\)\.sub\(cavity\.mul\(48\.0\)\)/,
+  assert.match(source, /const vertexStructuralRelief = vertexStructuralFace\.mul\(36\.0\)/);
+  assert.match(source, /return face\.mul\(36\.0\)\.sub\(cavity\.mul\(24\.0\)\)/,
     'vertex displacement and finite-difference structural gradient must share amplitudes');
   assert.match(source, /geometry\.boundingSphere\.radius \+= 72/,
     'frustum bounds must include the maximum shader-only structural displacement');
