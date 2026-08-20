@@ -170,13 +170,12 @@ class TRAANode extends TempNode {
 		 * @private
 		 * @type {?RenderTarget}
 		 */
-		this._historyRenderTarget = new RenderTarget( 1, 1, { depthBuffer: false, type: HalfFloatType, depthTexture: new DepthTexture() } );
+		this._historyRenderTarget = new RenderTarget( 1, 1, { depthBuffer: false, type: HalfFloatType } );
 		this._historyRenderTarget.texture.name = 'TRAANode.history';
-		// The resolve target also carries a depth texture so the two temporal
-		// surfaces can ping-pong. This lets the freshly resolved image become the
+		// The two color surfaces ping-pong so the freshly resolved image becomes the
 		// next history without a full-resolution resolve->history copy each frame.
-		// The depth attachment is not bound for the fullscreen resolve; it is only
-		// the destination of the current scene-depth copy after the swap.
+		// TRAA's fullscreen resolve has depthBuffer:false, so per-target depth
+		// attachments would only be copy destinations, never render attachments.
 
 		/**
 		 * The render target for the resolve.
@@ -184,8 +183,17 @@ class TRAANode extends TempNode {
 		 * @private
 		 * @type {?RenderTarget}
 		 */
-		this._resolveRenderTarget = new RenderTarget( 1, 1, { depthBuffer: false, type: HalfFloatType, depthTexture: new DepthTexture() } );
+		this._resolveRenderTarget = new RenderTarget( 1, 1, { depthBuffer: false, type: HalfFloatType } );
 		this._resolveRenderTarget.texture.name = 'TRAANode.resolve';
+
+		// Keep one depth surface for the previous frame. The old implementation
+		// attached a separate depth texture to each ping-pong color target even
+		// though neither target was depth-tested; after the swap only the current
+		// history depth was copied and sampled. A standalone texture preserves the
+		// exact depth copy/sample contract while removing one full-resolution depth
+		// allocation and both unused target attachments.
+		this._previousDepthTexture = new DepthTexture( 1, 1 );
+		this._previousDepthTexture.name = 'TRAANode.previousDepth';
 
 		/**
 		 * Material used for the resolve step.
@@ -267,7 +275,9 @@ class TRAANode extends TempNode {
 		 * @private
 		 * @type {TextureNode}
 		 */
-		this._previousDepthNode = texture( new DepthTexture( 1, 1 ) );
+		// Created lazily in setup after the live drawing-buffer dimensions are known;
+		// this avoids a 1x1 placeholder allocation being retained by renderer.info.
+		this._previousDepthNode = null;
 
 		/**
 		 * Sync the post processing stack with the TRAA node.
@@ -443,11 +453,20 @@ class TRAANode extends TempNode {
 
 			this._historyValid.value = 0;
 			this._historyAge.value = 0;
+			if ( renderer.reversedDepthBuffer === true ) this._previousDepthTexture.type = FloatType;
 
 			// make sure render targets are initialized after the resize which triggers a dispose()
 
 			renderer.initRenderTarget( this._historyRenderTarget );
 			renderer.initRenderTarget( this._resolveRenderTarget );
+
+			// A DepthTexture is not resized by RenderTarget.setSize() because it is
+			// intentionally no longer owned by either color target. Recreate the
+			// standalone previous-depth surface only on a real size change.
+			this._previousDepthTexture.image.width = width;
+			this._previousDepthTexture.image.height = height;
+			this._previousDepthTexture.needsUpdate = true;
+			renderer.initTexture( this._previousDepthTexture );
 
 			// make sure to reset the history with the contents of the beauty buffer otherwise subsequent frames after the
 			// resize will fade from a darker color to the correct one because the history was cleared with black.
@@ -488,8 +507,8 @@ class TRAANode extends TempNode {
 		if ( this._historyRenderTarget.height === size.height && this._historyRenderTarget.width === size.width ) {
 
 			const currentDepth = this.depthNode.value;
-			renderer.copyTextureToTexture( currentDepth, this._historyRenderTarget.depthTexture );
-			this._previousDepthNode.value = this._historyRenderTarget.depthTexture;
+			renderer.copyTextureToTexture( currentDepth, this._previousDepthTexture );
+			if ( this._previousDepthNode ) this._previousDepthNode.value = this._previousDepthTexture;
 
 		}
 
@@ -506,6 +525,14 @@ class TRAANode extends TempNode {
 	 * @return {PassTextureNode}
 	 */
 	setup( builder ) {
+
+		// Bind the standalone depth node only after the renderer exposes the actual
+		// backing dimensions. This keeps its first GPU allocation at full size,
+		// matching the two color targets and the scene depth source.
+		const drawingBufferSize = builder.renderer.getDrawingBufferSize( _size );
+		this._previousDepthTexture.image.width = drawingBufferSize.width;
+		this._previousDepthTexture.image.height = drawingBufferSize.height;
+		this._previousDepthNode ??= texture( this._previousDepthTexture );
 
 		const renderPipeline = builder.context.renderPipeline;
 
@@ -530,7 +557,7 @@ class TRAANode extends TempNode {
 
 		if ( builder.renderer.reversedDepthBuffer === true ) {
 
-			this._historyRenderTarget.depthTexture.type = FloatType;
+			this._previousDepthTexture.type = FloatType;
 
 		}
 
@@ -898,6 +925,7 @@ class TRAANode extends TempNode {
 
 		this._historyRenderTarget.dispose();
 		this._resolveRenderTarget.dispose();
+		this._previousDepthTexture.dispose();
 
 		this._resolveMaterial.dispose();
 

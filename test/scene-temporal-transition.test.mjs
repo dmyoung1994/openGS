@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Matrix4, PerspectiveCamera, Quaternion, Vector3 } from 'three';
 import { SceneManager } from '../src/scene/SceneManager.js';
+import TRAANode from '../src/scene/GolfTRAANode.js';
 
 test('delayed return after a still result orbit invalidates TRAA on its first move', () => {
   const camera = new PerspectiveCamera();
@@ -85,11 +86,45 @@ test('TRAA avoids duplicate neighborhood reads for accepted static history', asy
 
 test('TRAA ping-pongs full-resolution history instead of copying resolve every frame', async () => {
   const source = await readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8');
-  assert.match(source, /this\._resolveRenderTarget = new RenderTarget\( 1, 1, \{ depthBuffer: false, type: HalfFloatType, depthTexture: new DepthTexture\(\) \} \)/);
+  assert.match(source, /this\._resolveRenderTarget = new RenderTarget\( 1, 1, \{ depthBuffer: false, type: HalfFloatType \} \)/);
   assert.match(source, /const previousHistory = this\._historyRenderTarget;/);
   assert.match(source, /this\._historyRenderTarget = this\._resolveRenderTarget;/);
   assert.match(source, /this\._textureNode\.value = this\._historyRenderTarget\.texture;/);
   assert.doesNotMatch(source, /copyTextureToTexture\( this\._resolveRenderTarget\.texture, this\._historyRenderTarget\.texture \)/);
+});
+
+test('TRAA uses one standalone previous-depth surface instead of unused ping-pong depth attachments', async () => {
+  const source = await readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8');
+  assert.match(source, /this\._historyRenderTarget = new RenderTarget\( 1, 1, \{ depthBuffer: false, type: HalfFloatType \} \)/);
+  assert.match(source, /this\._resolveRenderTarget = new RenderTarget\( 1, 1, \{ depthBuffer: false, type: HalfFloatType \} \)/);
+  assert.match(source, /this\._previousDepthTexture = new DepthTexture\( 1, 1 \)/);
+  assert.match(source, /renderer\.copyTextureToTexture\( currentDepth, this\._previousDepthTexture \)/);
+  assert.match(source, /renderer\.initTexture\( this\._previousDepthTexture \)/);
+  assert.doesNotMatch(source, /this\._historyRenderTarget\.depthTexture/);
+  assert.doesNotMatch(source, /this\._resolveRenderTarget\.depthTexture/);
+});
+
+test('TRAA constructor keeps the two color targets depth-free and defers depth-node binding', () => {
+  const traa = new TRAANode({}, {}, {}, {});
+  try {
+    assert.equal(traa._historyRenderTarget.depthTexture, null);
+    assert.equal(traa._resolveRenderTarget.depthTexture, null);
+    assert.equal(traa._previousDepthTexture.isDepthTexture, true);
+    assert.equal(traa._previousDepthNode, null);
+  } finally {
+    traa.dispose();
+  }
+});
+
+test('TRAA history remains linear while RenderPipeline owns the required transformed presentation pass', async () => {
+  const scene = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
+  const traa = await readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8');
+  assert.match(scene, /this\.postProcessing = new RenderPipeline\(this\.renderer\)/);
+  assert.match(scene, /this\.postProcessing\.outputNode = rgb/);
+  assert.match(scene, /this\.postProcessing\.render\(\)/);
+  assert.match(traa, /renderer\.setRenderTarget\( this\._resolveRenderTarget \)/);
+  assert.match(traa, /this\._historyTextureNode\.value = this\._historyRenderTarget\.texture/);
+  assert.doesNotMatch(scene, /outputColorTransform\s*=\s*false/);
 });
 
 test('camera motion disables projection jitter without changing the viewport', () => {
