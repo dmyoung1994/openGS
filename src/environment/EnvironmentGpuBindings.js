@@ -85,13 +85,13 @@ export class EnvironmentGpuBindings {
     const horizon = this.horizonColor.value;
     // Keep a real atmospheric value hierarchy: the low sky is brighter and less
     // saturated than the zenith, but it must not collapse into the same pale blue
-    // after ACES.  The stronger red/green floor is deliberate horizon scattering;
-    // the blue channel remains below the ACES headroom used by the shared PMREM.
+    // after tone mapping. The stronger red/green floor is deliberate horizon scattering;
+    // the blue channel remains below the highlight headroom used by the shared PMREM.
     // BACKDROP_PLAN Phase 1 vibe pass: a broadcast-range sky, not a flat
     // overcast sheet. The horizon keeps a real blue channel so the shared fog
     // (coloured from the same uniform) reads as aerial perspective rather
-    // than grey wash, and the zenith deepens enough to survive ACES at the
-    // shared 0.84 exposure without entering its shoulder.
+    // than grey wash, and the zenith deepens enough to retain hue at the
+    // shared Neutral 1.20 reference exposure without entering its shoulder.
     horizon.set(
       0.29 * (1 - lowSunWarmth) + sr * lowSunWarmth,
       0.48 * (1 - lowSunWarmth) + sg * lowSunWarmth,
@@ -139,7 +139,7 @@ export class EnvironmentGpuBindings {
     const daylight = this.sunIlluminanceScale.max(0).pow(0.35);
     // Rayleigh scattering is strongly wavelength weighted.  The old artistic
     // 0.35/0.62/1.0 mix over-returned red and green into the same PMREM that
-    // shades the course, so ACES compressed the whole clear sky toward a flat
+    // shades the course, so the previous filmic curve compressed the whole clear sky toward a flat
     // gray-blue and removed the value separation between zenith and horizon.
     // Keep the normalized 440/550/680 nm relationship explicit here: the same
     // source radiance feeds the visible sky and the PMREM capture, with no
@@ -160,14 +160,14 @@ export class EnvironmentGpuBindings {
     const clearDay = mix(this.horizonColor, this.zenithColor, upward.pow(0.42));
     let sky = clearDay.mul(transmittance.mul(0.50).add(0.50));
     // Keep the upper sky saturated enough to frame the green course while
-    // leaving ACES headroom for the solar disc and cloud silver lining.
+    // leaving highlight headroom for the solar disc and cloud silver lining.
     // Preserve the authored atmospheric scattering shape while keeping the
-    // clear-day response below the ACES shoulder. This is the same radiance
+    // clear-day response below the tone-map shoulder. This is the same radiance
     // consumed by the visible sky and by the PMREM capture below.
     // Scattering is still analytic and shared with the PMREM, but it is a lift
     // over the base gradient rather than the whole visible sky.  The prior
     // coefficients overwhelmed the authored zenith/horizon separation under
-    // ACES and returned a uniformly pale fill to matte turf.
+    // the previous filmic curve and returned a uniformly pale fill to matte turf.
     sky = sky.add(rayleighScatter.mul(1.70)).add(mieScatter.mul(0.90));
     sky = sky.add(this.horizonColor.mul(horizonWarmth).mul(this.atmosphere.x.mul(0.025)));
     sky = sky.mul(daylight);
@@ -176,10 +176,10 @@ export class EnvironmentGpuBindings {
       // The aureole is forward-scattered sunlight from the last few hundred metres
       // of air, so it must decay within a couple of degrees of the disc. A single
       // wide lobe at 5.5x sky radiance clipped everything inside ~10 degrees of the
-      // sun to flat ACES white: a hard-edged painted orb roughly half the vertical
+      // sun to flat white: a hard-edged painted orb roughly half the vertical
       // frame, which erased the disc, the gradient, and any cloud/ridge silhouette
       // that crossed it. Split it into a tight bright core plus a broad skirt that
-      // stays below the ACES shoulder, so glare reads as atmosphere, not a decal.
+      // stays below the tone-map shoulder, so glare reads as atmosphere, not a decal.
       const sunAureole = smoothstep(0.9985, 0.99993, cosine).pow(3).mul(2.6);
       const sunGlare = smoothstep(0.955, 0.9985, cosine).pow(3).mul(0.30);
       sky = sky.add(this.sunColor.mul(sunDisc.add(sunAureole).add(sunGlare))

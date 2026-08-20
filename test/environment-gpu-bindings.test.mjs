@@ -51,7 +51,7 @@ test('shared clear-day palette retains a blue sky under a near-neutral elevated 
   const zenith = bindings.zenithColor.value;
   assert.ok(horizon.z > horizon.y && horizon.y > horizon.x);
   assert.ok(zenith.z > zenith.y * 2.5, 'zenith must not collapse to a pale neutral wash');
-  assert.ok(horizon.z < 0.9, 'clear-air horizon must leave ACES highlight headroom');
+  assert.ok(horizon.z < 0.9, 'clear-air horizon must leave tone-map highlight headroom');
   assert.ok(horizon.z < 0.8, 'shared IBL horizon should retain bark/foliage colour separation');
 });
 

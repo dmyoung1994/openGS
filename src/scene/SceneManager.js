@@ -1,6 +1,6 @@
 import {
   Scene, PerspectiveCamera, FogExp2, Color, Vector3,
-  ACESFilmicToneMapping, PCFSoftShadowMap,
+  NeutralToneMapping, PCFSoftShadowMap,
   Matrix4, Quaternion,
 } from 'three';
 import { PMREMGenerator, RenderPipeline, Renderer, StandardNodeLibrary } from 'three/webgpu';
@@ -48,8 +48,12 @@ export class SceneManager {
     // provisional cap is never rendered: initialize resolves before start resumes.
     this.renderer.setPixelRatio(this._viewportState.pixelRatio);
     this.renderer.setSize(this._viewportState.width, this._viewportState.height, false);
-    this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.84;
+    // Khronos/PBR Neutral preserves the shared daylight chromaticity into the
+    // highlight shoulder. The analytic sky and sun are already authored in
+    // linear HDR; ACES was converging their warm/blue channels toward white
+    // after the TRAA/history graph had resolved them.
+    this.renderer.toneMapping = NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1.20;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
@@ -115,9 +119,9 @@ export class SceneManager {
   }
 
   // Node post-processing: subtle bloom on genuine highlights, a saturation lift
-  // and a soft vignette. The renderer's ACES tone-map + sRGB output are applied
+  // and a soft vignette. The renderer's Neutral tone-map + sRGB output are applied
   // to the final node automatically (outputColorTransform), so the grade lives in
-  // linear light before the filmic curve — a graded-broadcast finish, not a filter.
+  // linear light before the tone-mapping curve — a graded-broadcast finish, not a filter.
   _setupPost() {
     if (!this.environmentTier) throw new Error('SceneManager post pipeline requires a resolved environment device tier.');
     // Weather configuration can arrive immediately after WebGPU initialization,
@@ -175,12 +179,12 @@ export class SceneManager {
     // required a second scene render for an 8% dark decal and cost almost as much as
     // the beauty pass on this hardware; it also contradicted the no-fake-AO bar.
     const resolvedScene = aa.rgb;
-    // ACES retains real sun/water/ball highlights without a second glare copy.
+    // Neutral retains real sun/water/ball highlights without a second glare copy.
     // The former 6.5% bloom was visually negligible in the fixed suite but forced
     // another offscreen render and full-screen composition on this hardware.
     this._bloomPass = null;
     const rgb = resolvedScene;
-    // ACES and the shared daylight state own the final palette and shoulder. The
+    // Neutral and the shared daylight state own the final palette and shoulder. The
     // former luminance-keyed split tone plus vignette was a cosmetic full-screen
     // grade after TRAA, duplicated contrast work, and could manufacture hue edges
     // from otherwise smooth turf gradients.
@@ -247,14 +251,14 @@ export class SceneManager {
     if (!environment || this._sceneDaylightRevision === environment.daylightRevision) return;
     this._sceneDaylightRevision = environment.daylightRevision;
     // Keep authored exposure responsive, but bound pathological presets before
-    // ACES: a 10–20x input otherwise drives the shoulder over the whole frame and
+    // Neutral: a 10–20x input otherwise drives the shoulder over the whole frame and
     // turns the sky and turf into the same low-contrast grey. Normal daylight
     // values (0.75–1.35) pass through unchanged.
     // Keep the authored atmosphere exposure authoritative while applying the
-    // renderer's fixed daylight calibration. The previous direct 1.0 mapping
-    // left the ACES shoulder on the pale turf response even after the shared
-    // sky palette was corrected.
-    this.renderer.toneMappingExposure = Math.min(1.48, Math.max(0.62, environment.atmosphereExposure.value * 0.84));
+    // renderer's fixed daylight calibration. Neutral needs a slightly higher
+    // reference exposure than ACES to hold the same midtone value while
+    // retaining the source sky/rock chromaticity in its highlight shoulder.
+    this.renderer.toneMappingExposure = Math.min(1.65, Math.max(0.70, environment.atmosphereExposure.value * 1.20));
     const horizon = environment.horizonColor.value;
     this.scene.fog.color.setRGB(horizon.x, horizon.y, horizon.z);
     // Turbidity owns both aerial perspective and sky extinction. Keeping these

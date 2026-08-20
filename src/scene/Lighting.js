@@ -85,11 +85,11 @@ export class Lighting {
         environment.sunColor.value.z,
       );
       // Keep the key decisively ahead of sky bounce so terrain relief and real
-      // caster shadows survive ACES.  The authored illuminance still scales the
+      // caster shadows survive the tone-map shoulder. The authored illuminance still scales the
       // complete rig; this is only the renderer-relative conversion.
       // Calibrate the renderer-relative key against the shared sky return so the
       // authored 85 klux state produces a visible direct lobe without driving
-      // pale turf into the ACES shoulder. All source changes still travel through
+      // pale turf into the tone-map shoulder. All source changes still travel through
       // the one EnvironmentGpuBindings snapshot.
       this.sun.intensity = KEY_INTENSITY_AT_REFERENCE * Math.max(0, environment.sunIlluminanceScale.value);
       const horizon = environment.horizonColor.value;

@@ -53,8 +53,8 @@ test('analytic environment fill remains subordinate to the shared sun', async ()
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   assert.match(source, /scene\.environmentIntensity = 0\.34 \* Math\.sqrt/,
     'PMREM fill must not flatten the corrected direct-daylight value structure');
-  assert.match(source, /environment\.atmosphereExposure\.value \* 0\.84/,
-    'ACES calibration must retain headroom for pale maintained turf');
+  assert.match(source, /environment\.atmosphereExposure\.value \* 1\.20/,
+    'Neutral calibration must retain midtone value while preserving daylight chromaticity');
 });
 
 test('post graph replacement disposes prior full-resolution targets and waits for weather', async () => {

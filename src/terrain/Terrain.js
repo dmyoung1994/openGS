@@ -1713,7 +1713,7 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   const sod = positionWorld.y.add(yWarp).mul(42.0).sin().mul(0.5).add(0.5);
   // Warm, earthy sod courses (dark peat → tan-olive turf edge); the cool sky fill
   // in the shaded pit would otherwise read blue-grey.
-  // Keep the deepest peat course dark, but above the ACES crush point under the
+  // Keep the deepest peat course dark, but above the tone-map crush point under the
   // hemisphere-only light that reaches a back-facing pit wall. The former 0.075
   // floor became near-black at exactly the camera angle where the wall occupies the
   // most screen space, making correct stationary geometry resemble a corrupt wedge.
