@@ -406,10 +406,18 @@ export class WeatherSky {
   _cloudDensityFromVolume(volume, normalizedHeight, clouds, detail = true) {
     const rawCarrier = volume.x.mul(volume.w).clamp(0, 1);
     const coverageThreshold = float(0.10).add(oneMinus(clouds.x.clamp(0, 1)).mul(0.06));
-    const carrier = smoothstep(coverageThreshold, coverageThreshold.add(0.18), rawCarrier);
+    const baseCarrier = smoothstep(coverageThreshold, coverageThreshold.add(0.18), rawCarrier);
     const vertical = this._heightGradient(normalizedHeight, volume);
     const detailSignal = volume.y.mul(0.58).add(volume.z.mul(0.42));
     const erosion = smoothstep(0.20, 0.78, volume.z);
+    // Only the carrier margin is allowed to move. Dense interiors have a saturated
+    // baseCarrier and therefore zero edgeWindow, preserving their core extinction;
+    // sparse parcels inherit bounded detail/erosion breakup at the boundary.
+    const edgeWindow = oneMinus(smoothstep(0.48, 0.84, baseCarrier));
+    const thresholdShift = detailSignal.sub(0.5).mul(0.035)
+      .add(erosion.sub(0.5).mul(0.025)).mul(edgeWindow);
+    const shiftedThreshold = coverageThreshold.add(thresholdShift);
+    const carrier = smoothstep(shiftedThreshold, shiftedThreshold.add(0.18), rawCarrier);
     // The carrier controls parcel occupancy; this second bounded field controls
     // cauliflower breakup inside an occupied parcel. Keeping it multiplicative
     // creates rounded crowns and shadow pockets instead of a uniform translucent
@@ -419,7 +427,7 @@ export class WeatherSky {
       volume.x.mul(0.35).add(volume.y.mul(0.42)).add(oneMinus(volume.z).mul(0.23)),
     );
     const variation = detail
-      ? float(0.16).add(fineShape.mul(0.66)).add(detailSignal.mul(0.12)).add(erosion.mul(0.06))
+      ? float(0.06).add(fineShape.mul(0.76)).add(detailSignal.mul(0.18))
       : float(0.72).add(volume.y.mul(0.08));
     return carrier.mul(vertical).mul(variation).mul(clouds.y).clamp(0, 1);
   }

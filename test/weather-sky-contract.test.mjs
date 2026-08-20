@@ -25,6 +25,21 @@ function state(cloudCoverage = 0.38) {
   });
 }
 
+function smoothstep01(edge0, edge1, value) {
+  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function jointCarrier(rawCarrier, detail, erosionChannel, coverage = 0.38) {
+  const threshold = 0.10 + (1 - coverage) * 0.06;
+  const base = smoothstep01(threshold, threshold + 0.18, rawCarrier);
+  const edgeWindow = 1 - smoothstep01(0.48, 0.84, base);
+  const detailSignal = detail * 0.58 + erosionChannel * 0.42;
+  const erosion = smoothstep01(0.20, 0.78, erosionChannel);
+  const shift = ((detailSignal - 0.5) * 0.035 + (erosion - 0.5) * 0.025) * edgeWindow;
+  return smoothstep01(threshold + shift, threshold + shift + 0.18, rawCarrier);
+}
+
 const renderer = () => ({
   isWebGPURenderer: true,
   compute(node) { this.lastCompute = node; },
@@ -216,14 +231,37 @@ test('WeatherSky uses one GPU sky-volume path and never a proxy/fallback rendere
   assert.match(source, /const detailSignal = volume\.y\.mul\(0\.58\)\.add\(volume\.z\.mul\(0\.42\)\)/);
   assert.match(source, /const rawCarrier = volume\.x\.mul\(volume\.w\)\.clamp\(0, 1\)/,
     'cloud occupancy must use the initialized joint R/A carrier');
-  assert.match(source, /const carrier = smoothstep\(coverageThreshold, coverageThreshold\.add\(0\.18\), rawCarrier\)/,
-    'joint R/A carrier must use a material threshold, not a near-zero remap');
+  assert.match(source, /const baseCarrier = smoothstep\(coverageThreshold, coverageThreshold\.add\(0\.18\), rawCarrier\)/,
+    'joint R/A carrier must establish an unshifted core before boundary erosion');
+  assert.match(source, /const edgeWindow = oneMinus\(smoothstep\(0\.48, 0\.84, baseCarrier\)\)/,
+    'detail threshold shifts must be limited to the carrier margin');
+  assert.match(source, /const thresholdShift = detailSignal\.sub\(0\.5\)\.mul\(0\.035\)/,
+    'existing detail and erosion channels must perturb the carrier threshold');
+  assert.match(source, /const carrier = smoothstep\(shiftedThreshold, shiftedThreshold\.add\(0\.18\), rawCarrier\)/,
+    'joint R/A carrier must use the shifted material threshold');
+  assert.doesNotMatch(source, /variation[\s\S]*erosion\.mul\(0\.06\)/,
+    'erosion must not be a positive fog floor in density');
   assert.match(source, /return carrier\.mul\(vertical\)/,
     'cloud density must consume the identical joint carrier');
   assert.doesNotMatch(source, /smoothstep\(0\.001, 0\.(08|10|12),/,
     'cloud density must not use catastrophic near-zero remaps');
   assert.doesNotMatch(source, /_cloudHistory|previousHistory|previousClip/);
   assert.doesNotMatch(source, /copyTextureToBuffer/);
+});
+
+test('cloud carrier boundary math preserves solid cores and breaks sparse margins', () => {
+  const coreLowDetail = jointCarrier(0.95, 0.1, 0.2);
+  const coreHighDetail = jointCarrier(0.95, 0.9, 0.8);
+  assert.ok(Math.abs(coreLowDetail - coreHighDetail) < 1e-9,
+    'saturated carrier cores must remain unchanged by boundary channels');
+  assert.ok(coreLowDetail > 0.999, 'solid core carrier must remain fully occupied');
+
+  const sparseA = jointCarrier(0.15, 0.1, 0.2);
+  const sparseB = jointCarrier(0.15, 0.9, 0.8);
+  assert.ok(Math.abs(sparseA - sparseB) > 1e-3,
+    'detail/erosion channels must increase sparse edge variance');
+  assert.equal(jointCarrier(0.01, 0.1, 0.2), 0,
+    'empty exterior must remain empty after threshold perturbation');
 });
 
 test('cloud graph is a true global AABB view-ray volume with front-to-back transport', async () => {
