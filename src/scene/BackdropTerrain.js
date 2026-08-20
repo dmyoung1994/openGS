@@ -1,14 +1,17 @@
 import {
-  BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, Uint32BufferAttribute,
+  BufferGeometry, Color, DataTexture, Float32BufferAttribute, Group, Mesh, Uint32BufferAttribute,
+  LinearMipmapLinearFilter, RepeatWrapping, SRGBColorSpace, TextureLoader,
 } from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   attribute, cameraPosition, float, mix, mx_noise_float, normalGeometry, normalWorld, positionGeometry, positionWorld,
-  smoothstep, transformNormalToView, varying, vec2, vec3, vec4, vertexColor,
+  smoothstep, texture, transformNormalToView, varying, vec2, vec3, vec4, vertexColor,
 } from 'three/tsl';
 import { Noise } from '../util/noise.js';
 import { createRng, deriveSeed } from '../util/random.js';
 import { NORTH_CASCADES_DEM } from '../terrain/northCascadesDem.js';
+
+const _backdropTextureLoader = new TextureLoader();
 
 // Render-only world continuation outside the authoritative physics terrain.
 // A shared height sampler owns every patch and distance band, so seams cannot form.
@@ -45,14 +48,49 @@ export class BackdropTerrain {
     this.group.userData.backdropSource = 'procedural-alpine-shell';
     this.group.userData.proceduralShell = true;
     this.group.userData.authoringSampler = sampler;
-    this.assetsReady = Promise.resolve();
+    let rockTexture;
+    let rockNormalTexture;
+    if (typeof document === 'undefined') {
+      // Headless geometry/unit tests never compile the material. Tiny neutral
+      // placeholders keep construction deterministic without requiring a DOM
+      // image loader; browser runtime always takes the licensed asset path.
+      rockTexture = new DataTexture(new Uint8Array([96, 98, 96, 255]), 1, 1);
+      rockNormalTexture = new DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
+      rockTexture.needsUpdate = rockNormalTexture.needsUpdate = true;
+      this.assetsReady = Promise.resolve();
+    } else {
+      let resolveRockTextures;
+      let pendingRockTextures = 2;
+      this.assetsReady = new Promise((resolve) => { resolveRockTextures = resolve; });
+      const settleRockTexture = () => {
+        pendingRockTextures -= 1;
+        if (pendingRockTextures === 0) resolveRockTextures();
+      };
+      rockTexture = _backdropTextureLoader.load(
+        '/assets/materials/rocky_terrain/rocky_terrain_diff_1k.jpg',
+        settleRockTexture, undefined, settleRockTexture,
+      );
+      rockNormalTexture = _backdropTextureLoader.load(
+        '/assets/materials/rocky_terrain/rocky_terrain_nor_gl_1k.jpg',
+        settleRockTexture, undefined, settleRockTexture,
+      );
+    }
+    rockTexture.colorSpace = SRGBColorSpace;
+    for (const texture of [rockTexture, rockNormalTexture]) {
+      texture.wrapS = texture.wrapT = RepeatWrapping;
+      texture.minFilter = LinearMipmapLinearFilter;
+      texture.anisotropy = 8;
+    }
+    this._rockTextures = [rockTexture, rockNormalTexture];
 
-    // Alpine geology is entirely procedural in the fragment shader. Keeping the
-    // material free of image inputs makes the shell deterministic across devices,
-    // avoids a second asset decode, and lets the same world/surface-space fields
-    // cover both the near wall and the far ribbon without a texture seam.
+    // Geometry and substrate ownership remain procedural. A physically scaled
+    // CC0 scan supplies only the exposed-rock PBR fabric; the same world-space
+    // projections cover Band A and the far ribbon without a UV seam.
     const material = worldMaterial('distant-temperate-alpine-ground', 'temperate-alpine',
-      { environment: this.environment, snowline: composition.snowline, bounds });
+      {
+        environment: this.environment, snowline: composition.snowline, bounds,
+        rockTexture, rockNormalTexture,
+      });
     const ring = alpineRingGrid(bounds, ALPINE_BAND_A_OUTER, ALPINE_BAND_A_SPACING);
     const mesh = new Mesh(buildPatch(
       bounds.minX - ALPINE_BAND_A_OUTER, bounds.maxX + ALPINE_BAND_A_OUTER,
@@ -108,6 +146,7 @@ export class BackdropTerrain {
     });
     for (const geometry of geometries) geometry.dispose();
     for (const material of materials) material.dispose();
+    for (const texture of this._rockTextures || []) texture.dispose();
     this.group.clear();
   }
 }
@@ -1337,7 +1376,10 @@ class AtmosphericTerrainMaterial extends MeshStandardNodeMaterial {
   }
 }
 
-function worldMaterial(name, biome, { environment = null, snowline = 400, bounds = null } = {}) {
+function worldMaterial(name, biome, {
+  environment = null, snowline = 400, bounds = null,
+  rockTexture = null, rockNormalTexture = null,
+} = {}) {
   const alpine = biome === 'temperate-alpine';
   // The maritime continuation still bakes a cheap per-vertex albedo; only the
   // alpine shell classifies per pixel, because only it is a mountain.
@@ -1591,306 +1633,130 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // a shallow cross-axis term, never as the contour coordinate by itself.
   const bedding = broadValuesVarying.z;
 
-  // Resistant ribs vs. incised gullies. This is the relief field that drives both
-  // the height blends and the normal perturbation, so albedo, shading and the
-  // material boundaries all agree about where the rock stands proud.
-  const ribs = mesoValue.mul(0.55).add(fineValue.mul(0.30)).add(bedding.mul(0.15));
-  const rockRelief = ribs.mul(0.72).add(cliffGate.mul(0.28)).clamp(0.0, 1.0);
-  // Fold existing broad fields into two geological signals: resistant bedding
-  // ribs and fault/weathering hollows. They are world anchored and correlated
-  // with the relief already paid for above, so this adds hierarchy without a new
-  // octave or an image lookup.
-  const beddingRib = smoothstep(0.48, 0.82, bedding.sub(0.5).abs().mul(2.0));
-  const faultRib = smoothstep(0.54, 0.86, mesoValue.sub(0.5).abs().mul(2.0));
+  // One alpine material partition: detail noise cannot vote itself into a
+  // substrate and then tint that same substrate. Authored cover chooses
+  // vegetation, intact rock or talus; snow is deposited last.
+  const directSlopeExposure = smoothstep(0.22, 0.62, slope);
+  const directBandJitter = macroValue.sub(0.5).mul(150.0);
+  const directAltitudeExposure = smoothstep(125.0, 405.0,
+    altitude.add(directBandJitter));
+  const directRockSignal = rockGate.mul(0.42).add(cliffGate.mul(0.36))
+    .add(directSlopeExposure.mul(0.30)).add(directAltitudeExposure.mul(0.28))
+    .add(benchGate.mul(0.10)).sub(treeGate.mul(0.38));
+  const directRock = smoothstep(0.28, 0.68, directRockSignal);
+  const depositionalSlope = smoothstep(0.12, 0.30, slope)
+    .mul(float(1.0).sub(smoothstep(0.48, 0.72, slope)));
+  const directScreeSource = screeGate.mul(0.62).add(washGate.mul(0.34))
+    .add(cliffGate.mul(0.18)).add(structuralCavity.mul(0.16));
+  const directScree = smoothstep(0.20, 0.62, directScreeSource.mul(depositionalSlope))
+    .mul(float(1.0).sub(directRock.mul(0.72)));
+  const directMineral = directRock.mul(float(1.0).sub(directScree));
 
-  // --- rock -----------------------------------------------------------------
-  // Steep ground is bare, high ground is bare, and the authored classification
-  // says where outcrops break through regardless. The boundary is then broken by
-  // the rib field so it is a ragged mineral edge, not a smooth altitude ramp.
-  const slopeExposure = smoothstep(0.26, 0.66, slope);
-  // Absolute metres, not a fraction of the snowline: this is the band between
-  // the tree line and the snow, and it is the only place bare granite reads.
-  // Without it the massif goes straight from forest green to snow white.
-  // The onset altitude is JITTERED by a broad world field. A band keyed to bare
-  // altitude is a horizontal contour stripe wrapped around the massif, which is
-  // the single most obvious tell that terrain was classified by elevation. A
-  // +/-90 m wander over ~600 m of world makes the same transition read as a
-  // ragged tree line following the ground.
-  const bandJitter = macroValue.sub(0.5).mul(180.0);
-  const altitudeExposure = smoothstep(150.0, 430.0, altitude.add(bandJitter));
-  const rockNominal = rockGate.mul(0.90)
-    .add(cliffGate.mul(0.72))
-    .add(benchGate.mul(0.46))
-    .add(slopeExposure.mul(0.92))
-    .add(altitudeExposure.mul(0.70))
-    // Break the lower wall with the same world-anchored meso field that drives
-    // the mineral albedo. This keeps rock exposure tied to actual geology rather
-    // than painting one continuous elevation shelf across the massif.
-    .add(smoothstep(0.30, 0.72, mesoValue).mul(smoothstep(70.0, 360.0, altitude)).mul(0.48))
-    .sub(treeGate.mul(0.70))
-    .clamp(0.0, 1.0);
-  const vegetationRelief = treeGate.mul(0.45).add(macroValue.mul(0.30)).add(0.28).clamp(0.0, 1.0);
-  // Broad vertex gates intentionally stay low-resolution. Carry a restrained
-  // outcrop allowance from the same cliff/scree/wash fields so lower faces can
-  // break through interpolated tree cover instead of becoming one green slab.
-  const lowerWallRock = cliffGate.mul(1.08).add(screeGate.mul(0.72)).add(washGate.mul(0.52))
-    .add(mesoValue.sub(0.5).max(0.0).mul(0.35))
-    // A broad, correlated mottle keeps exposed ribs legible even where the
-    // coarse treeline gate is high; it is bounded below the full cliff mask and
-    // does not turn the whole lower basin into bare stone.
-    .add(smoothstep(0.34, 0.76, mesoValue).mul(0.24))
-    .add(beddingRib.mul(0.30)).add(faultRib.mul(0.24))
-    .add(slopeExposure.mul(0.52))
-    .add(smoothstep(0.36, 0.76, mesoValue).mul(0.22))
-    .mul(float(1.0).sub(treeGate.mul(0.12))).clamp(0.0, 0.86);
-  // Coarse vertex gates can still interpolate a whole lower-wall triangle as
-  // meadow. Let the correlated meso/bedding field punch through on genuinely
-  // sloped faces, producing discrete outcrops and keeping the toe from reading
-  // as one continuous green shelf.
-  const faceOutcrop = smoothstep(0.34, 0.76, mesoValue)
-    .mul(slopeExposure.add(smoothstep(80.0, 360.0, altitude).mul(0.24))).mul(0.68);
-  const ridgeStone = smoothstep(0.46, 0.74, mesoValue)
-    .mul(smoothstep(90.0, 420.0, altitude.add(bandJitter)))
-    .mul(float(1.0).sub(treeGate.mul(0.32)));
-  // Blend the broad authored gate and the pixel-scale geology as a bounded
-  // weighted union. Hard max() made every coincident signal saturate to one,
-  // producing posterized slabs and erasing meadow/rock transitions.
-  const rockMask = heightBlend(rockNominal, vegetationRelief, rockRelief, 0.34)
-    .mul(0.62)
-    .add(lowerWallRock.mul(0.20))
-    .add(faceOutcrop.mul(0.11))
-    .add(ridgeStone.mul(0.05))
-    .add(slopeExposure.mul(float(1.0).sub(treeGate.mul(0.46))).mul(0.02))
-    .clamp(0.0, 1.0);
+  // Poly Haven Rocky Terrain is a 90 m aerial scan, so one tile remains
+  // resolvable on the far ribbon instead of filtering to a flat average. The
+  // shader projects it across top and steep-face bases, then derives neutral
+  // granite value and crack placement from the scan rather than painting its
+  // original brown/green ground colour onto the cliff.
+  const rockUvWarp = vec2(macroValue.sub(0.5), mesoValue.sub(0.5)).mul(0.16);
+  const rockTopUv = vec2(world.x.mul(0.92).add(world.z.mul(0.18)),
+    world.z.mul(0.92).sub(world.x.mul(0.18))).mul(1 / 90).add(rockUvWarp);
+  const rockSideAxis = world.x.mul(0.72).add(world.z.mul(0.69));
+  const rockSideUv = vec2(rockSideAxis, world.y.mul(0.94))
+    .mul(1 / 90).add(rockUvWarp.mul(vec2(-0.73, 0.81)));
+  const rockTopWeight = projectionWeight.y.add(0.10);
+  const rockSideWeight = projectionWeight.x.add(projectionWeight.z).add(0.12);
+  const rockProjection = rockTopWeight.div(rockTopWeight.add(rockSideWeight));
+  const rockScan = mix(texture(rockTexture, rockSideUv).rgb,
+    texture(rockTexture, rockTopUv).rgb, rockProjection);
+  const rockScanLuma = rockScan.dot(vec3(0.2126, 0.7152, 0.0722));
+  const rockScanValue = smoothstep(0.035, 0.30, rockScanLuma);
+  const rockScanCrack = float(1.0).sub(smoothstep(0.030, 0.105, rockScanLuma));
+  const rockScanOxidation = smoothstep(0.015, 0.12, rockScan.r.sub(rockScan.g))
+    .mul(float(1.0).sub(rockScanCrack));
 
-  // --- snow -----------------------------------------------------------------
-  // Two things the old altitude lerp got wrong: snow does not hold on a cliff,
-  // and it does not stop at a horizontal line. Slope sheds it and aspect biases
-  // it (a property of the surface, not a second light source).
-  //
-  // Snow is deliberately NOT height-blended. A height blend saturates: once the
-  // two relief fields differ by more than the transition width, the surface with
-  // the greater relief takes the whole sample, so any non-zero nominal weight
-  // becomes total coverage. That is the right behaviour for interlocking two
-  // materials that both belong at a location, and completely wrong for placing a
-  // snowline -- it turned a 0.3 weight spread over a 260 m altitude band into a
-  // white mountain from the address view. Coverage is thresholded instead, so
-  // partial cover exists and the ribs/drift fields only make the edge ragged.
-  // Spread the altitude handoff over a real alpine accumulation zone. A 94 m
-  // ramp made the cap read as a binary pale mask once interpolated across the
-  // shell triangles; the broader transition leaves room for ledges, ribs, and
-  // wind exposure to decide where coverage survives.
-  const snowBand = smoothstep(snowline - 86.0, snowline + 178.0, altitude.add(bandJitter.mul(0.62)));
-  // Keep snow on the upper alpine faces until the surface is genuinely near
-  // vertical. The former low cutoff shed every summit pixel and left the massif
-  // as one smooth blue-gray wall through aerial perspective.
-  const snowShed = float(1.0).sub(smoothstep(0.38, 0.78, slope));
-  const snowSlopeBias = float(1.0).sub(smoothstep(0.28, 0.70, slope));
-  const aspect = normalWorld.z.negate().mul(0.5).add(0.5);
-  const ledgeCatch = benchGate.mul(0.34).add(washGate.mul(0.22)).add(cliffGate.mul(0.16)).clamp(0.0, 1.0);
-  const snowPotential = snowBand.mul(snowShed).mul(snowSlopeBias.mul(0.55).add(0.45))
-    .mul(aspect.mul(0.58).add(0.28))
-    .add(snowGate.mul(0.06)).add(ledgeCatch.mul(0.18).mul(snowBand));
-  // Wind scours the ribs and loads the lee hollows, so snow accumulates against
-  // the inverse of the rock relief plus a broad drift field.
-  const snowDrift = float(1.0).sub(ribs).mul(0.72)
-    .add(macroValue.mul(0.16)).add(beddingRib.mul(0.28))
-    .add(faultRib.mul(0.22)).add(ledgeCatch.mul(0.34)).clamp(0.0, 1.0);
-  // Accumulation is a thresholded lee-hollow signal, not a linear white band:
-  // resistant ribs scour clean while bedding/fault hollows retain snow below
-  // the nominal line. The narrower altitude ramp keeps a cap without whitening
-  // the whole massif.
-  const snowAccumulationRaw = snowPotential.mul(0.68).add(snowDrift.mul(0.18))
-    .sub(ribs.mul(0.52)).sub(faultRib.mul(0.24)).add(snowBand.mul(0.05))
-    // Proud structural faces shed wind-packed snow; vertex cavities retain it.
-    .sub(structuralFace.mul(0.40)).add(structuralCavity.mul(0.14));
-  // Remap the physical accumulation into the established threshold contract;
-  // the lower gain broadens the transition without reintroducing a hard cap.
-  const snowAccumulation = snowAccumulationRaw.mul(0.86).add(0.14).clamp(0.0, 1.0);
-  const snowMask = smoothstep(0.56, 0.82, snowAccumulation);
-  // Snow still carries the same world-space geology as the rock beneath it.
-  // Without a cavity-aware value, every high face collapsed to one pale blue
-  // card even after the accumulation mask became discontinuous. Keep the
-  // fissures cool and dirty, while ledges/ribs retain a physically bright lee
-  // surface; this is a colour response only and adds no pass or texture.
-  const snowCavity = faultRib.mul(0.42).add(beddingRib.mul(0.18))
-    .add(washGate.mul(0.24)).clamp(0.0, 1.0);
-  const snowTone = smoothstep(0.22, 0.86, upness).mul(0.72)
-    .add(macroValue.mul(0.12)).add(mesoValue.mul(0.16))
-    .sub(snowCavity.mul(0.48)).sub(faultRib.mul(0.16)).clamp(0.08, 1.0);
+  // Two narrow joint sets are zero crossings of fields whose gradients already
+  // drive the normal graph. They form connected seams instead of abs(noise)
+  // blobs, and their weathered shoulders stay wider and subtler than the crack.
+  const mesoJoint = float(1.0).sub(smoothstep(0.018, 0.072, mesoValue.sub(0.50).abs()));
+  const fineJoint = float(1.0).sub(smoothstep(0.014, 0.055, fineValue.sub(0.57).abs()));
+  const directJoint = rockScanCrack.mul(0.82)
+    .add(mesoJoint.mul(fineJoint).mul(0.35)).clamp(0.0, 1.0).mul(directMineral);
+  const jointShoulder = float(1.0).sub(smoothstep(0.055, 0.16, fineValue.sub(0.57).abs()))
+    .mul(float(1.0).sub(fineJoint)).mul(directMineral);
+  const directSlab = structuralFace.mul(0.62)
+    .add(smoothstep(0.38, 0.72, bedding).mul(0.22))
+    .add(mesoValue.mul(0.16)).clamp(0.0, 1.0);
+  const directCavity = structuralCavity.mul(0.72)
+    .add(washGate.mul(0.16)).add(mesoJoint.mul(0.12)).clamp(0.0, 1.0);
+  const directWeathering = jointShoulder.mul(0.62)
+    .add(directCavity.mul(0.38)).clamp(0.0, 1.0);
 
-  // --- scree ----------------------------------------------------------------
-  // Rubble collects below the faces on moderate slopes; it cannot cling to a
-  // cliff and it sits under, not over, the snow.
-  const screeNominal = screeGate.mul(1.35).add(washGate.mul(0.85)).add(faultRib.mul(0.30))
-    .add(slopeExposure.mul(0.18))
-    .mul(float(1.0).sub(smoothstep(0.52, 0.86, slope)))
-    .mul(float(1.0).sub(snowMask))
-    .clamp(0.0, 1.0);
-  const screeMask = smoothstep(0.18, 0.72, screeNominal.mul(0.70).add(fineValue.mul(0.30)));
+  const directConifer = linearRGB(0x344438);
+  const directMeadow = linearRGB(0x687656);
+  const directGraniteBase = linearRGB(0x474c4e);
+  const directGraniteFresh = linearRGB(0x747a7c);
+  const directGraniteCavity = linearRGB(0x252a2d);
+  const directJointRock = linearRGB(0x1c2124);
+  const directOxidation = linearRGB(0x705b49);
+  const directScreeDark = linearRGB(0x554f47);
+  const directScreeLight = linearRGB(0x81776a);
+  const directSnowLit = linearRGB(0xe4edf1);
+  const directSnowShade = linearRGB(0x8ca2b0);
 
-  // Weathering shares the same slope, aspect, and relief signals as the visible
-  // rock. It darkens and roughens sheltered, lower-energy faces while exposed
-  // ribs stay cooler and cleaner; this keeps albedo, roughness, and normal relief
-  // reading as one lithology instead of disconnected painted masks.
-  const weatheringMask = smoothstep(0.18, 0.64, slope)
-    .mul(float(1.0).sub(snowMask))
-    .mul(float(1.0).sub(screeMask.mul(0.42)))
-    .mul(mesoValue.mul(0.58).add(fineValue.mul(0.27)).add(0.15))
-    .mul(aspect.mul(0.20).add(0.80))
-    .mul(float(0.76).add(smoothstep(30.0, 520.0, altitude).mul(0.24)))
-    .clamp(0.0, 1.0);
+  const directMeadowShare = smoothstep(0.30, 0.72,
+    float(1.0).sub(treeGate).mul(0.62).add(macroValue.mul(0.24))
+      .add(smoothstep(80.0, 250.0, altitude).mul(0.14)));
+  let directAlbedo = mix(directConifer, directMeadow, directMeadowShare);
+  let directRockColor = mix(directGraniteBase, directGraniteFresh,
+    rockScanValue.mul(0.68).add(directSlab.mul(0.18)).clamp(0.0, 0.86));
+  const rockScanChroma = rockScan.div(rockScanLuma.add(0.025)).clamp(0.72, 1.32);
+  directRockColor = directRockColor.mul(mix(vec3(1.0), rockScanChroma, 0.14));
+  directRockColor = mix(directRockColor, directGraniteCavity, directCavity.mul(0.68));
+  directRockColor = mix(directRockColor, directOxidation,
+    jointShoulder.mul(0.10).add(rockScanOxidation.mul(0.20)).clamp(0.0, 0.24));
+  directRockColor = mix(directRockColor, directJointRock, directJoint.mul(0.88));
+  const directGrade = macroValue.sub(0.5).mul(0.12)
+    .add(bedding.sub(0.5).mul(0.10)).add(grainValue.sub(0.5).mul(0.025)).add(1.0);
+  directRockColor = directRockColor.mul(directGrade.clamp(0.86, 1.12));
+  const directScreeMottle = smoothstep(0.30, 0.72,
+    fineValue.mul(0.72).add(mesoValue.mul(0.28)));
+  const directScreeColor = mix(directScreeDark, directScreeLight, directScreeMottle);
+  directAlbedo = mix(directAlbedo, directRockColor, directMineral);
+  directAlbedo = mix(directAlbedo, directScreeColor, directScree);
 
-  // --- endmembers -----------------------------------------------------------
-  // Five surfaces, chosen between rather than averaged. The old chain ran about
-  // thirty sequential lerps toward a dozen different warm soils; sequential lerps
-  // average, and the mean of a dozen olives and tans is the uniform khaki that
-  // made the massif read as landfill.
-  const conifer = linearRGB(0x55684e);        // deep, blue-shifted alpine forest
-  const meadowGrass = linearRGB(0x93a171);    // dry high meadow and benches
-  // Granite is a MID grey, not a light one. At 0xa3a9ad the bare rock came out
-  // brighter than most of the sky's lower half and read as an unbroken
-  // snowfield from every camera -- the massif looked white long after the
-  // snowline had been raised, because almost none of that white was snow.
-  // Distant sunlit granite belongs well below snow in value; snow is supposed
-  // to be the brightest thing on the hill by a clear margin.
-  const graniteLit = linearRGB(0x707476);     // sunlit neutral granite, below snow value
-  const graniteWarm = linearRGB(0x958774);    // iron-stained gneiss on resistant ribs
-  const graniteDark = linearRGB(0x3d4145);    // neutral charcoal bedding/fault shadow
-  const screeRubble = linearRGB(0x8b7968);    // weathered warm-grey talus
-  const snowLit = linearRGB(0xd9e4e9);        // bright, cold, actually reads as snow
-  const snowShade = linearRGB(0x718999);      // cool shadow side of the same snow
+  const directSnowBand = smoothstep(snowline - 100.0, snowline + 150.0,
+    altitude.add(directBandJitter.mul(0.55)));
+  const directSnowEligibility = directSnowBand.mul(smoothstep(0.46, 0.82, upness));
+  const directSnowRetention = structuralCavity.mul(0.38).add(benchGate.mul(0.25))
+    .add(float(1.0).sub(fineValue).mul(0.20)).add(washGate.mul(0.17));
+  const directSnowAccumulation = directSnowEligibility.mul(0.72)
+    .add(directSnowRetention.mul(directSnowBand).mul(0.34))
+    .sub(structuralFace.mul(0.20)).sub(directJoint.mul(0.12)).add(snowGate.mul(0.08));
+  const directSnow = smoothstep(0.54, 0.76, directSnowAccumulation);
+  const directSnowTone = upness.mul(0.58).add(float(1.0).sub(directCavity).mul(0.26))
+    .add(macroValue.mul(0.16)).clamp(0.0, 1.0);
+  directAlbedo = mix(directAlbedo,
+    mix(directSnowShade, directSnowLit, directSnowTone), directSnow);
 
-  // Vegetated substrate.
-  const meadowShare = smoothstep(0.35, 0.75,
-    float(1.0).sub(treeGate).mul(0.55).add(macroValue.mul(0.45))
-      .add(smoothstep(60.0, 220.0, altitude).mul(0.35)));
-  let albedo = mix(conifer, meadowGrass, meadowShare);
-
-  // Mineral substrate: one lithology whose VALUE comes from bedding and local
-  // relief. Rock reads as rock because its light and dark are structured, not
-  // because it is a different hue.
-  const beddingValue = bedding.mul(0.46).add(beddingGate.mul(0.18)).add(ribs.mul(0.26))
-    .add(beddingRib.mul(0.10));
-  // Pull the correlated meso/bedding signal away from its mid-grey centre so
-  // distant faces keep broad lithology planes after aerial transmittance. This
-  // reuses fields already paid for above; it is contrast, not another octave.
-  const faceValue = mesoValue.mul(0.48).add(macroValue.mul(0.28))
-    .add(beddingValue.mul(0.24));
-  const faceContrast = faceValue.sub(0.5).mul(1.85).add(0.5).clamp(0.0, 1.0);
-  // Separate broad lithology from light direction.  A single pale granite
-  // endmember was being flattened by the shared haze into one grey wall.  The
-  // warm member follows bedding on exposed ribs while the cool member remains
-  // in faults; both stay continuous and blend before lighting, never as a
-  // posterized material ID.
-  let mineral = mix(graniteDark, graniteLit, smoothstep(0.12, 0.88, faceContrast));
-  mineral = mix(mineral, graniteWarm,
-    smoothstep(0.50, 0.86, bedding).mul(0.46).add(beddingRib.mul(0.14)).clamp(0.0, 0.62));
-  // Faults and wash are sheltered, cool cavities rather than a second flat
-  // colour ID.  Keep the blend continuous so the face reads as one lithology
-  // with deep chutes, not a posterized checker of dark triangles.
-  const cavity = snowCavity
-    .add(faultRib.mul(0.18)).add(washGate.mul(0.10)).clamp(0.0, 1.0);
-  mineral = mix(mineral, graniteDark, cavity.mul(0.44));
-  // The oriented block response is the high-level geological contrast that
-  // survives aerial perspective: resistant faces stay warm/legible while
-  // faulted chutes fall toward a cool charcoal cavity. Keep exactly one blend
-  // for each endmember so the same signed geology is not accidentally layered
-  // twice into broad bands or a continuous dark toe.
-  const resistantBlend = structuralFace.mul(0.54).clamp(0.0, 0.68);
-  const cavityBlend = structuralCavity.mul(0.44).clamp(0.0, 0.56);
-  mineral = mix(mineral, graniteWarm, resistantBlend);
-  mineral = mix(mineral, graniteDark, cavityBlend);
-  // Lift only the deepest part of an oriented chute toward sunlit granite. This
-  // preserves cavity shading while preventing a whole lower toe from collapsing
-  // to the charcoal endmember after aerial perspective.
-  // Keep the strike visible through the shared haze as restrained broad planes;
-  // this is a continuous world-space lithology response, not a hard material
-  // mask, so the faces do not collapse into posterized triangles.
-  const beddingTone = smoothstep(0.22, 0.78, bedding);
-  mineral = mix(mineral, mix(graniteDark, graniteLit, beddingTone), 0.18);
-  mineral = mix(mineral, screeRubble, screeMask.mul(0.95));
-
-  // Procedural mineral hierarchy. The biplanar fields supply deterministic
-  // face-safe variation; the octave gates above turn their fine contribution
-  // toward neutral at distance rather than aliasing into a noisy gray wash.
-  const mineralVariation = mesoValue.sub(0.5).mul(0.78)
-    .add(fineValue.sub(0.5).mul(0.28))
-    .add(macroValue.sub(0.5).mul(0.42))
-    .add(grainValue.sub(0.5).mul(0.06))
-    // These two signals are anisotropic and warped in world space, so their
-    // extra contrast reads as broad strike-aligned faces/chutes at 50--300 m,
-    // not isotropic blobs or height-contour bands.
-    .add(beddingRib.sub(0.5).mul(0.22))
-    .add(faultRib.sub(0.5).mul(0.18))
-    .add(structuralFace.sub(0.5).mul(0.30))
-    .sub(structuralCavity.mul(0.18))
-    .add(weatheringMask.sub(0.5).mul(0.12))
-    .sub(cavity.mul(0.12));
-  // Keep the unmodified unity-centered grade as the named geology contract;
-  // contrast is applied as a bounded remap immediately after it.
-  const mineralGrade = float(1.0).add(mineralVariation);
-  const mineralGradeContrast = mineralGrade.sub(1.0).mul(1.05).add(1.0).clamp(0.58, 1.24);
-  mineral = mineral.mul(vec3(
-    mineralGradeContrast.mul(0.97), mineralGradeContrast, mineralGradeContrast.mul(1.035),
-  ));
-
-  // The coarse geology gate is intentionally conservative at the mesh vertices;
-  // let the correlated GPU field carry more of its mineral face through the
-  // interpolated far ribbon so the lower wall cannot collapse to one green shelf.
-  // A second world-space exposure gate lets resistant meso ribs emerge between
-  // sparse authored vertices. It is altitude-bounded and tree-gated, so it breaks
-  // the lower wall into irregular outcrops instead of painting a horizontal rock
-  // shelf across the entire basin.
-  const faceStone = smoothstep(0.32, 0.78, mesoValue)
-    .mul(smoothstep(110.0, 470.0, altitude))
-    .mul(float(1.0).sub(treeGate.mul(0.30)))
-    .mul(0.62).add(beddingRib.mul(0.12)).clamp(0.0, 1.0);
-  // A small, slope/altitude-bounded outcrop allowance breaks the continuous
-  // green toe.  It is driven by the same oriented bedding/fault/cavity fields
-  // as the rock response, so meadow pockets remain in hollows while resistant
-  // planes emerge on the lower wall without a horizontal material shelf.
-  const toeOutcrop = smoothstep(0.18, 0.58, slope)
-    .mul(smoothstep(80.0, 390.0, altitude))
-    .mul(float(1.0).sub(treeGate.mul(0.58)))
-    .mul(beddingRib.mul(0.50).add(faultRib.mul(0.28)).add(cliffGate.mul(0.22)))
-    .clamp(0.0, 1.0);
-  // Toe exposure follows the oriented block/chute response as well as the
-  // existing slope/altitude term. Shared cliff/scree/wash gates make this fade
-  // continuously across the rectangular-ring/ribbon boundary instead of
-  // switching on as a horizontal altitude stripe.
-  const toeStructural = structuralFace.mul(0.38).add(structuralCavity.mul(0.22))
-    .mul(cliffGate.mul(0.48).add(screeGate.mul(0.32)).add(washGate.mul(0.20)).clamp(0.0, 1.0))
-    .mul(float(1.0).sub(snowMask));
-  const toeScreeExposure = toeStructural.mul(
-    screeMask.mul(0.46).add(screeGate.mul(0.18)).clamp(0.0, 0.62),
-  );
-  const toeExposure = toeOutcrop.mul(0.58)
-    .add(toeStructural.mul(0.28)).add(toeScreeExposure.mul(0.18)).clamp(0.0, 1.0);
-  const structuralToeOutcrop = structuralFace
-    .mul(smoothstep(100.0, 420.0, altitude))
-    .mul(float(1.0).sub(treeGate.mul(0.65))).mul(0.14);
-  const structuralToeScree = structuralCavity
-    .mul(smoothstep(70.0, 360.0, altitude))
-    .mul(float(1.0).sub(treeGate.mul(0.50))).mul(0.12);
-  const mineralCoverage = rockMask.mul(0.64).add(faceStone.mul(0.18))
-    .add(toeExposure.mul(0.30)).add(structuralToeOutcrop).clamp(0.0, 1.0);
-  albedo = mix(albedo, mineral, mineralCoverage);
-  // Talus and wash sit below the cliff face. Let their broad field expose a
-  // restrained mineral patch even when a vegetated vertex gate interpolates
-  // across the same coarse triangle; otherwise the lower wall becomes one
-  // uninterrupted green slab and the scree channel disappears at distance.
-  albedo = mix(albedo, screeRubble,
-    screeMask.mul(0.84).mul(float(1.0).sub(rockMask))
-      .add(toeScreeExposure.mul(0.16)).add(structuralToeScree).clamp(0.0, 1.0));
-  albedo = mix(albedo, mix(snowShade, snowLit, snowTone), snowMask);
+  // Decode the matching OpenGL normal scan and express only its tangent delta
+  // in the two world projection bases. Adding that delta to the analytic terrain
+  // normal avoids a camera-space normal map and keeps the scan's cracks, value,
+  // roughness response and lighting registered on both top and cliff faces.
+  const rockNormalTop = texture(rockNormalTexture, rockTopUv).rgb.mul(2.0).sub(1.0);
+  const rockNormalSide = texture(rockNormalTexture, rockSideUv).rgb.mul(2.0).sub(1.0);
+  const rockTopDelta = vec3(0.981, 0.0, 0.192).mul(rockNormalTop.x)
+    .add(vec3(-0.192, 0.0, 0.981).mul(rockNormalTop.y));
+  const rockSideDelta = vec3(0.722, 0.0, 0.692).mul(rockNormalSide.x)
+    .add(vec3(0.0, 1.0, 0.0).mul(rockNormalSide.y));
+  const rockScanNormalDelta = mix(rockSideDelta, rockTopDelta, rockProjection)
+    .mul(directMineral).mul(float(1.0).sub(directSnow)).mul(0.42);
 
   // --- normals --------------------------------------------------------------
   // World-space gradients, so the perturbation is a fixed physical slope at every
   // distance. Each field is gated to the surface it belongs to: rock gets rib and
   // grain structure, snow is smoothed, vegetation stays soft.
-  const visibleMineral = mineralCoverage.max(screeMask.mul(0.62));
-  const rockDetail = visibleMineral.mul(float(1.0).sub(snowMask));
+  const visibleMineral = directMineral.max(directScree.mul(0.62));
+  const rockDetail = visibleMineral.mul(float(1.0).sub(directSnow));
   const vertexReliefVisibility = float(0.38).max(
     float(1.0).sub(smoothstep(6.0, 24.0, worldFootprint)),
   );
@@ -1924,7 +1790,10 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
     broadGradientsVarying.w.mul(8.0).mul(mesoVisibility)
       .add(broadGradientsVarying.y.mul(14.0))
       .add(fine.gradZ.mul(5.0).mul(fineVisibility)),
-  ).mul(rockDetail.mul(0.85).add(screeMask.mul(0.25)).add(0.06));
+  ).mul(rockDetail.mul(0.85).add(directScree.mul(0.25)).add(0.06))
+    // Intensify the same gradients only at the narrow crack shoulders; the
+    // albedo seam and surface break therefore remain spatially coupled.
+    .mul(mesoJoint.mul(fineJoint).mul(0.30).add(1.0));
   // The normal response follows the same strike/secondary spatial derivatives
   // as the vertex displacement. This is mountain-scale geometry, so it must not
   // disappear on pale/snow or low-mineral faces when rockDetail is near zero.
@@ -1932,17 +1801,17 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // normal uses one calibrated broad-face strength everywhere.
   material.normalNode = transformNormalToView(
     normalWorld.add(bump)
-      .add(vertexReliefBump.mul(0.78)).normalize(),
+      .add(vertexReliefBump.mul(0.78)).add(rockScanNormalDelta).normalize(),
   );
 
   // Matte dielectric throughout. Snow is slightly glossier than weathered rock,
   // vegetation is the roughest thing on the hill.
-  const mineralRough = mix(float(0.97), float(0.80), visibleMineral.mul(0.7).add(slope.mul(0.3)))
-    .add(weatheringMask.mul(0.055))
+  const mineralRough = mix(float(0.97), float(0.78), visibleMineral.mul(0.7).add(slope.mul(0.3)))
+    .add(directWeathering.mul(0.07)).add(directJoint.mul(0.08))
     .add(structuralCavity.mul(0.075)).sub(structuralFace.mul(0.025))
     .add(grainValue.sub(0.5).mul(0.035)).clamp(0.72, 0.99);
-  material.roughnessNode = mix(mineralRough, float(0.86), snowMask);
-  material.colorNode = albedo;
+  material.roughnessNode = mix(mineralRough, float(0.88), directSnow);
+  material.colorNode = directAlbedo;
 
   material.name = name;
   return material;

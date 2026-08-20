@@ -163,12 +163,14 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
     'steep faces must be dominated by the isotropic side basis, not an XZ stripe projection');
   assert.match(source, /y\.mul\(frequency\)\.add\(warp\.mul\(0\.45\)\)/,
     'side geology must vary through world Y at the same physical scale as X/Z');
-  assert.doesNotMatch(source, /TextureLoader|graniteTexture|alpine_granite_albedo_v1\.png|\btexture\s*\(/,
-    'alpine geology must not own a sampled granite image');
-  assert.match(source, /const mineralGrade = float\(1\.0\)\.add\(mineralVariation\)/,
-    'procedural mineral variation must grade the rock endmember rather than the whole surface');
-  assert.match(source, /albedo = mix\(albedo, mineral, mineralCoverage\)/,
-    'mineral source must remain subordinate to the per-pixel rock classification');
+  assert.doesNotMatch(source, /graniteTexture|alpine_granite_albedo_v1\.png/,
+    'the retired granite image path must stay removed');
+  assert.match(source, /const directMineral = directRock\.mul/,
+    'the scan must remain subordinate to one explicit rock substrate');
+  assert.match(source, /directAlbedo = mix\(directAlbedo, directRockColor, directMineral\)/,
+    'the rock source must not tint vegetation or talus');
+  assert.match(source, /texture\(rockNormalTexture, rockSideUv\)/,
+    'the matching normal scan must be sampled in the GPU material');
   assert.match(source, /backdropSource = 'procedural-alpine-shell'/,
     'alpine horizon geometry is owned by the authored shell, not a photographic HDR');
   assert.match(source, /proceduralShell = true/,
@@ -184,18 +186,18 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
   assert.match(source, /const dominantSpur\s*=\s*Math\.exp/, 'ridge relief should follow a coherent world-space strike');
   assert.match(source, /const talusToe\s*=\s*talusFan/, 'talus should build a geological toe below exposed faces');
   assert.match(source, /const exposureByAltitude\s*=\s*0\.36\s*\+\s*smootherstep/, 'rock exposure must transition through alpine vegetation and retain lower-wall outcrops');
-  assert.match(source, /const slopeExposure = smoothstep\(0\.26, 0\.66, slope\)/,
+  assert.match(source, /const directSlopeExposure = smoothstep\(0\.22, 0\.62, slope\)/,
     'shared PBR must expose rock from the analytic surface slope');
-  assert.match(source, /const rockMask = heightBlend\(rockNominal, vegetationRelief, rockRelief/,
-    'rock must interlock with vegetation by relief rather than fading linearly');
-  assert.match(source, /const lowerWallRock = cliffGate\.mul\(1\.08\)/,
-    'lower wall outcrops must remain visible below the snowline');
+  assert.match(source, /const directRockSignal = rockGate\.mul\(0\.42\)\.add\(cliffGate\.mul\(0\.36\)\)/,
+    'one authored substrate signal must classify exposed rock');
+  assert.match(source, /const directRock = smoothstep\(0\.28, 0\.68, directRockSignal\)/,
+    'rock ownership needs a bounded transition into vegetation');
   assert.match(source, /material\.positionNode = vec3\(vertexX, vertexY, vertexZ\)[\s\S]*?\.add\(normalGeometry\.mul\(vertexDisplacement\.mul\(shellFade\)\)\)/,
     'alpine shell must carry bounded GPU vertex relief through the existing topology');
   assert.match(source, /const vertexDisplacement = vertexMacro\.sub\(0\.5\)\.mul\(26\.0\)/,
     'vertex relief must stay in broad and meso geology scales');
-  assert.match(source, /const snowShed = float\(1\.0\)\.sub\(smoothstep\(0\.38, 0\.78, slope\)\)/,
-    'snow must remain on high alpine faces but still shed from near-vertical walls');
+  assert.match(source, /const directSnowEligibility = directSnowBand\.mul\(smoothstep\(0\.46, 0\.82, upness\)\)/,
+    'snow must remain on high up-facing alpine surfaces and shed from walls');
   // The sampler no longer bakes albedo. It used to run ~30 sequential Color.lerp
   // calls per vertex into a `color` attribute that was then interpolated across
   // 30 m triangles, which averaged every classification decision into one khaki

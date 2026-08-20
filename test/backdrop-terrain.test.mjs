@@ -18,12 +18,26 @@ test('bundled USGS ridge table is compact, deterministic, and bounded', async ()
     '3e3f7bdb41c4d1d1b272cd9b25952e4319419e30d8cd09907c85b358055f7b42');
 });
 
-test('alpine geology is shader-only and has no granite texture runtime path', async () => {
+test('alpine geology uses licensed 90 m scan maps through the GPU material path', async () => {
   const source = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /alpine_granite_albedo_v1\.png|loadGraniteAlbedo|graniteTexture/,
     'the retired granite image must not have runtime ownership');
-  assert.doesNotMatch(source, /TextureLoader|RepeatWrapping|SRGBColorSpace|\btexture\s*\(/,
-    'alpine material must not load or sample an image texture');
+  const diffuse = await readFile(new URL(
+    '../public/assets/materials/rocky_terrain/rocky_terrain_diff_1k.jpg', import.meta.url,
+  ));
+  const normal = await readFile(new URL(
+    '../public/assets/materials/rocky_terrain/rocky_terrain_nor_gl_1k.jpg', import.meta.url,
+  ));
+  assert.equal(createHash('sha256').update(diffuse).digest('hex'),
+    '429315865fd89c150272592f6d93def174c6f69804a565ff08e53627a885579b');
+  assert.equal(createHash('sha256').update(normal).digest('hex'),
+    'a6556e1220c6e6c822e68ceeb9589719e4db8c87340199657cc705fea6ecf391');
+  assert.match(source, /rocky_terrain_diff_1k\.jpg/);
+  assert.match(source, /rocky_terrain_nor_gl_1k\.jpg/);
+  assert.match(source, /\.mul\(1 \/ 90\)/,
+    'the 90 m scan must retain its physical world scale in the shader');
+  assert.match(source, /texture\(rockTexture, rockSideUv\)/);
+  assert.match(source, /texture\(rockNormalTexture, rockTopUv\)/);
   const material = source.slice(source.indexOf('function biplanarField'), source.indexOf('function buildPatch'));
   assert.match(material, /function biplanarField\(/,
     'procedural mineral fields need a surface-safe biplanar domain');
@@ -36,10 +50,10 @@ test('alpine geology is shader-only and has no granite texture runtime path', as
     'detail handoff must include view distance');
   assert.match(material, /const vertexStrataWarp = mx_noise_float/,
     'stratification must be evaluated in the vertex graph');
-  assert.match(material, /const weatheringMask = smoothstep/,
-    'weathering needs a shared slope/relief mask');
-  assert.match(material, /const mineralGrade = float\(1\.0\)\.add\(mineralVariation\)/,
-    'procedural mineral variation must drive the rock albedo');
+  assert.match(material, /const directWeathering = jointShoulder/,
+    'weathering needs a shared scan/relief mask');
+  assert.match(material, /const directMineral = directRock/,
+    'one explicit rock substrate must own the scan contribution');
 });
 
 test('alpine backdrop keeps the rejected far-conifer derivative out of runtime', async () => {
@@ -582,16 +596,13 @@ test('alpine surface response is classified per pixel, not baked per vertex', as
     'broad macro/meso/bedding fields must not be reconstructed per fragment');
   assert.doesNotMatch(source, /dFdx\(|dFdy\(/,
     'screen-space derivatives scale with pixel footprint, not with the ground');
-  // Displacement-weighted blending, after Hollow-TerrainSystem's SampleOMPV.
-  assert.match(source, /function heightBlend\(weight, heightA, heightB, transition\)/);
-  assert.match(source, /return b\.div\(a\.add\(b\)\.max\(1e-5\)\)/,
-    'the epsilon must guard the denominator only, or a zero weight returns one half');
-  // Snow is placed by threshold and only shaped by relief: a height blend
-  // saturates, so using it to position a snowline whites out the whole massif.
-  assert.match(source, /const snowMask = smoothstep\(0\.56, 0\.82, snowAccumulation\)/);
-  assert.match(source, /const bandJitter = macroValue\.sub\(0\.5\)\.mul\(180\.0\)/,
+  assert.match(source, /const directMineral = directRock\.mul\(float\(1\.0\)\.sub\(directScree\)\)/,
+    'rock and deposited talus must be an explicit substrate partition');
+  // Snow is deposited after every base substrate and remains world-jittered.
+  assert.match(source, /const directSnow = smoothstep\(0\.54, 0\.76, directSnowAccumulation\)/);
+  assert.match(source, /const directBandJitter = macroValue\.sub\(0\.5\)\.mul\(150\.0\)/,
     'altitude bands must wander in world space or they read as contour stripes');
-  assert.match(source, /material\.roughnessNode = mix\(mineralRough, float\(0\.86\), snowMask\)/);
+  assert.match(source, /material\.roughnessNode = mix\(mineralRough, float\(0\.88\), directSnow\)/);
 });
 
 test('alpine first wall uses depth-separated signed-distance buttresses', async () => {
@@ -660,10 +671,10 @@ test('alpine high faces carry oriented fault blocks, chutes, and coupled PBR str
   assert.match(source, /const vertexDisplacement[\s\S]*vertexStructuralRelief/);
   assert.match(source, /const structuralFace = structuralFaceVarying/);
   assert.match(source, /const structuralCavity = structuralCavityVarying/);
-  assert.match(source, /const resistantBlend = structuralFace\.mul\(0\.54\)/);
-  assert.match(source, /const cavityBlend = structuralCavity\.mul\(0\.44\)/);
-  assert.match(source, /mix\(mineral, graniteWarm, resistantBlend\)/);
-  assert.match(source, /mix\(mineral, graniteDark, cavityBlend\)/);
+  assert.match(source, /const directSlab = structuralFace\.mul\(0\.62\)/);
+  assert.match(source, /const directCavity = structuralCavity\.mul\(0\.72\)/);
+  assert.match(source, /mix\(directGraniteBase, directGraniteFresh/);
+  assert.match(source, /mix\(directRockColor, directGraniteCavity, directCavity/);
   assert.match(source, /const structuralAt = \(x, z\) =>/);
   assert.doesNotMatch(source, /const blockField|const fractureField|const structuralWarp|const secondaryStrikeField|const strikeAt =|const secondaryAt =/,
     'broad structural fields must be owned by the vertex graph');
@@ -705,16 +716,13 @@ test('alpine high faces carry oriented fault blocks, chutes, and coupled PBR str
 
 test('alpine structural material couples snow scour, hollow loading, and bounded toe exposure', async () => {
   const source = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
-  assert.match(source, /sub\(structuralFace\.mul\(0\.40\)\)\.add\(structuralCavity\.mul\(0\.14\)\)/,
+  assert.match(source, /const directSnowAccumulation[\s\S]*sub\(structuralFace\.mul\(0\.20\)\)/,
     'proud faces must scour snow while cavities load it');
-  assert.match(source, /const structuralToeOutcrop = structuralFace[\s\S]*smoothstep\(100\.0, 420\.0, altitude\)/,
-    'structural toe outcrop must be altitude bounded');
-  assert.match(source, /const structuralToeScree = structuralCavity[\s\S]*smoothstep\(70\.0, 360\.0, altitude\)/,
-    'structural cavities must route to bounded toe scree');
-  assert.match(source, /add\(structuralToeOutcrop\)/);
-  assert.match(source, /add\(structuralToeScree\)/);
-  const snowResponse = (base, face, cavity) => Math.max(0, Math.min(1, base - face * 0.40 + cavity * 0.14));
+  assert.match(source, /directScreeSource = screeGate\.mul\(0\.62\).*structuralCavity\.mul\(0\.16\)/s,
+    'structural cavities must route into the deposited talus source');
+  assert.match(source, /directScree.*float\(1\.0\)\.sub\(directRock\.mul\(0\.72\)\)/s,
+    'talus must remain subordinate to intact rock ownership');
+  const snowResponse = (base, face, cavity) => Math.max(0, Math.min(1, base - face * 0.20 + cavity * 0.38));
   assert.ok(snowResponse(0.7, 1, 0) < snowResponse(0.7, 0, 1),
     'the same base accumulation must favor cavities over proud faces');
-  assert.ok(0.14 + 0.12 <= 0.30, 'toe structural additions must stay bounded');
 });
