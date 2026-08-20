@@ -684,10 +684,10 @@ class TRAANode extends TempNode {
 
 			for ( const [ x, y ] of offsets ) {
 
-				// The atmosphere is rendered separately, so every neighborhood sample must
-				// use the same depth-based composition as the center pixel. Sampling raw
-				// beauty here treats sky as black and gives old terrain history an invalid
-				// but very broad clipping range at moving silhouettes.
+				// Every neighborhood sample must use the same depth-based background
+				// composition as the center pixel. Sampling raw beauty here treats sky as
+				// black and gives old terrain history an invalid but very broad clipping
+				// range at moving silhouettes.
 				const neighbor = sampleCurrentColor( positionTexel.add( vec2( x, y ) ), textureSize );
 				moment1.addAssign( neighbor );
 				moment2.addAssign( neighbor.pow2() );

@@ -173,7 +173,7 @@ const environmentState = new EnvironmentFrameState({
       color: { r: 1.0, g: 0.965, b: 0.90 },
   },
   atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.0 },
-  clouds: { coverage: 0.38, density: 0.85, baseHeight: 2200, thickness: 600, advectionScale: 1.0 },
+  clouds: { coverage: 0.40, density: 0.52, baseHeight: 900, thickness: 1500, advectionScale: 1.0 },
   wind: {
     speed: 2.2,
     directionRadians: 0.4,

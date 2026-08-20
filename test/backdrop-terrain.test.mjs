@@ -18,11 +18,28 @@ test('bundled USGS ridge table is compact, deterministic, and bounded', async ()
     '3e3f7bdb41c4d1d1b272cd9b25952e4319419e30d8cd09907c85b358055f7b42');
 });
 
-test('required alpine mineral source is versioned and bounded', async () => {
-  const png = await readFile(new URL('../public/assets/textures/alpine_granite_albedo_v1.png', import.meta.url));
-  assert.equal(createHash('sha256').update(png).digest('hex'),
-    'ff10ee509ec2a726d9d382cecbdeeaf987d56e2d8d9e696f714388e2022b307a');
-  assert.ok(png.byteLength < 2_300_000, 'alpine mineral source must remain a bounded static asset');
+test('alpine geology is shader-only and has no granite texture runtime path', async () => {
+  const source = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /alpine_granite_albedo_v1\.png|loadGraniteAlbedo|graniteTexture/,
+    'the retired granite image must not have runtime ownership');
+  assert.doesNotMatch(source, /TextureLoader|RepeatWrapping|SRGBColorSpace|\btexture\s*\(/,
+    'alpine material must not load or sample an image texture');
+  const material = source.slice(source.indexOf('function biplanarField'), source.indexOf('function buildPatch'));
+  assert.match(material, /function biplanarField\(/,
+    'procedural mineral fields need a surface-safe biplanar domain');
+  assert.match(material, /const top = mx_noise_float/);
+  assert.match(material, /const side = mx_noise_float/,
+    'vertical faces need a height-varying side basis');
+  assert.match(material, /const worldFootprint = world\.x\.fwidth\(\)/,
+    'detail octaves must be derivative-aware');
+  assert.match(material, /cameraPosition\.sub\(world\)\.length\(\)/,
+    'detail handoff must include view distance');
+  assert.match(material, /const strataWarp = mx_noise_float/,
+    'stratification must be warped in world space');
+  assert.match(material, /const weatheringMask = smoothstep/,
+    'weathering needs a shared slope/relief mask');
+  assert.match(material, /const mineralGrade = float\(1\.0\)\.add\(mineralVariation\)/,
+    'procedural mineral variation must drive the rock albedo');
 });
 
 test('alpine backdrop keeps the rejected far-conifer derivative out of runtime', async () => {
@@ -97,7 +114,7 @@ test('alpine far massif stays inside the DEM extent and the camera far plane', a
   backdrop.dispose();
 });
 
-test('alpine bands abut on a shared boundary rather than overlapping or cracking', async () => {
+test('alpine bands use a bounded depth-safe overlap rather than cracking', async () => {
   const backdrop = new BackdropTerrain({
     terrain, bounds, seed: 1128746828, biome: 'temperate-alpine',
   });
@@ -113,9 +130,9 @@ test('alpine bands abut on a shared boundary rather than overlapping or cracking
       const x = position.getX(i);
       const z = position.getZ(i);
       const radius = Math.hypot(x - centerX, z - centerZ);
-      // Every ribbon vertex sits at or beyond Band A's rectangular boundary, so
-      // the two meshes never render as coincident surfaces at a grazing angle.
-      assert.ok(radius >= 1399, `ribbon vertex inside Band A at radius ${radius}`);
+      // The first ribbon row intentionally overlaps Band A by 72 m; ordered
+      // depth ownership makes the overlap watertight at grazing angles.
+      assert.ok(radius >= 1327, `ribbon vertex exceeds the bounded join overlap: ${radius}`);
       const height = position.getY(i);
       const truth = sampler.heightAt(x, z);
       // Vertices are either exactly on the shared sampler or on the hidden skirt.
@@ -369,6 +386,32 @@ test('alpine address wall keeps oblique shoulders, bench, and drainage planes di
   'oblique shoulder field must remain asymmetric across exact wall bearings');
 });
 
+test('alpine address opening keeps separated foothills before the far massif', () => {
+  const seed = 1128746828;
+  const composition = alpineComposition(seed);
+  const bearing = composition.openingAzimuth;
+  const sampleAt = (radius, cross = 0) => {
+    const alongX = Math.sin(bearing);
+    const alongZ = -Math.cos(bearing);
+    const crossX = alongZ;
+    const crossZ = -alongX;
+    return sampleAlpineWorld({
+      terrain, bounds, seed, composition,
+      x: alongX * radius + crossX * cross,
+      z: -155 + alongZ * radius + crossZ * cross,
+    });
+  };
+  const center = sampleAt(820, 0);
+  const left = sampleAt(820, -260);
+  const right = sampleAt(820, 260);
+  const far = sampleAt(2400, 0);
+  assert.ok(left.height > center.height + 18 && right.height > center.height + 18,
+    'foothill shoulders must flank a lower central address opening');
+  assert.ok(far.height > center.height + 70,
+    'the delayed massif must rise behind the opening as a depth-separated tier');
+  assert.ok(center.height < 150, 'central opening must remain materially lower than the walls');
+});
+
 test('alpine first wall carries structural spur and drainage cuts, not one smooth ramp', () => {
   const seed = 1128746828;
   const composition = alpineComposition(seed);
@@ -544,7 +587,7 @@ test('alpine surface response is classified per pixel, not baked per vertex', as
     'the epsilon must guard the denominator only, or a zero weight returns one half');
   // Snow is placed by threshold and only shaped by relief: a height blend
   // saturates, so using it to position a snowline whites out the whole massif.
-  assert.match(source, /const snowMask = smoothstep\(0\.34, 0\.62,/);
+  assert.match(source, /const snowMask = smoothstep\(0\.56, 0\.82, snowAccumulation\)/);
   assert.match(source, /const bandJitter = macro\.value\.sub\(0\.5\)\.mul\(180\.0\)/,
     'altitude bands must wander in world space or they read as contour stripes');
   assert.match(source, /material\.roughnessNode = mix\(mineralRough, float\(0\.86\), snowMask\)/);
@@ -590,4 +633,61 @@ test('alpine ridge hierarchy carries chutes, bedding, and talus into the far mas
   assert.ok(Math.max(...samples.map((sample) => sample.chute)) > 0.1, 'far faces need elongated erosion chutes');
   assert.ok(Math.max(...samples.map((sample) => sample.talus)) > 0.1, 'far faces need a distinct talus toe');
   assert.ok(Math.max(...samples.map((sample) => sample.rock)) > 0.25, 'far ridge hierarchy needs exposed mineral faces');
+});
+
+test('alpine high faces carry oriented fault blocks, chutes, and coupled PBR structure', async () => {
+  const source = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
+  assert.match(source, /const massifStructureBand = smootherstep\(1080, 1380/);
+  assert.match(source, /const structuralBlocks = clamp\(\(dominantBlocks \+ flankBlocks\) \* 1\.42/);
+  assert.match(source, /const structuralChutes = clamp\(\(dominantChutes \+ flankChutes\) \* 1\.26/);
+  assert.match(source, /const structuralRelief = structuralBlocks \* 118 - structuralChutes \* 74/);
+  assert.match(source, /const vertexStructuralFace = strikeRelief\.max\(0\.0\)\.mul\(0\.64\)/);
+  assert.match(source, /const vertexStructuralCavity = float\(0\.0\)\.sub\(strikeRelief\)/);
+  assert.match(source, /const structuralFaceVarying = varying\(vertexStructuralFace, 'vAlpineStructuralFace'\)/);
+  assert.match(source, /const structuralCavityVarying = varying\(vertexStructuralCavity, 'vAlpineStructuralCavity'\)/);
+  assert.match(source, /const vertexStructuralRelief = vertexStructuralFace\.mul\(36\.0\)/);
+  assert.match(source, /const vertexDisplacement[\s\S]*vertexStructuralRelief/);
+  assert.match(source, /const structuralFace = structuralFaceVarying/);
+  assert.match(source, /const structuralCavity = structuralCavityVarying/);
+  assert.match(source, /const resistantBlend = structuralFace\.mul\(0\.54\)/);
+  assert.match(source, /const cavityBlend = structuralCavity\.mul\(0\.44\)/);
+  assert.match(source, /mix\(mineral, graniteWarm, resistantBlend\)/);
+  assert.match(source, /mix\(mineral, graniteDark, cavityBlend\)/);
+  assert.match(source, /const structuralAt = \(x, z\) =>/);
+  assert.doesNotMatch(source, /const blockField|const fractureField|const structuralWarp|const secondaryStrikeField|const strikeAt =|const secondaryAt =/,
+    'broad structural fields must be owned by the vertex graph');
+  assert.match(source, /const strikeRelief = smoothstep\(0\.56, 0\.82, strikeSignal\)\s*\.sub\(float\(1\.0\)\.sub\(smoothstep\(0\.18, 0\.42, strikeSignal\)\)\)/,
+    'the primary structural field must contain both positive and negative lobes');
+  const bipolar = (signal) => {
+    const ramp = (value, lo, hi) => Math.max(0, Math.min(1, (value - lo) / (hi - lo)));
+    return ramp(signal, 0.56, 0.82) - (1 - ramp(signal, 0.18, 0.42));
+  };
+  assert.ok(bipolar(0.05) < 0 && bipolar(0.95) > 0,
+    'the structural strike remap must span chute-negative to buttress-positive');
+  assert.doesNotMatch(source, /const structuralNormal = vec3\(/,
+    'normal relief must use spatial gradients rather than mask values');
+
+  const seed = 1128746828;
+  const composition = alpineComposition(seed);
+  const sampleAt = (radius, cross) => {
+    const azimuth = composition.dominantAzimuth;
+    const alongX = Math.sin(azimuth);
+    const alongZ = -Math.cos(azimuth);
+    return sampleAlpineWorld({
+      terrain, bounds, seed, composition,
+      x: alongX * radius + alongZ * cross,
+      z: -155 + alongZ * radius - alongX * cross,
+    });
+  };
+  const samples = [
+    sampleAt(1500, 20), sampleAt(1500, 240), sampleAt(1480, -260),
+    sampleAt(1800, 160), sampleAt(2100, -220), sampleAt(2500, 360),
+  ];
+  assert.ok(Math.max(...samples.map((sample) => sample.structuralBlocks)) > 0.20,
+    'high massif needs resistant fault blocks at 50–300 m scale');
+  assert.ok(Math.max(...samples.map((sample) => sample.structuralChutes)) > 0.08,
+    'high massif needs incised drainage chutes between blocks');
+  assert.ok(Math.max(...samples.map((sample) => sample.structuralRelief))
+    - Math.min(...samples.map((sample) => sample.structuralRelief)) > 16,
+    'fault blocks and chutes must carry signed landform contrast');
 });

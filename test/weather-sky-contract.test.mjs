@@ -50,9 +50,36 @@ test('WeatherSky accepts only the authoritative GPU environment bridge and expos
   assert.ok(sky.iblBackgroundNode?.isNode);
   assert.equal(sky.workload.id, 'high');
   assert.ok(sky.backgroundNode?.isNode);
+  assert.equal(sky.usesVolumetricClouds, true);
   assert.ok(sky.skyRadiance(bindings.sunDirection, { includeSun: false })?.isNode);
   const diagnostics = await sky.readDiagnostics();
-  assert.equal(diagnostics.enabled, false);
+  assert.equal(diagnostics.enabled, true);
+  assert.equal(diagnostics.mode, 'gpu-volume-raymarch');
+  assert.equal(diagnostics.proceduralNoise, true);
+  assert.equal(diagnostics.gpuOnly, true);
+  assert.equal(diagnostics.raySteps, sky.workload.raySteps);
+  assert.equal(WEATHER_SKY_WORKLOADS.high.raySteps, 4);
+  assert.equal(diagnostics.lightTransportSamples, sky.workload.lightTransportSamples);
+  assert.equal(diagnostics.lightTransportMode, 'sun-offset-volume-probe');
+  assert.equal(Object.hasOwn(diagnostics, 'hasSkyPass'), false);
+  assert.equal(diagnostics.renderTopology, 'fused-temporal-volume');
+  assert.equal(diagnostics.noiseOctaves, sky.workload.noiseOctaves);
+  assert.deepEqual(diagnostics.cloudVolume.dimensions, [96, 96, 96]);
+  assert.equal(diagnostics.cloudVolume.channels, 4);
+  assert.equal(diagnostics.cloudVolume.format, 'rgba8unorm');
+  assert.equal(diagnostics.cloudVolume.gpuResident, true);
+  assert.equal(diagnostics.cloudVolume.initStatus, 'submitted');
+  assert.equal(diagnostics.cloudVolume.sampledInRaymarch, true);
+  assert.equal(diagnostics.cloudHistory.pingPong, true);
+  assert.equal(diagnostics.cloudHistory.previousFrameSampling, true);
+  assert.equal(diagnostics.cloudHistory.cameraReprojection, true);
+  assert.equal(diagnostics.cloudHistory.disocclusionRejection, true);
+  assert.equal(diagnostics.cloudHistory.transmittanceAware, true);
+  assert.equal(Object.hasOwn(diagnostics, 'cloudProxies'), false);
+  for (const fabricatedField of ['sampleCount', 'minimum', 'maximum', 'mean', 'nonZeroFraction']) {
+    assert.equal(Object.hasOwn(diagnostics, fabricatedField), false,
+      `${fabricatedField} must not masquerade as a measured GPU density diagnostic`);
+  }
   assert.throws(() => new WeatherSky({}, bindings, WEATHER_SKY_WORKLOADS.high), /WebGPU renderer/);
   assert.throws(() => new WeatherSky(renderer(), {}, WEATHER_SKY_WORKLOADS.high), /EnvironmentGpuBindings/);
 });
@@ -63,15 +90,21 @@ test('zero cloud coverage uses the shared analytic sky without volumetric setup 
   assert.equal(sky.cloudsEnabled, false);
   assert.equal(sky.usesVolumetricClouds, false);
   assert.equal(gpu.lastCompute, undefined);
-  assert.equal(sky.noiseVolume, null);
-  assert.equal((await sky.readDiagnostics()).enabled, false);
+  const diagnostics = await sky.readDiagnostics();
+  assert.equal(diagnostics.enabled, false);
+  assert.deepEqual(diagnostics.cloudVolume.dimensions, [0, 0, 0]);
+  assert.equal(diagnostics.cloudVolume.gpuResident, false);
+  assert.equal(diagnostics.cloudVolume.initStatus, 'none');
+  assert.equal(diagnostics.cloudVolume.sampledInRaymarch, false);
+  assert.equal(Object.hasOwn(diagnostics, 'hasSkyPass'), false);
+  assert.equal(diagnostics.cloudHistory.pingPong, false);
   assert.ok(sky.backgroundNode?.isNode);
 });
 
-// The authored default is broken fair-weather cumulus. Pin the invariants that the
-// look and the validator depend on, not the literal digits: coverage must be inside the
-// validator's (0, 0.7] window, and the slab must sit high and thin enough that the
-// horizon mask can fade it out before the cloudDistance clamp band.
+// The authored default is broken alpine cumulus. Pin the physical authoring envelope
+// rather than one arbitrary literal: coverage stays bounded, and the layer has enough
+// vertical depth to resolve rounded GPU billows without becoming a horizon-spanning
+// overcast.
 test('production state authors a bounded, non-zero cloud layer in both entry points', async () => {
   const game = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   const defaultCoverage = game.match(/const DEFAULT_CLOUD_COVERAGE = ([\d.]+);/);
@@ -83,8 +116,12 @@ test('production state authors a bounded, non-zero cloud layer in both entry poi
     /clouds:\s*\{\s*coverage:\s*cloudCoverage,\s*density:\s*([\d.]+),\s*baseHeight:\s*(\d+),\s*thickness:\s*(\d+)/,
   );
   assert.ok(Number(gameDensity) > 0 && Number(gameDensity) <= 1);
-  assert.ok(Number(gameBase) >= 2000, 'the slab must clear the alpine skyline');
-  assert.ok(Number(gameThickness) <= 800, 'a thin slab subtends less of the low sky');
+  assert.ok(Number(gameBase) >= 700 && Number(gameBase) <= 1100,
+    'the alpine cumulus base must stay in the authored 0.7–1.1 km band');
+  assert.ok(Number(gameThickness) >= 1200 && Number(gameThickness) <= 2200,
+    'the cloud volume needs 1.2–2.2 km depth for rounded billows');
+  assert.ok(Number(gameBase) + Number(gameThickness) <= 3600,
+    'the authored deck must leave the high massif readable');
 
   // The viewer shares one sky with the game so captures from either are comparable.
   const viewer = await readFile(new URL('../src/viewer/main.js', import.meta.url), 'utf8');
@@ -98,19 +135,16 @@ test('production state authors a bounded, non-zero cloud layer in both entry poi
   assert.equal(Number(viewerClouds[4]), Number(gameThickness));
 });
 
-// SceneManager.refreshWeatherSkyClouds() rebuilds the sky only when coverage crosses
-// the clear/cloudy boundary. That is only sound if crossing it genuinely changes the
-// compiled graph and never introduces a second pass.
-test('cloud coverage crossing zero flips the compiled sky graph and nothing else', () => {
+// SceneManager.refreshWeatherSkyClouds() rebuilds the sky graph only when coverage
+// crosses the clear/cloudy boundary. Cloudy weather owns the existing low-res pass.
+test('cloud coverage crossing zero flips the compiled volumetric graph', () => {
   const clear = new WeatherSky(renderer(), new EnvironmentGpuBindings(state(0)), WEATHER_SKY_WORKLOADS.high);
   const cloudy = new WeatherSky(renderer(), new EnvironmentGpuBindings(state(0.4)), WEATHER_SKY_WORKLOADS.high);
   assert.equal(clear.cloudsEnabled, false);
   assert.equal(cloudy.cloudsEnabled, true);
   assert.notEqual(clear.backgroundNode, cloudy.backgroundNode);
-  // Neither state may allocate the low-resolution atmosphere pass: `_setupPost` keys
-  // off this flag, and a refresh that skipped it would leave a stale pipeline.
   assert.equal(clear.usesVolumetricClouds, false);
-  assert.equal(cloudy.usesVolumetricClouds, false);
+  assert.equal(cloudy.usesVolumetricClouds, true);
   // Clouds are visible-background only. If the IBL node ever varied with coverage the
   // refresh path would owe a PMREM recapture it deliberately does not perform.
   assert.ok(clear.iblBackgroundNode?.isNode);
@@ -128,12 +162,12 @@ test('the shared cloud predicate is the one WeatherSky latches on', () => {
 });
 
 test('all weather tiers retain the same cloud/atmosphere contract and differ only in bounded workload values', () => {
-  const required = ['id', 'internalScale', 'raySteps', 'sunTransmittanceSteps', 'noiseOctaves', 'jitterPeriod'];
+  const required = ['id', 'internalScale', 'raySteps', 'lightTransportSamples', 'noiseOctaves', 'jitterPeriod'];
   for (const workload of Object.values(WEATHER_SKY_WORKLOADS)) {
     assert.deepEqual(Object.keys(workload).sort(), required.slice().sort());
     assert.ok(Object.isFrozen(workload));
     assert.ok(workload.raySteps >= 4);
-    assert.ok(workload.sunTransmittanceSteps >= 2);
+    assert.equal(workload.lightTransportSamples, 1);
     assert.ok(workload.noiseOctaves >= 2);
   }
 });
@@ -159,18 +193,110 @@ test('temporal jitter is deterministic, current/previous, and validates external
   assert.throws(() => sky.setTemporalJitter({ x: 1, y: 0 }, { x: 0, y: 0 }), /current.x/);
 });
 
-test('WeatherSky uses the verified local HDR or analytic procedural path, never a fallback renderer', async () => {
+test('WeatherSky uses one GPU sky-volume path and never a proxy/fallback renderer', async () => {
   const source = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
   assert.match(source, /HDRLoader/);
   assert.doesNotMatch(source, /RGBELoader/);
   assert.match(source, /EquirectangularReflectionMapping|textureNode/);
-  assert.doesNotMatch(source, /WebGLRenderer|createFallback|fallback\s*:/);
   assert.doesNotMatch(source, /WebGLRenderer|WebGLBackend|createFallback|fallback\s*:/);
-  assert.match(source, /Rayleigh|Mie|wind field/i);
-  assert.match(source, /mx_noise_float[\s\S]*_fbm2/);
-  assert.match(source, /usesAnalyticClouds/);
+  assert.match(source, /wind field/i);
+  assert.match(source, /Storage3DTexture/);
+  assert.match(source, /textureStore\(volume, voxel/);
+  assert.match(source, /mx_noise_float[\s\S]*mx_worley_noise_float/);
   assert.match(source, /skyRadiance\(direction, \{ includeSun = false \} = \{\}\)/);
-  assert.doesNotMatch(source, /Storage3DTexture|storageTexture3D|texture3D|ray march|sun transmittance/i);
+  assert.match(source, /If\(validRay\.and\(horizonMask/,
+    'bounded ray integration must skip empty sky rays');
+  assert.match(source, /sunProbePosition/,
+    'light transport must use a true sun-offset volume probe');
+  assert.match(source, /const volume = this\._cloudVolumeSample\(/,
+    'each view tap must retain one RGBA volume fetch for density and erosion');
+  assert.match(source, /CLOUD_EMPTY_THRESHOLD/);
+  assert.match(source, /texture3D\(this\._cloudVolume/);
+  assert.doesNotMatch(source, /BoxGeometry|InstancedMesh|CLOUD_PROXY|scene-mrt-proxy|cloudProxies/);
+  assert.match(source, /const detailSignal = volume\.y\.mul\(0\.58\)\.add\(volume\.z\.mul\(0\.42\)\)/);
+  assert.match(source, /const rawCarrier = volume\.x\.mul\(volume\.w\)\.clamp\(0, 1\)/,
+    'cloud occupancy must use the initialized joint R/A carrier');
+  assert.match(source, /const carrier = smoothstep\(coverageThreshold, coverageThreshold\.add\(0\.18\), rawCarrier\)/,
+    'joint R/A carrier must use a material threshold, not a near-zero remap');
+  assert.match(source, /return carrier\.mul\(vertical\)/,
+    'cloud density must consume the identical joint carrier');
+  assert.doesNotMatch(source, /smoothstep\(0\.001, 0\.(08|10|12),/,
+    'cloud density must not use catastrophic near-zero remaps');
+  assert.doesNotMatch(source, /_cloudHistory|previousHistory|previousClip/);
+  assert.doesNotMatch(source, /copyTextureToBuffer/);
+});
+
+test('cloud graph is a true global AABB view-ray volume with front-to-back transport', async () => {
+  const source = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
+  assert.match(source, /boundsMin[\s\S]*boundsMax/);
+  assert.match(source, /inverseDirection/);
+  assert.match(source, /sampleDistance = rayEntry\.add\(stepLength/);
+  assert.match(source, /const marchLength = rayLength;/,
+    'cloud rays must integrate the complete bounded AABB interval');
+  assert.match(source, /\.mul\(float\(step\)\.add\(jitter\)\)/,
+    'view samples must use one deterministic phase inside each stratified interval');
+  assert.match(source, /const framePhase = fract\(/,
+    'cloud sampling must rotate its phase with the deterministic temporal sequence');
+  assert.match(source, /const pixelPhase = mx_noise_float\(pixel\.mul\(0\.08\)\)/,
+    'cloud sampling must use a stable smooth analytic phase of the low-resolution target pixel');
+  assert.match(source, /const jitter = fract\(framePhase\.add\(pixelPhase\)\)/,
+    'cloud sampling must combine frame rotation and stable pixel phase without clamping');
+  assert.doesNotMatch(source, /rayLength\.min\(steps \* 700\)/,
+    'cloud rays must not truncate the authored slab to a card-like horizon slice');
+  assert.match(source, /const position = cameraOrigin\.add\(direction\.mul\(sampleDistance\)\)/);
+  assert.match(source, /segmentTransmittance = exp\(opticalDepth\.negate\(\)\)/);
+  assert.match(source, /scattered\.addAssign\(transmittance\.mul\(segmentAlpha\)/);
+  assert.match(source, /transmittance\.mulAssign\(segmentTransmittance\)/);
+  assert.match(source, /density\.greaterThan\(CLOUD_EMPTY_THRESHOLD\)/);
+  assert.match(source, /henyeyGreenstein\(cosine, 0\.60\)/);
+  assert.match(source, /henyeyGreenstein\(cosine, 0\.93\)/);
+  assert.match(source, /clouds\.z/);
+  assert.match(source, /clouds\.w/);
+  assert.match(source, /cloudAdvectionScale/);
+  assert.match(source, /sunProbe = this\._cloudVolumeSample/);
+});
+
+test('cloud formation has no static noise texture, bake, readback, or renderer fallback', async () => {
+  const source = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
+  assert.match(source, /_initCloudVolume/);
+  assert.match(source, /Storage3DTexture/);
+  assert.match(source, /texture3D/);
+  assert.match(source, /textureStore/);
+  assert.doesNotMatch(source, /noiseVolume|_noiseInitCompute|copyTextureToBuffer/);
+  assert.doesNotMatch(source, /WebGLRenderer|WebGLBackend|createFallback|fallback\s*:/);
+  assert.match(source, /const base = mx_noise_float\(domain\.mul\(0\.78\)\)/);
+  assert.match(source, /const detail = mx_noise_float\(domain\.mul\(4\.40\)/);
+  assert.match(source, /const erosion = mx_noise_float\(domain\.mul\(6\.20\)/);
+  assert.match(source, /mx_worley_noise_float/);
+  assert.match(source, /const domain = uv\.mul\(vec3\(4\.6, 2\.3, 4\.6\)\)/);
+});
+
+test('cloud temporal resolve is a real same-target ping-pong with reprojection and rejection', async () => {
+  const source = await readFile(new URL('../src/scene/CloudTemporalNode.js', import.meta.url), 'utf8');
+  assert.match(source, /new RenderTarget\(1, 1/);
+  assert.match(source, /this\._history = this\._resolve/);
+  assert.match(source, /previous\.sample\(previousUv\)/);
+  assert.match(source, /previousProjection[\s\S]*previousView[\s\S]*farPoint/);
+  assert.match(source, /opacityAgreement/);
+  assert.doesNotMatch(source, /copyTextureToTexture/,
+    'fused temporal resolve must not initialize or copy an intermediate current-sky target');
+  assert.match(source, /const currentColor = this\.weatherSky[\s\S]*radianceForRay/,
+    'temporal resolve must evaluate current cloud radiance in the same material');
+  assert.doesNotMatch(source, /spatialDelta|offset of \[\[1, 1\]/,
+    'temporal resolve must not add a destructive quincunx preblur');
+  assert.match(source, /fused raymarch \+ temporal resolve/);
+  assert.match(source, /currentProjectionInverse[\s\S]*currentWorld/,
+    'fullscreen cloud rays must be built from explicit scene-camera matrices');
+  assert.match(source, /currentUv\.y\.mul\(-2\)\.add\(1\)/,
+    'fullscreen UV.y must be converted from QuadMesh texture orientation to clip-space Y');
+  assert.match(source, /currentWorld\.mul\(vec4\(viewDirection\.mul\(10000\), 1\)\)/,
+    'camera-local sky rays must receive one world transform during reprojection');
+  assert.match(source, /previousNdc\.y\.mul\(-0\.5\)\.add\(0\.5\)/,
+    'reprojected clip-space Y must return to the same top-left history UV convention');
+  assert.doesNotMatch(source, /worldDirection\.mul\(10000\)/,
+    'reprojection must not double-transform a world-space direction');
+  assert.match(source, /transmittance-aware temporal\s+reconstruction/);
+  assert.doesNotMatch(source, /copyTextureToBuffer|readback|noise/i);
 });
 
 test('HDR PMREM waits for decoded pixels and keeps the solar disc out of IBL', async () => {

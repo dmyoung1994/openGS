@@ -134,8 +134,8 @@ test('backdrop depth fade comes from the shared atmosphere, not a private grade'
   // the fog colour, so the backdrop drifted away from the world in front of it.
   // Depth fade is now the one aerial-perspective term the sky, water, and trees
   // already share, applied after lighting so transmittance is ordered correctly.
-  assert.match(source, /aerialPerspective\(\s*outputNode\.rgb,\s*toCamera,\s*toCamera\.length\(\),?\s*\)/,
-    'backdrop must fade through EnvironmentGpuBindings.aerialPerspective');
+  assert.match(source, /const atmosphericDistance = toCamera\.length\(\)[\s\S]*?aerialPerspective\(\s*outputNode\.rgb,\s*toCamera,\s*atmosphericDistance,?\s*\)/,
+    'backdrop must fade through EnvironmentGpuBindings.aerialPerspective using the actual shared camera path');
   assert.match(source, /material\.fog = false/,
     'a fragment must not receive both scene fog and aerial perspective');
   assert.doesNotMatch(source, /hazeColor/,
@@ -153,11 +153,21 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
   assert.match(source, /material\.normalNode\s*=\s*transformNormalToView/, 'backdrop geology needs lit normal breakup');
   assert.match(source, /normalWorld\.abs\(\)\.sub\(0\.18\)\.max\(0\.0\)\.pow\(vec3\(4\.0\)\)/,
     'alpine mineral albedo needs slope-aware world projection rather than stretched XZ mapping');
-  assert.match(source, /const sideSample = texture\(graniteTexture/,
-    'mineral source should use a biplanar projection for stable scale at lower texture cost');
-  assert.match(source, /mineral = mineral\.mul\(graniteGrade\)/,
-    'mineral source must grade the rock endmember rather than the whole surface');
-  assert.match(source, /albedo = mix\(albedo, mineral, rockMask\)/,
+  assert.match(source, /function biplanarField\(/,
+    'mineral source should use a shader-only biplanar projection for stable face scale');
+  assert.match(source, /const top = mx_noise_float\(/,
+    'biplanar geology needs a world-XZ top basis');
+  assert.match(source, /const side = mx_noise_float\(/,
+    'biplanar geology needs a height-varying side basis');
+  assert.match(source, /const topWeight = weight\.y\.add\(0\.16\)/,
+    'steep faces must be dominated by the isotropic side basis, not an XZ stripe projection');
+  assert.match(source, /y\.mul\(frequency\)\.add\(warp\.mul\(0\.45\)\)/,
+    'side geology must vary through world Y at the same physical scale as X/Z');
+  assert.doesNotMatch(source, /TextureLoader|graniteTexture|alpine_granite_albedo_v1\.png|\btexture\s*\(/,
+    'alpine geology must not own a sampled granite image');
+  assert.match(source, /const mineralGrade = float\(1\.0\)\.add\(mineralVariation\)/,
+    'procedural mineral variation must grade the rock endmember rather than the whole surface');
+  assert.match(source, /albedo = mix\(albedo, mineral, mineralCoverage\)/,
     'mineral source must remain subordinate to the per-pixel rock classification');
   assert.match(source, /backdropSource = 'procedural-alpine-shell'/,
     'alpine horizon geometry is owned by the authored shell, not a photographic HDR');
@@ -178,8 +188,14 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
     'shared PBR must expose rock from the analytic surface slope');
   assert.match(source, /const rockMask = heightBlend\(rockNominal, vegetationRelief, rockRelief/,
     'rock must interlock with vegetation by relief rather than fading linearly');
-  assert.match(source, /const snowShed = float\(1\.0\)\.sub\(smoothstep\(0\.40, 0\.78, slope\)\)/,
-    'snow must not hold on faces the slope would shed it from');
+  assert.match(source, /const lowerWallRock = cliffGate\.mul\(1\.08\)/,
+    'lower wall outcrops must remain visible below the snowline');
+  assert.match(source, /material\.positionNode = vec3\(vertexX, vertexY, vertexZ\)[\s\S]*?\.add\(normalGeometry\.mul\(vertexDisplacement\.mul\(shellFade\)\)\)/,
+    'alpine shell must carry bounded GPU vertex relief through the existing topology');
+  assert.match(source, /const vertexDisplacement = vertexMacro\.sub\(0\.5\)\.mul\(26\.0\)/,
+    'vertex relief must stay in broad and meso geology scales');
+  assert.match(source, /const snowShed = float\(1\.0\)\.sub\(smoothstep\(0\.38, 0\.78, slope\)\)/,
+    'snow must remain on high alpine faces but still shed from near-vertical walls');
   // The sampler no longer bakes albedo. It used to run ~30 sequential Color.lerp
   // calls per vertex into a `color` attribute that was then interpolated across
   // 30 m triangles, which averaged every classification decision into one khaki
@@ -196,15 +212,37 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
   // got centimetre-scale relief at the course edge and ~10 m of it at 2 km. That
   // is what drew the dark streaked banding across the far faces. Gradients are
   // now taken at a fixed offset in metres, as Hollow's HeightToNormal does.
-  assert.match(source, /meso\.gradX\.mul\(16\.0\)/,
+  assert.match(source, /meso\.gradX\.mul\(8\.0\)/,
     'resistant ribs need meso normal breakup at a real world amplitude');
   assert.doesNotMatch(source, /dFdx\(/,
     'backdrop normals must not come from screen-space derivatives');
   assert.doesNotMatch(source, /Math\.sin\(radial \* 0\.0041/, 'alpine relief must not form radial shell terraces');
   assert.match(source, /if \(\(ix \+ iz\) & 1\)/, 'patch triangulation should not bias one diagonal');
-  assert.match(source, /const normalStep = 8/, 'patch normals must sample the shared continuous world field');
+  assert.match(source, /const normalStep = 64/, 'patch normals must sample the shared continuous world field at a far-band physical span');
   assert.doesNotMatch(source, /geometry\.computeVertexNormals\(\)/,
     'patch-local normals would create lighting seams across the continuous world');
+});
+
+test('alpine normal graph uses one derivative per relief scale and no value normals', async () => {
+  const source = await readFile(new URL('src/scene/BackdropTerrain.js', ROOT), 'utf8');
+  const normalGraph = source.slice(source.indexOf('const structuralGradientVarying = varying('), source.indexOf('// Matte dielectric throughout'));
+  assert.equal((normalGraph.match(/meso\.gradX\.mul\(8\.0\)/g) || []).length, 1);
+  assert.equal((normalGraph.match(/macro\.gradX\.mul\(14\.0\)/g) || []).length, 1);
+  assert.equal((normalGraph.match(/fine\.gradX\.mul\(5\.0\)/g) || []).length, 1);
+  assert.doesNotMatch(normalGraph, /meso\.grad[XYZ]\.mul\(12\.0\)/,
+    'meso normal must not stack duplicate amplitudes');
+  assert.doesNotMatch(normalGraph, /macro\.grad[XYZ]\.mul\(12\.0\)/,
+    'macro normal must not stack duplicate amplitudes');
+  assert.doesNotMatch(normalGraph, /const structuralNormal\s*=|structuralFace\.sub\(0\.5\).*vec3/,
+    'mask values must not be used as arbitrary normal XYZ offsets');
+  assert.match(normalGraph, /const structuralGradientVarying = varying\(structuralGradient, 'vAlpineStructuralGradient'\)/,
+    'structural normal must arrive from the vertex finite-difference graph');
+  assert.doesNotMatch(normalGraph, /const secondaryNormal = vec3\(|const strikeAt =|const secondaryAt =/,
+    'structural noise must not be recomputed per fragment');
+  assert.match(normalGraph, /vertexReliefBump\.mul\(0\.78\)/,
+    'mountain-scale displaced geometry must keep its normal independent of mineral coverage');
+  assert.doesNotMatch(normalGraph, /vertexReliefBump\.mul\(rockDetail/,
+    'snow/pale faces must not lose the structural normal');
 });
 
 test('rough blade density includes a stable ecological-scale cluster field', async () => {

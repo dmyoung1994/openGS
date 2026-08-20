@@ -60,7 +60,9 @@ test('post graph replacement disposes prior full-resolution targets and waits fo
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   assert.match(source, /this\._scenePass\?\.dispose\(\)/);
   assert.match(source, /this\._traa\?\.dispose\(\)/);
-  assert.match(source, /this\._skyPass\?\.dispose\(\)/);
+  assert.match(source, /this\._cloudTemporal\?\.dispose\(\)/);
+  assert.doesNotMatch(source, /_skyPass|skyScene/,
+    'fused cloud history must not retain the removed current-sky pass or scene');
   assert.match(source, /this\.postProcessing\?\.dispose\(\)/);
   assert.doesNotMatch(source, /this\.environmentTier = tier;[\s\S]*?this\._setupPost\(\);/);
 });

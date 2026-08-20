@@ -156,12 +156,14 @@ test('environment benchmark keeps full-suite default and safe single-scenario fi
 test('environment benchmark distinguishes clear-weather zero work from cloud distribution', async () => {
   const benchmark = await source('scripts/benchmark-environment.mjs');
   assert.match(benchmark, /usesVolumetricClouds: sm\.weatherSky\.usesVolumetricClouds === true/);
-  assert.match(benchmark, /hasSkyPass: sm\._skyPass !== null/);
+  assert.match(benchmark, /hasCloudTemporalPass: sm\._cloudTemporal !== null/);
   assert.match(benchmark, /const cloudsEnabled = weatherDiagnostics\.usesVolumetricClouds === true/);
   assert.match(benchmark, /clear weather unexpectedly allocated volumetric cloud work/);
-  assert.match(benchmark, /cloud noise volume failed its GPU distribution gate/);
-  assert.match(benchmark, /Dynamic atmosphere and volumetric clouds/);
-  assert.match(benchmark, /weather-cloud-noise-gpu/);
+  assert.match(benchmark, /one bounded fused raymarch\/history pass/);
+  assert.match(benchmark, /ping-pong resolve/);
+  assert.match(benchmark, /fused raymarch/);
+  assert.match(benchmark, /temporal resolve/);
+  assert.doesNotMatch(benchmark, /skyScene|_skyPass|Dynamic atmosphere and volumetric clouds/);
 });
 
 test('local evaluation uses one observable canonical range endpoint', async () => {

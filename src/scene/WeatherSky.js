@@ -1,56 +1,58 @@
-import { EquirectangularReflectionMapping, Vector2 } from 'three';
-import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import {
-  cameraPosition, exp, float, max, mix, mx_noise_float, mx_worley_noise_float, oneMinus,
-  equirectUV, positionWorldDirection, smoothstep, texture as textureNode, uniform, vec2, vec3,
+  ClampToEdgeWrapping, EquirectangularReflectionMapping, LinearFilter, Vector2,
+} from 'three';
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
+import { Storage3DTexture } from 'three/webgpu';
+import {
+  cameraPosition, exp, float, fract, Fn, globalId, If,
+  max, min, mix, mx_noise_float, mx_worley_noise_float, oneMinus, equirectUV,
+  positionWorldDirection, screenCoordinate, smoothstep,
+  texture as textureNode, texture3D, textureStore, uniform, vec2, vec3, vec4,
 } from 'three/tsl';
 import { EnvironmentGpuBindings } from '../environment/EnvironmentGpuBindings.js';
 
-// Analytic daylight atmosphere plus a bounded direct sky-fragment cloud layer.
-// The sun, wind and cloud density come from the authoritative environment bridge.
-// Clouds are evaluated directly against the existing sky background node: no
-// volume target, 3D noise bake, temporal resolve, or extra render pass is needed.
-//
-// The cloud model follows Schneider & Vos, "The Real-time Volumetric Cloudscapes of
-// Horizon: Zero Dawn" (SIGGRAPH 2015 Advances in Real-Time Rendering), reduced from a
-// 128-step volume raymarch to a single slab sample plus a short sun march. What is kept
-// is the part that decides whether clouds read as cumulus at all:
-//   * Perlin-Worley base shape. Inverted Worley noise makes the tightly packed billows;
-//     Perlin fBm alone produces wispy cirrus, which is why a pure mx_noise_float layer
-//     looks flat no matter how it is graded. Worley dilates Perlin so the result keeps
-//     Perlin's connectedness and gains billowy lobes.
-//   * A height gradient over the slab, with density reduced at the base so bottoms are
-//     wispy, and high-frequency Worley erosion applied inward from the cloud edge.
-//   * Lighting = Beer's law x Henyey-Greenstein phase x the "powdered sugar" in-scatter
-//     term that produces dark edges facing the light. HG is the same formula the shared
-//     atmosphere already uses for Mie phase in EnvironmentGpuBindings.skyRadiance.
-// Beer's two-lobe form max(exp(-d), 0.7*exp(-0.25d)) and the dual-g phase (0.6 primary,
-// ~0.99 silver-lining lobe) follow the widely reproduced reference implementation of
-// that talk.
+// Analytic daylight plus a bounded, GPU-generated volumetric cloud layer. Cloud shape,
+// detail, transport, and lighting are integrated in one global camera-ray graph. The
+// optional HDR is only a clear-sky/IBL source; it never supplies cloud data.
 
 const MIN_RAY_STEPS = 4;
-const MAX_RAY_STEPS = 32;
-const MIN_SUN_STEPS = 2;
-const MAX_SUN_STEPS = 12;
+const MAX_RAY_STEPS = 20;
+const MIN_LIGHT_SAMPLES = 1;
+const MAX_LIGHT_SAMPLES = 1;
 const MIN_NOISE_OCTAVES = 2;
 const MAX_NOISE_OCTAVES = 4;
 const MIN_INTERNAL_SCALE = 0.125;
 const MAX_INTERNAL_SCALE = 1;
+const CLOUD_TARGET_SCALE = 0.25;
+
+// Finite X/Z bounds prevent horizon rays from marching forever. The extent covers
+// the playable range and distant alpine wall while keeping the AABB arithmetic small.
+const CLOUD_HORIZONTAL_EXTENT = 24000;
+const CLOUD_EMPTY_THRESHOLD = 0.018;
+// Extinction is in inverse world metres. Keep optical thickness in the stable range
+// of the bounded low-resolution raymarch so crowns retain gray cores and bases.
+const CLOUD_EXTINCTION = 0.00115;
+const SUN_EXTINCTION = 0.0018;
+const CLOUD_VOLUME_SIZE = 96;
+const CLOUD_VOLUME_WORKGROUP = 4;
+const CLOUD_VOLUME_DISPATCH = CLOUD_VOLUME_SIZE / CLOUD_VOLUME_WORKGROUP;
+const CLOUD_VOLUME_FORMAT = 'rgba8unorm';
 
 function fail(message) {
   throw new TypeError(`Invalid WeatherSky workload: ${message}`);
 }
 
-function finite(value, name, min, max) {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
-    fail(`${name} must be a finite number in [${min}, ${max}].`);
+function finite(value, name, minValue, maxValue) {
+  if (typeof value !== 'number' || !Number.isFinite(value)
+    || value < minValue || value > maxValue) {
+    fail(`${name} must be a finite number in [${minValue}, ${maxValue}].`);
   }
   return value;
 }
 
-function positiveInteger(value, name, min, max) {
-  if (!Number.isInteger(value) || value < min || value > max) {
-    fail(`${name} must be an integer in [${min}, ${max}].`);
+function positiveInteger(value, name, minValue, maxValue) {
+  if (!Number.isInteger(value) || value < minValue || value > maxValue) {
+    fail(`${name} must be an integer in [${minValue}, ${maxValue}].`);
   }
   return value;
 }
@@ -62,15 +64,15 @@ function normaliseWorkload(workload) {
   if (typeof workload.id !== 'string' || !/^(high|balanced|conservative)$/.test(workload.id)) {
     fail('id must be high, balanced, or conservative.');
   }
-
-  // Every tier compiles the same atmosphere/cloud features.  These are workload
-  // constants only: ray/sample count and internal-resolution policy may differ,
-  // but never select another renderer, background type, asset, or shader path.
+  // Tiers compile the same graph. These are fixed budget constants only: no tier
+  // selects a different renderer, cloud representation, or asset.
   return Object.freeze({
     id: workload.id,
     internalScale: finite(workload.internalScale, 'internalScale', MIN_INTERNAL_SCALE, MAX_INTERNAL_SCALE),
     raySteps: positiveInteger(workload.raySteps, 'raySteps', MIN_RAY_STEPS, MAX_RAY_STEPS),
-    sunTransmittanceSteps: positiveInteger(workload.sunTransmittanceSteps, 'sunTransmittanceSteps', MIN_SUN_STEPS, MAX_SUN_STEPS),
+    lightTransportSamples: positiveInteger(
+      workload.lightTransportSamples, 'lightTransportSamples', MIN_LIGHT_SAMPLES, MAX_LIGHT_SAMPLES,
+    ),
     noiseOctaves: positiveInteger(workload.noiseOctaves, 'noiseOctaves', MIN_NOISE_OCTAVES, MAX_NOISE_OCTAVES),
     jitterPeriod: positiveInteger(workload.jitterPeriod, 'jitterPeriod', 2, 256),
   });
@@ -104,64 +106,36 @@ function validateJitter(value, name) {
   };
 }
 
-// The Perlin-Worley dilation produces a signal concentrated in a narrow band rather
-// than spanning 0..1. These bounds expand that working band so authored coverage maps
-// onto the field's real distribution; they are properties of the noise construction
-// above, not art direction, and must be rechecked if the octave counts change.
-// Measured by thresholding the field on the GPU and counting the white fraction (the
-// only readable measurement, since ACES makes raw greyscale values meaningless): the
-// dilated signal sits at ~0.688 with a standard deviation of only ~0.024. Averaging a
-// handful of fBm octaves concentrates hard around the mean, so the raw field spans a
-// band roughly 0.12 wide - nothing like 0..1. These bounds are +/-2.5 sigma about that
-// measured mean. Re-measure them if the octave counts or the dilation change.
-const WORKING_BAND_MIN = 0.628;
-const WORKING_BAND_MAX = 0.748;
-
-// Schneider's remap: rebase a signal from one range onto another. Used both to dilate
-// Perlin by Worley and to apply coverage/erosion as range compressions rather than
-// multiplications, which is what keeps cloud edges from turning into hard cutouts.
-function remap(value, oldMin, oldMax, newMin, newMax) {
-  const lo = float(oldMin);
-  return float(newMin).add(
-    value.sub(lo).div(float(oldMax).sub(lo)).mul(float(newMax).sub(float(newMin))),
-  );
-}
-
-// Henyey-Greenstein phase, p(t) = (1 - g^2) / (4pi * (1 + g^2 - 2g*cos(t))^1.5).
-// Identical in form to the Mie phase already used by the shared atmosphere; clouds
-// simply run it at a much stronger forward eccentricity.
+// Henyey-Greenstein phase used for the broad forward lobe and tight silver lining.
 function henyeyGreenstein(cosine, g) {
   const gg = g * g;
-  return float(1 - gg).div(float(1 + gg).sub(cosine.mul(2 * g)).max(0.0001).pow(1.5)).mul(0.0795775);
+  return float(1 - gg)
+    .div(float(1 + gg).sub(cosine.mul(2 * g)).max(0.0001).pow(1.5))
+    .mul(0.0795775);
 }
 
-// One predicate for "is there authored weather in the sky". SceneManager uses it to
-// decide whether a coverage change needs a new node graph; WeatherSky uses it to decide
-// whether to compile the cloud grade at all. Keeping them on the same function is what
-// makes an in-range coverage drag provably free of a rebuild.
+// A single predicate is shared by SceneManager and the graph compiler. Coverage and
+// density changes inside this range stay uniform-only; crossing it is a graph change.
 export function cloudsAreEnabled(clouds) {
   return clouds.x > 0.0001 && clouds.y > 0.0001;
 }
 
-// Values are deliberately fixed, exported workload policies rather than quality
-// toggles. Integration assigns internalScale only when authored cloud coverage is
-// present; clear weather uses the shared verified sky directly.
 export const WEATHER_SKY_WORKLOADS = Object.freeze({
-  // The volume is quarter-resolution on the high tier. Four midpoint samples
-  // and one sunward sample preserve broad billows and a coherent silver lining;
-  // cloud shadowing is optional at this scale, so a second shadow sample would
-  // spend the saved budget without changing the authored silhouette.
-  high: Object.freeze({ id: 'high', internalScale: 0.14, raySteps: 5, sunTransmittanceSteps: 2, noiseOctaves: 3, jitterPeriod: 32 }),
-  balanced: Object.freeze({ id: 'balanced', internalScale: 0.22, raySteps: 6, sunTransmittanceSteps: 3, noiseOctaves: 2, jitterPeriod: 32 }),
-  conservative: Object.freeze({ id: 'conservative', internalScale: 0.18, raySteps: 5, sunTransmittanceSteps: 2, noiseOctaves: 2, jitterPeriod: 32 }),
+  // One low-resolution target performs a global AABB/slab march. The history node
+  // ping-pongs that same target before the full-resolution scene TRAA.
+  high: Object.freeze({
+    id: 'high', internalScale: CLOUD_TARGET_SCALE, raySteps: 4, lightTransportSamples: 1, noiseOctaves: 2, jitterPeriod: 64,
+  }),
+  balanced: Object.freeze({
+    id: 'balanced', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, noiseOctaves: 2, jitterPeriod: 64,
+  }),
+  conservative: Object.freeze({
+    id: 'conservative', internalScale: CLOUD_TARGET_SCALE, raySteps: 4, lightTransportSamples: 1, noiseOctaves: 2, jitterPeriod: 64,
+  }),
 });
 
-/**
- * Strict WebGPU/TSL sky node.  Assign `sky.backgroundNode` to `scene.backgroundNode`.
- * `setTemporalFrame()` must be called once for every presented frame before the
- * scene pass.  It supplies stable current/previous low-discrepancy phases for
- * future cloud temporal resolve without creating a second simulation clock.
- */
+/** Strict WebGPU/TSL sky source. Cloud weather is integrated through a global
+ * camera-ray slab in a bounded sky target; the 96^3 field is generated on-GPU. */
 export class WeatherSky {
   constructor(renderer, environment, workload, skyManifest = null) {
     if (!renderer?.isWebGPURenderer || typeof renderer.compute !== 'function') {
@@ -174,39 +148,141 @@ export class WeatherSky {
     this.environment = environment;
     this.workload = normaliseWorkload(workload);
     this.skyManifest = skyManifest;
-    // Coverage is authored in the immutable environment frame. Clear weather
-    // keeps the exact shared sky-radiance node; covered weather adds the direct
-    // cloud grade to that same node without allocating a target or compute job.
     this.cloudsEnabled = cloudsAreEnabled(environment.clouds.value);
-    this.usesVolumetricClouds = false;
-    this.usesAnalyticClouds = this.cloudsEnabled;
+    this.usesVolumetricClouds = this.cloudsEnabled;
     this.currentJitter = uniform(new Vector2(0, 0));
     this.previousJitter = uniform(new Vector2(0, 0));
     this.temporalFrame = 0;
     this.setTemporalFrame(0);
 
-    this.noiseVolume = null;
-    this._noiseInitCompute = null;
-    this._noiseDiagnostics = Object.freeze({ enabled: false, sampleCount: 0, minimum: 0,
-      maximum: 0, mean: 0, nonZeroFraction: 0 });
-    // A stable cloud-free capture source for the scene PMREM. Visible clouds, when
-    // authored, do not force an expensive environment recapture or bake temporal
-    // noise into every PBR reflection.
+    this._cloudVolume = null;
+    this._cloudVolumeInit = null;
+    this._cloudVolumeInitDispatched = false;
+    if (this.cloudsEnabled) this._initCloudVolume();
+
+    const volumeDiagnostics = Object.freeze({
+      dimensions: this.cloudsEnabled
+        ? [CLOUD_VOLUME_SIZE, CLOUD_VOLUME_SIZE, CLOUD_VOLUME_SIZE] : [0, 0, 0],
+      channels: this.cloudsEnabled ? 4 : 0,
+      format: this.cloudsEnabled ? CLOUD_VOLUME_FORMAT : null,
+      gpuResident: this.cloudsEnabled,
+      initStatus: this.cloudsEnabled
+        ? (this._cloudVolumeInitDispatched ? 'submitted' : 'not-submitted') : 'none',
+      sampledInRaymarch: this.cloudsEnabled,
+    });
+    this._cloudDiagnostics = Object.freeze({
+      enabled: this.cloudsEnabled,
+      mode: this.cloudsEnabled ? 'gpu-volume-raymarch' : 'clear-sky',
+      renderTopology: this.cloudsEnabled ? 'fused-temporal-volume' : 'analytic-background',
+      usesVolumetricClouds: this.cloudsEnabled,
+      proceduralNoise: this.cloudsEnabled,
+      gpuOnly: true,
+      internalScale: this.cloudsEnabled ? this.workload.internalScale : 0,
+      raySteps: this.cloudsEnabled ? this.workload.raySteps : 0,
+      lightTransportSamples: this.cloudsEnabled ? this.workload.lightTransportSamples : 0,
+      lightTransportMode: this.cloudsEnabled ? 'sun-offset-volume-probe' : 'none',
+      noiseOctaves: this.cloudsEnabled ? this.workload.noiseOctaves : 0,
+      jitterPeriod: this.cloudsEnabled ? this.workload.jitterPeriod : 0,
+      cloudVolume: volumeDiagnostics,
+      cloudHistory: Object.freeze({
+        resolutionScale: this.cloudsEnabled ? this.workload.internalScale : 0,
+        pingPong: this.cloudsEnabled,
+        previousFrameSampling: this.cloudsEnabled,
+        cameraReprojection: this.cloudsEnabled,
+        disocclusionRejection: this.cloudsEnabled,
+        transmittanceAware: this.cloudsEnabled,
+        temporalResolve: this.cloudsEnabled ? 'fused-raymarch-history' : 'none',
+      }),
+    });
     this.skyTexture = null;
     this.skyTextureLoaded = false;
     this._disposed = false;
     this.skyTextureReady = this._loadSkyTexture();
-    this.ready = Promise.all([this.skyTextureReady, Promise.resolve(this._noiseDiagnostics)])
-      .then(([, diagnostics]) => diagnostics);
-    // IBL deliberately omits the measured solar disc. The authoritative
-    // DirectionalLight owns direct sun/shadows; keeping the HDR disc in the
-    // PMREM would add a second unshadowed key (the 1K source concentrates much
-    // of its energy in only a few pixels). The visible background replaces it
-    // with the single authoritative analytic sun contribution.
+    this.ready = this.skyTextureReady.then(() => this._cloudDiagnostics);
+
+    // IBL intentionally excludes the measured solar disc; the authoritative
+    // DirectionalLight owns direct sun/shadows and visible sky adds its analytic disc.
     this.iblBackgroundNode = this._buildSkyRadianceNode({ includeSun: false });
     this.backgroundNode = this._buildBackgroundNode();
-    // Alias makes the intended Scene.backgroundNode integration explicit.
     this.outputNode = this.backgroundNode;
+  }
+
+  // Generate the compact cloud field once on the GPU. RGBA8 is enough for a filtered
+  // density field at this scale: R is connected billow shape, G is broad detail,
+  // B is erosion, and A is a conservative occupancy gate. The texture is never read
+  // back or rebuilt per frame; world-space advection moves samples through this field.
+  _initCloudVolume() {
+    const volume = new Storage3DTexture(CLOUD_VOLUME_SIZE, CLOUD_VOLUME_SIZE, CLOUD_VOLUME_SIZE);
+    volume.name = 'weather-cloud-volume-gpu';
+    volume.minFilter = volume.magFilter = LinearFilter;
+    volume.wrapS = volume.wrapT = volume.wrapR = ClampToEdgeWrapping;
+    volume.generateMipmaps = false;
+    volume.mipmapsAutoUpdate = false;
+    this._cloudVolume = volume;
+
+    const seedA = Number(this.environment.coefficientA.value.w) || 0;
+    const seedB = Number(this.environment.coefficientB.value.w) || 0;
+    const voxelSize = CLOUD_VOLUME_SIZE;
+    this._cloudVolumeInit = Fn(() => {
+      const voxel = globalId;
+      const uv = vec3(
+        float(voxel.x).add(0.5).div(voxelSize),
+        float(voxel.y).add(0.5).div(voxelSize),
+        float(voxel.z).add(0.5).div(voxelSize),
+      );
+      // The carrier is a 3-D weather field. Worley parcels form the connected
+      // horizontal scaffold and the Y-dependent tower profile gives each parcel
+      // a distinct crown rather than a flat sheet.
+      const domain = uv.mul(vec3(4.6, 2.3, 4.6));
+      const seededDomain = domain.add(vec3(seedA * 0.17, seedB * 0.13, seedA * 0.23));
+      const weatherXZ = vec2(seededDomain.x, seededDomain.z).mul(0.42);
+      const carrierXZ = weatherXZ.mul(1.55);
+      const cellDistance = mx_worley_noise_float(carrierXZ, 1).max(0).sqrt();
+      const cellBillow = oneMinus(smoothstep(0.10, 0.68, cellDistance));
+      const weatherNoise = mx_noise_float(carrierXZ.mul(0.58).add(vec2(13.7, 41.9)))
+        .mul(0.5).add(0.5);
+      const weatherGate = smoothstep(0.24, 0.58,
+        cellBillow.mul(0.80).add(weatherNoise.mul(0.20)));
+      const columnNoise = mx_noise_float(weatherXZ.mul(0.82).add(vec2(73.1, 19.4)))
+        .mul(0.5).add(0.5);
+      const cloudTop = float(0.60).add(columnNoise.mul(0.27));
+      const normalizedHeight = uv.y;
+      const baseProfile = smoothstep(0.025, 0.15, normalizedHeight);
+      const shoulderProfile = smoothstep(0.10, 0.34, normalizedHeight);
+      const topProfile = oneMinus(smoothstep(
+        cloudTop.sub(0.14), cloudTop.add(0.035), normalizedHeight,
+      ));
+      const towerProfile = baseProfile.mul(topProfile)
+        .mul(float(0.58).add(shoulderProfile.mul(0.42)));
+
+      const broad = mx_noise_float(seededDomain.mul(0.52).add(vec3(17.3, 5.1, 29.7)))
+        .mul(0.5).add(0.5);
+      const base = mx_noise_float(domain.mul(0.78)).mul(0.5).add(0.5);
+      const worleyDistance = mx_worley_noise_float(seededDomain.mul(1.18), 1).max(0).sqrt();
+      const worleyBillow = oneMinus(worleyDistance).clamp(0, 1);
+      const billow = base.mul(0.54).add(worleyBillow.mul(0.31)).add(broad.mul(0.15)).clamp(0, 1);
+      const cauliflower = worleyBillow.mul(0.74).add(base.mul(0.16)).add(broad.mul(0.10));
+      const billowShape = cauliflower.mul(0.66).add(billow.mul(0.22)).add(broad.mul(0.12));
+      const detail = mx_noise_float(domain.mul(4.40).add(vec3(11.7, 31.2, 7.4)))
+        .mul(0.5).add(0.5);
+      const erosion = mx_noise_float(domain.mul(6.20).add(vec3(23.1, 4.7, 11.9)))
+        .mul(0.5).add(0.5);
+      const billowBoundary = smoothstep(0.18, 0.48, billowShape)
+        .mul(oneMinus(smoothstep(0.58, 0.86, billowShape)));
+      const boundaryErosion = float(0.74).mix(erosion, billowBoundary);
+      const occupancy = weatherGate.mul(towerProfile)
+        .mul(float(0.72).add(cauliflower.mul(0.28))).clamp(0, 1);
+      const density = occupancy.mul(
+        smoothstep(0.15, 0.48, billowShape).mul(0.76).add(0.24),
+      );
+      textureStore(volume, voxel, vec4(density, detail, boundaryErosion, occupancy)).toWriteOnly();
+    })().compute(
+      [CLOUD_VOLUME_DISPATCH, CLOUD_VOLUME_DISPATCH, CLOUD_VOLUME_DISPATCH],
+      [CLOUD_VOLUME_WORKGROUP, CLOUD_VOLUME_WORKGROUP, CLOUD_VOLUME_WORKGROUP],
+    );
+    this._cloudVolumeInit.name = 'Weather cloud volume initialize';
+    this.renderer.compute(this._cloudVolumeInit);
+    this._cloudVolumeInitDispatched = true;
   }
 
   _loadSkyTexture() {
@@ -216,9 +292,6 @@ export class WeatherSky {
     let rejectReady;
     const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
     this.skyTexture = loader.load(this.skyManifest.url, (loadedTexture) => {
-      // Use the callback handle, not this.skyTexture: dispose() intentionally
-      // clears the owner before an in-flight decode can finish. This also makes
-      // a stale callback harmless if a weather reconfigure replaced the sky.
       if (this._disposed || this.skyTexture !== loadedTexture) {
         loadedTexture?.dispose();
         resolveReady(null);
@@ -237,11 +310,6 @@ export class WeatherSky {
     return this.skyRadiance(positionWorldDirection.normalize(), { includeSun });
   }
 
-  // Public direction-parametric source for reflective materials. With a verified
-  // manifest this is the exact yaw-correct HDR lookup used by the visible sky and
-  // PMREM; without one it fails over only to the shared analytic environment.
-  // Keeping this on WeatherSky prevents water/materials from inventing a second
-  // atmosphere or sampling a stale render target.
   skyRadiance(direction, { includeSun = false } = {}) {
     if (!direction?.isNode) throw new TypeError('WeatherSky.skyRadiance requires a TSL direction node.');
     const normalized = direction.normalize();
@@ -249,33 +317,30 @@ export class WeatherSky {
       return this.environment.skyRadiance(normalized, { includeSun });
     }
     const angle = this.skyManifest.rotationRadians;
-    const c = Math.cos(angle); const s = Math.sin(angle);
-    // The world-to-source inverse matches the manifest's source->world yaw
-    // convention; keeping this sign pair identical is the visible/IBL yaw
-    // contract rather than an arbitrary texture UV rotation.
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
     const rotated = vec3(
       normalized.x.mul(c).add(normalized.z.mul(s)),
       normalized.y,
       normalized.z.mul(c).sub(normalized.x.mul(s)),
     );
     const hdr = textureNode(this.skyTexture, equirectUV(rotated));
-    // Suppress the measured source-space solar disc before PMREM/water sampling.
-    // Its elevation differs from the authoritative sun, so a world-space mask
-    // would leave the six-pixel high-energy core unshadowed after yaw rotation.
     const sourceSun = vec3(...this.skyManifest.sourceSunDirection);
     const sourceAlignment = rotated.dot(sourceSun).clamp(-1, 1);
-    const directMask = smoothstep(Math.cos(5 * Math.PI / 180), Math.cos(1 * Math.PI / 180), sourceAlignment);
+    const directMask = smoothstep(
+      Math.cos(5 * Math.PI / 180), Math.cos(1 * Math.PI / 180), sourceAlignment,
+    );
     const clearSky = this.environment.skyRadiance(normalized, { includeSun: false });
     const skyWithoutMeasuredSun = mix(hdr, clearSky, directMask);
     if (!includeSun) return skyWithoutMeasuredSun;
-    // The visible background receives only the authoritative analytic sun delta;
-    // DirectionalLight remains the sole shadow-casting direct-light source.
-    return skyWithoutMeasuredSun.add(this.environment.skyRadiance(normalized, { includeSun: true }).sub(clearSky));
+    return skyWithoutMeasuredSun.add(
+      this.environment.skyRadiance(normalized, { includeSun: true }).sub(clearSky),
+    );
   }
 
   async readDiagnostics() {
     await this.ready;
-    return this._noiseDiagnostics;
+    return this._cloudDiagnostics;
   }
 
   setTemporalFrame(frame) {
@@ -287,8 +352,6 @@ export class WeatherSky {
     return this;
   }
 
-  // Explicit hook for a renderer that owns a global temporal sequence.  Both
-  // values are validated and copied; callers cannot mutate our temporal state.
   setTemporalJitter(current, previous) {
     const currentValue = validateJitter(current, 'current');
     const previousValue = validateJitter(previous, 'previous');
@@ -302,205 +365,206 @@ export class WeatherSky {
     return this._cloudDensity(worldPosition, previous ? this.environment.previousTime : this.environment.time);
   }
 
-  _fbm2(position, octaves = this.workload.noiseOctaves) {
-    const warp = mx_noise_float(vec3(position, 19.7)).sub(0.5).mul(0.20);
-    const warpedPosition = position.add(vec2(warp, warp.mul(0.73)));
-    let frequency = 1;
-    let amplitude = 0.5;
-    let sum = float(0);
-    let normalizer = 0;
-    for (let octave = 0; octave < octaves; octave++) {
-      const p = warpedPosition.mul(frequency);
-      const n = mx_noise_float(vec3(
-        p.x.add(p.y.mul(0.17)), p.y.sub(p.x.mul(0.11)), 31.0 + octave * 17.3,
-      )).mul(0.5).add(0.5);
-      sum = sum.add(n.mul(amplitude));
-      normalizer += amplitude;
-      frequency *= 2.04;
-      amplitude *= 0.5;
-    }
-    return sum.div(normalizer);
-  }
-
-  // The wind field itself advects the layer. It is sampled at the cloud point, so
-  // grass, tree, cloud, water, and ball motion share gust direction and phase
-  // instead of five unrelated "wind" animations.
+  // The shared wind field advects every volume tap. X/Z are broad enough for connected
+  // kilometre-scale parcels; Y is deliberately different so vertical samples traverse
+  // genuine 3-D detail instead of repeating one 2-D carrier through the slab.
   _cloudCoordinates(worldPosition, time, wind = null, advectionTime = null) {
-    // The view ray samples the authoritative wind field once. Sun-light samples share
-    // that local gust vector: light transport is through the same cloud parcel, and
-    // re-evaluating the three-phase gust field at every shadow sample only adds
-    // trigonometry without changing the visible cloud shape. Direct callers still get
-    // the full environment wind evaluation.
     const localWind = wind ?? this.environment.windAt(worldPosition, time);
     const localAdvectionTime = advectionTime ?? time.mul(this.environment.cloudAdvectionScale);
     const advected = worldPosition.sub(localWind.mul(localAdvectionTime));
-    return vec2(advected.x.mul(0.00072), advected.z.mul(0.00072));
+    const rotatedX = advected.x.mul(0.8480).sub(advected.z.mul(0.5299));
+    const rotatedZ = advected.x.mul(0.5299).add(advected.z.mul(0.8480));
+    return fract(vec3(
+      rotatedX.mul(0.00032),
+      advected.y.mul(0.00030),
+      rotatedZ.mul(0.00032),
+    ).add(vec3(0.37, 0.13, 0.61)));
   }
 
-  // Inverted Worley fBm. Inversion is the whole point: Worley's distance field peaks at
-  // cell centres, so 1 - worley gives the tightly packed rounded lobes that read as
-  // cumulus. This is the term Perlin fBm cannot produce.
-  _billowFbm(coordinates, octaves) {
-    let frequency = 1;
-    let amplitude = 0.625;
-    let sum = float(0);
-    let normalizer = 0;
-    for (let octave = 0; octave < octaves; octave++) {
-      // three's mx_worley_noise_float wrapper hardcodes metric = 1, which is the branch
-      // that skips the sqrt: it returns SQUARED distance. Squared cell distances are
-      // small, so inverting them directly yields a washed field pinned near 0.9 with
-      // almost no range. Take the root first to recover true distance before inverting.
-      const cell = mx_worley_noise_float(coordinates.mul(frequency), 1).max(0).sqrt();
-      sum = sum.add(oneMinus(cell).mul(amplitude));
-      normalizer += amplitude;
-      frequency *= 2.9;
-      amplitude *= 0.5;
-    }
-    return sum.div(normalizer).clamp(0, 1);
+  _cloudVolumeSample(worldPosition, time, wind = null, advectionTime = null) {
+    if (!this._cloudVolume) return vec4(0, 0, 0, 0);
+    return texture3D(this._cloudVolume, this._cloudCoordinates(
+      worldPosition, time, wind, advectionTime,
+    ));
   }
 
-  // The broad 0..1 mass signal, before coverage thresholding or slab confinement.
-  // Shared by the visible density and by the slab-relief displacement, so the top
-  // surface undulates in step with the masses that sit on it rather than independently.
-  _cloudShapeSignal(coordinates, octaves = this.workload.noiseOctaves) {
-    const perlin = this._fbm2(coordinates, octaves);
-    const billow = this._billowFbm(coordinates, 2);
-    // Perlin-Worley: dilate Perlin by the inverted-Worley fBm. Remapping Perlin's range
-    // from [billow - 1, 1] up to [0, 1] lifts its low end wherever a billow sits, so the
-    // field keeps Perlin's connected masses but acquires Worley's rounded lobes.
-    const perlinWorley = remap(perlin, billow.sub(1), 1, 0, 1).clamp(0, 1);
-    // The dilation leaves a signal centred near 0.63 in a narrow band, not a clean 0..1.
-    // Coverage below is a range compression against a [0,1] field, so without this
-    // renormalisation the coverage threshold sits outside the signal entirely and the
-    // layer collapses to nothing. Expanding the working band is what makes the authored
-    // coverage number mean "fraction of sky covered".
-    return remap(perlinWorley, WORKING_BAND_MIN, WORKING_BAND_MAX, 0, 1).clamp(0, 1);
-  }
-
-  // A cumulus height gradient over the slab: density builds quickly off the base, holds
-  // through the body, and rounds off at the top. Schneider additionally reduces density
-  // at the bottoms so undersides stay wispy rather than ending on a flat cut.
-  _heightGradient(normalizedHeight) {
+  _heightGradient(normalizedHeight, volume) {
     const h = normalizedHeight.clamp(0, 1);
-    const base = smoothstep(0.0, 0.22, h);
-    const top = oneMinus(smoothstep(0.55, 1.0, h));
-    return base.mul(top).mul(remap(h, 0, 0.35, 0.62, 1).clamp(0.62, 1));
+    // The base is tapered by the same local R/A field that owns occupancy. This keeps
+    // the underside broken in X/Z while preserving a readable broad crown profile.
+    const baseEdge = volume.w.mul(0.055).add(volume.x.mul(0.025));
+    const base = smoothstep(baseEdge, baseEdge.add(0.18), h);
+    // The generated A occupancy already carries each parcel's own top. Avoid a
+    // second hard top ramp here: multiplying two vertical cuts creates visible
+    // horizontal bands at sparse view-step counts.
+    return base.mul(float(0.78).add(h.mul(0.22)));
   }
 
-  _cloudDensity(worldPosition, time, wind = null, advectionTime = null, octaves = this.workload.noiseOctaves, detail = true) {
+  // R/A are one joint GPU carrier. The threshold is materially above zero and was
+  // calibrated to the initialized field's interior product (~0.1), so empty voxels
+  // remain empty without a coverage floor or a near-zero remap.
+  _cloudDensityFromVolume(volume, normalizedHeight, clouds, detail = true) {
+    const rawCarrier = volume.x.mul(volume.w).clamp(0, 1);
+    const coverageThreshold = float(0.10).add(oneMinus(clouds.x.clamp(0, 1)).mul(0.06));
+    const carrier = smoothstep(coverageThreshold, coverageThreshold.add(0.18), rawCarrier);
+    const vertical = this._heightGradient(normalizedHeight, volume);
+    const detailSignal = volume.y.mul(0.58).add(volume.z.mul(0.42));
+    const erosion = smoothstep(0.20, 0.78, volume.z);
+    // The carrier controls parcel occupancy; this second bounded field controls
+    // cauliflower breakup inside an occupied parcel. Keeping it multiplicative
+    // creates rounded crowns and shadow pockets instead of a uniform translucent
+    // sheet while still using only channels from the same GPU-generated voxel.
+    const fineShape = smoothstep(
+      0.28, 0.68,
+      volume.x.mul(0.35).add(volume.y.mul(0.42)).add(oneMinus(volume.z).mul(0.23)),
+    );
+    const variation = detail
+      ? float(0.16).add(fineShape.mul(0.66)).add(detailSignal.mul(0.12)).add(erosion.mul(0.06))
+      : float(0.72).add(volume.y.mul(0.08));
+    return carrier.mul(vertical).mul(variation).mul(clouds.y).clamp(0, 1);
+  }
+
+  _cloudDensity(worldPosition, time, wind = null, advectionTime = null,
+    octaves = this.workload.noiseOctaves, detail = true) {
+    void octaves;
     const clouds = this.environment.clouds;
-    const coordinates = this._cloudCoordinates(worldPosition, time, wind, advectionTime);
     const normalizedHeight = worldPosition.y.sub(clouds.z).div(clouds.w.max(1));
-    // Base shape = Perlin-Worley confined by the height gradient.
-    const shape = this._cloudShapeSignal(coordinates, octaves).mul(this._heightGradient(normalizedHeight));
-    // Coverage as a range compression rather than a threshold. remap(shape, 1-coverage,
-    // 1, 0, 1) * coverage is Schneider's formulation: raising coverage both admits more
-    // of the field and thickens what is already there, instead of only moving a cutoff.
-    const coverage = clouds.x.clamp(0, 1);
-    const covered = remap(shape, oneMinus(coverage), 1, 0, 1).clamp(0, 1).mul(coverage);
-    if (!detail) return covered.mul(clouds.y);
-    // High-frequency Worley erosion applied inward from the edge. Subtracting detail at
-    // the boundary is what turns smooth blobs into cauliflower lobes; applying it as a
-    // remap keeps interiors solid instead of drilling holes through the mass.
-    const erosion = this._billowFbm(coordinates.mul(9.0), 2);
-    return remap(covered, erosion.mul(0.38), 1, 0, 1).clamp(0, 1).mul(clouds.y);
+    const volume = this._cloudVolumeSample(worldPosition, time, wind, advectionTime);
+    return this._cloudDensityFromVolume(volume, normalizedHeight, clouds, detail);
   }
 
   _buildBackgroundNode() {
     const direction = positionWorldDirection.normalize();
-    // Clear weather uses one analytic sky node directly in the main scene. This
-    // keeps atmosphere and PMREM on the same source while removing a full-screen
-    // cloud target and its resolve from the frame graph.
     if (!this.cloudsEnabled) return this._buildSkyRadianceNode({ includeSun: true });
+    // Keep the public background node useful for callers that render a scene
+    // background directly. The fused temporal path below passes all three ray
+    // inputs explicitly and never inherits the fullscreen quad camera context.
+    return this.radianceForRay(direction, cameraPosition, screenCoordinate.xy.floor());
+  }
+
+  // Evaluate one cloud ray with explicit direction, camera origin, and target
+  // pixel. This is intentionally independent of the scene's camera accessors so
+  // the same graph can run inside CloudTemporalNode's quarter-resolution quad.
+  // `cameraOrigin` is a parameter (not a hidden node lookup), so this graph is
+  // safe to call from the orthographic fullscreen material as well as a scene.
+  radianceForRay(direction, cameraOrigin, pixel = screenCoordinate.xy.floor()) {
+    if (!direction?.isNode || !cameraOrigin?.isNode || !pixel?.isNode) {
+      throw new TypeError('WeatherSky.radianceForRay requires direction, camera origin, and pixel nodes.');
+    }
+    if (!this.cloudsEnabled) return this.environment.skyRadiance(direction.normalize(), { includeSun: true });
 
     const sunDirection = this.environment.sunDirection.normalize();
     const clouds = this.environment.clouds;
-    // The clear-air portion is not independently authored here. It is the same
-    // linear-HDR function used to bake the PBR environment and shade water/assets.
-    const sky = this._buildSkyRadianceNode({ includeSun: true });
-
+    // The ray's clear-sky radiance must use this explicit world direction too;
+    // positionWorldDirection would resolve against the fullscreen quad camera.
+    const sky = this.skyRadiance(direction.normalize(), { includeSun: true });
     const time = this.environment.time;
-    const slabThickness = clouds.w.max(1);
-    const meanY = clouds.z.add(slabThickness.mul(0.48));
-    // The `.max(0.10)` is a singularity guard, not a look: below it every ray lands at
-    // the same slab distance, so the noise field is sampled along one degenerate line
-    // and smears horizontally. `horizonMask` below reaches zero exactly where it engages.
-    const intersectSlab = (planeY) => cameraPosition
-      .add(direction.mul(planeY.sub(cameraPosition.y).div(direction.y.max(0.10))));
-
-    // A single flat plane is what made this layer read as a painted decal: with a fixed
-    // `meanY`, the intersection resolves to `cloudPosition.y === meanY` for *every* ray
-    // above the clamp, so cloud altitude was the compile-time constant 0.48 and every
-    // altitude-driven term below silently evaluated to the same number everywhere.
-    // Displacing the top surface by the same mass signal that forms the clouds gives the
-    // layer a real, varying height, which is what the shading terms need to bite on.
-    const relief = this._cloudShapeSignal(this._cloudCoordinates(intersectSlab(meanY), time))
-      .sub(0.5);
-    const cloudPosition = intersectSlab(meanY.add(relief.mul(slabThickness.mul(0.9))));
-
-    // One wind/advection evaluation is shared by the view sample and every sun-march
-    // sample: light transports through the same parcel, so re-running the three-phase
-    // gust field per shadow tap would only add trigonometry.
-    const localWind = this.environment.windAt(cloudPosition, time);
+    const slab = clouds.w.max(1);
+    const boundsMin = vec3(
+      float(-CLOUD_HORIZONTAL_EXTENT), clouds.z, float(-CLOUD_HORIZONTAL_EXTENT),
+    );
+    const boundsMax = vec3(
+      float(CLOUD_HORIZONTAL_EXTENT), clouds.z.add(slab), float(CLOUD_HORIZONTAL_EXTENT),
+    );
+    const inverseDirection = vec3(
+      direction.x.greaterThanEqual(0).select(1, -1).div(direction.x.abs().max(0.0001)),
+      direction.y.greaterThanEqual(0).select(1, -1).div(direction.y.abs().max(0.0001)),
+      direction.z.greaterThanEqual(0).select(1, -1).div(direction.z.abs().max(0.0001)),
+    );
+    const t0 = boundsMin.sub(cameraOrigin).mul(inverseDirection);
+    const t1 = boundsMax.sub(cameraOrigin).mul(inverseDirection);
+    const tMin = min(t0, t1);
+    const tMax = max(t0, t1);
+    const rayEntry = max(tMin.x, max(tMin.y, tMin.z)).max(0);
+    const rayExit = min(tMax.x, min(tMax.y, tMax.z));
+    const rayLength = rayExit.sub(rayEntry).max(0);
+    const steps = this.workload.raySteps;
+    // Integrate the complete finite AABB interval. The authored horizontal bounds
+    // make even a grazing sky ray finite; truncating this interval creates a hard
+    // 2.8 km horizon slice that reads as a rectangular cloud card.
+    const marchLength = rayLength;
+    const stepLength = marchLength.div(steps);
+    const centre = cameraOrigin.add(direction.mul(rayEntry.add(marchLength.mul(0.5))));
+    const wind = this.environment.windAt(centre, time);
     const advectionTime = time.mul(this.environment.cloudAdvectionScale);
-    const cloudDensity = this._cloudDensity(cloudPosition, time, localWind, advectionTime);
+    const validRay = rayExit.greaterThan(rayEntry)
+      .and(rayLength.greaterThan(1))
+      .and(direction.y.greaterThan(0.024));
+    const horizonMask = oneMinus(smoothstep(7000, 18000, rayEntry))
+      .mul(smoothstep(0.03, 0.11, direction.y));
+    const cosine = direction.dot(sunDirection).clamp(-1, 1);
+    const phase = max(henyeyGreenstein(cosine, 0.60), henyeyGreenstein(cosine, 0.93).mul(0.62))
+      .mul(4.4).clamp(0.30, 2.9);
+    const sunTint = this.environment.sunColor
+      .mul(this.environment.sunIlluminanceScale.max(0).pow(0.35));
+    const ambientTop = this.environment.skyRadiance(vec3(0, 1, 0), { includeSun: false });
 
-    // Optical depth toward the sun. Marching through the slab and attenuating is what
-    // produces a bright crown over a shadowed base; a projected noise plane has no
-    // interior, so without this it stays flat under any colour grade. The march reaches
-    // roughly two slab thicknesses so it crosses into neighbouring masses rather than
-    // resampling the same parcel, and its taps drop detail because occlusion needs the
-    // broad mass, not the erosion. `sunTransmittanceSteps` is the tier's existing budget.
-    const shadowSteps = this.workload.sunTransmittanceSteps;
-    const shadowStep = sunDirection.mul(slabThickness.mul(2.2 / shadowSteps));
-    let opticalDepth = float(0);
-    for (let step = 0; step < shadowSteps; step++) {
-      opticalDepth = opticalDepth.add(this._cloudDensity(
-        cloudPosition.add(shadowStep.mul(step + 0.5)), time, localWind, advectionTime,
-        MIN_NOISE_OCTAVES, false,
-      ));
-    }
-    opticalDepth = opticalDepth.mul(4.2 / shadowSteps);
-
-    const sunAlignment = direction.dot(sunDirection).clamp(-1, 1);
-    const cloudAltitude = cloudPosition.y.sub(clouds.z).div(slabThickness).clamp(0, 1);
-
-    // Beer's law, in the two-lobe form: the second lobe keeps a floor under deep cores
-    // so they read as dense grey rather than collapsing to black.
-    const beer = max(exp(opticalDepth.negate()), exp(opticalDepth.mul(-0.25)).mul(0.7));
-    // Dual-lobe Henyey-Greenstein: a broad forward lobe for general brightening toward
-    // the sun, and a tight one for the silver lining on edges crossing the disc.
-    const phase = max(henyeyGreenstein(sunAlignment, 0.6), henyeyGreenstein(sunAlignment, 0.94).mul(0.7))
-      .mul(4.2).clamp(0.35, 2.4);
-    // The powdered-sugar term: crevices and thick interiors collect more in-scattered
-    // light than edges facing the light, so edges read dark. It is view dependent -
-    // only visible looking away from the sun - hence the sunAlignment blend.
-    const powder = oneMinus(exp(cloudDensity.mul(-9.0)));
-    const powderView = mix(powder, float(1), sunAlignment.mul(0.5).add(0.5));
-
-    const sunlight = beer.mul(phase).mul(powderView);
-    // Ambient is sky radiance from straight up, so the shadowed side is lit by the same
-    // atmosphere as everything else rather than by an invented fill colour. Height
-    // weighting keeps undersides darker than crowns.
-    const ambient = this.environment.skyRadiance(vec3(0, 1, 0), { includeSun: false })
-      .mul(cloudAltitude.mul(0.55).add(0.45)).mul(0.55);
-    const cloudLight = this.environment.sunColor.mul(sunlight)
-      .mul(this.environment.sunIlluminanceScale.max(0).pow(0.35))
-      .add(ambient);
-
-    // Clouds exist only above the degenerate projection band: zero below ~5.7 degrees
-    // of elevation, full by ~17. This is what keeps the skyline clean instead of banded.
-    const horizonMask = smoothstep(0.10, 0.30, direction.y)
-      .mul(direction.y.max(0).sqrt().mul(0.48).add(0.52));
-    // A straight linear density read flat-tops into opaque white islands. The exponent
-    // keeps thin edges thin; the cap is higher than the old 0.56 because the shaded
-    // base now carries the form, so opacity no longer has to be suppressed to hide it.
-    const cloudAlpha = cloudDensity.pow(1.25).mul(horizonMask).mul(0.94).clamp(0, 0.82);
-    return mix(sky, cloudLight, cloudAlpha);
+    // Static unrolled samples keep high tier at four bounded view taps. The phase
+    // jitter changes the sampled depths deterministically while frozen-time history
+    // converges those subpixel phases through CloudTemporalNode.
+    return Fn(() => {
+      const transmittance = float(1).toVar();
+      const scattered = vec3(0).toVar();
+      // Rotate a stable, analytic per-pixel low-discrepancy phase by the shared
+      // deterministic frame sequence. The target coordinate stays in shader (no
+      // noise texture); fract keeps every pixel in one valid interval and a broad
+      // analytic gradient field avoids both white hash grain and diagonal lattice.
+      const framePhase = fract(
+        this.currentJitter.x.mul(1.7).add(this.currentJitter.y.mul(2.3)).add(0.5),
+      );
+      const pixelPhase = mx_noise_float(pixel.mul(0.08)).mul(0.17).add(0.5);
+      const jitter = fract(framePhase.add(pixelPhase)).mul(0.84).add(0.08);
+      If(validRay.and(horizonMask.greaterThan(0.002)), () => {
+        for (let step = 0; step < steps; step++) {
+          // Stratify one phase inside each of the N intervals. `jitter` already
+          // occupies [0,1], so adding a half-step duplicates/overruns the final
+          // interval and then clamps it against the AABB exit.
+          const sampleDistance = rayEntry.add(stepLength
+            .mul(float(step).add(jitter))).clamp(rayEntry, rayExit);
+          const position = cameraOrigin.add(direction.mul(sampleDistance));
+          const normalizedHeight = position.y.sub(clouds.z).div(slab).clamp(0, 1);
+          const volume = this._cloudVolumeSample(position, time, wind, advectionTime);
+          const density = this._cloudDensityFromVolume(volume, normalizedHeight, clouds, true);
+          If(density.greaterThan(CLOUD_EMPTY_THRESHOLD), () => {
+            // One true sun-offset volume probe provides neighboring material for
+            // self-shadowing. Empty pixels pay only the primary filtered fetch.
+            const sunProbePosition = position.add(sunDirection.mul(240));
+            const sunProbe = this._cloudVolumeSample(
+              sunProbePosition, time, wind, advectionTime,
+            );
+            const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
+            const neighborDensity = this._cloudDensityFromVolume(
+              sunProbe, probeHeight, clouds, false,
+            );
+            const viewDepth = sampleDistance.sub(rayEntry).div(rayLength.max(1)).clamp(0, 1);
+            const sunTransmittance = exp(neighborDensity.mul(240).mul(SUN_EXTINCTION).negate());
+            const powder = oneMinus(exp(density.mul(-2.2))).mul(0.30);
+            const crown = smoothstep(0.18, 0.78, normalizedHeight);
+            const ambient = ambientTop.mul(float(0.48).add(normalizedHeight.mul(0.52)))
+              .mul(float(0.72).add(powder));
+            const direct = sunTint.mul(sunTransmittance).mul(phase)
+              .mul(float(0.72).add(crown.mul(0.28))).mul(1.9);
+            const radiance = ambient.add(direct).mul(float(0.86).add(viewDepth.mul(0.10)));
+            const opticalDepth = density.mul(stepLength).mul(CLOUD_EXTINCTION);
+            const segmentTransmittance = exp(opticalDepth.negate());
+            const segmentAlpha = oneMinus(segmentTransmittance);
+            scattered.addAssign(transmittance.mul(segmentAlpha).mul(radiance));
+            transmittance.mulAssign(segmentTransmittance);
+          });
+        }
+      });
+      const cloudAlpha = oneMinus(transmittance).mul(horizonMask).clamp(0, 0.96);
+      const color = sky.mul(transmittance).add(scattered);
+      return vec4(color, cloudAlpha);
+    })();
   }
 
   dispose() {
     this._disposed = true;
+    this._cloudVolumeInit?.dispose();
+    this._cloudVolumeInit = null;
+    this._cloudVolume?.dispose();
+    this._cloudVolume = null;
     this.skyTexture?.dispose();
     this.skyTexture = null;
     this.skyTextureLoaded = false;

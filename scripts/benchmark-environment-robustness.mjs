@@ -301,8 +301,8 @@ function validateDiagnostics(label, value) {
 }
 
 const steadyRequiredPasses = [
-  'Scene MRT', 'Dynamic atmosphere and volumetric clouds', 'TRAA',
-  'Golf Bloom [ Fused 2D ]', 'Final output pass',
+  'Scene MRT', 'Weather clouds [ fused raymarch + temporal resolve ]', 'TRAA',
+  'Final output pass',
   'Grass GPU reset', 'Grass tile classify', 'Grass tile dispatch finalize',
   'Grass blade compact', 'Grass indirect draw finalize',
   'Tree beauty GPU reset', 'Tree beauty camera-relative LOD compact',

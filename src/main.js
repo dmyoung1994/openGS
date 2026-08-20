@@ -129,10 +129,12 @@ let environmentBindings = null;
 let environmentTickRemainder = 0;
 let env = null;
 
-// Broken fair-weather cumulus is the authored default (BACKDROP_PLAN Phase 1 step 4).
+// Broken alpine cumulus is the authored default: a low, sparse layer above the
+// valley that reads as separate billows from golfer height instead of clipped
+// crowns at the top of frame or a uniform overcast.
 // The Conditions panel drives `cloudCoverage`; 0 is a real setting and costs nothing,
 // because WeatherSky then compiles the clear analytic sky with no cloud grade at all.
-const DEFAULT_CLOUD_COVERAGE = 0.38;
+const DEFAULT_CLOUD_COVERAGE = 0.40;
 
 function makeEnvironmentState(seed, {
   windSpeedMph = 0, windDirectionDegrees = 0, cloudCoverage = DEFAULT_CLOUD_COVERAGE,
@@ -153,10 +155,11 @@ function makeEnvironmentState(seed, {
       color: { r: 1.0, g: 0.955, b: 0.87 },
     },
     atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.0 },
-    // A high, thin slab. The base sits well above the ~430 m snowline of the alpine
-    // shell so the layer never intersects the skyline, and the reduced thickness keeps
-    // it from subtending the low sky where the slab projection degenerates.
-    clouds: { coverage: cloudCoverage, density: 0.85, baseHeight: 2200, thickness: 600, advectionScale: 1.0 },
+    // A broken alpine cumulus deck: 0.9 km base and 1.5 km depth keep the full
+    // GPU crowns inside the golfer-height sky while retaining believable valley
+    // clearance. Coverage stays sparse so three billows frame the golfer without
+    // flattening the mountain silhouette.
+    clouds: { coverage: cloudCoverage, density: 0.52, baseHeight: 900, thickness: 1500, advectionScale: 1.0 },
     wind: {
       speed: windSpeedMph * MPH_TO_MS,
       directionRadians: windDirectionDegrees * DEG_TO_RAD,

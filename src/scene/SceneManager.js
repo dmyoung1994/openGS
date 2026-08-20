@@ -8,6 +8,7 @@ import {
   pass, mrt, output, velocity, uniform,
 } from 'three/tsl';
 import { GpuPassProfiler } from '../diagnostics/GpuPassProfiler.js';
+import { CloudTemporalNode } from './CloudTemporalNode.js';
 import { resettableTraa } from './ResettableTRAANode.js';
 import { StrictWebGPUBackend } from './StrictWebGPUBackend.js';
 import { WeatherSky, WEATHER_SKY_WORKLOADS, cloudsAreEnabled } from './WeatherSky.js';
@@ -55,7 +56,6 @@ export class SceneManager {
 
     this.scene = new Scene();
     this.scene.background = null;
-    this.skyScene = new Scene();
     // Gentle exponential aerial perspective. The live daylight binding refines
     // this baseline by turbidity, keeping the distant alpine wall seated in the
     // same chromatic horizon without spatially blurring near-course detail.
@@ -121,10 +121,10 @@ export class SceneManager {
   _setupPost() {
     if (!this.environmentTier) throw new Error('SceneManager post pipeline requires a resolved environment device tier.');
     // Weather configuration can arrive immediately after WebGPU initialization,
-    // and a later authored weather change may rebuild the atmosphere pass. Release
-    // the old graph before replacing its handles so its full-resolution MRT, sky,
-    // and temporal targets do not remain resident or overlap the next frame.
-    this._skyPass?.dispose();
+    // and a later authored weather change may rebuild the atmosphere graph. Release
+    // the old graph before replacing its handles so its full-resolution MRT and
+    // temporal targets do not remain resident or overlap the next frame.
+    this._cloudTemporal?.dispose();
     this._scenePass?.dispose();
     this._traa?.dispose();
     this.postProcessing?.dispose();
@@ -142,26 +142,33 @@ export class SceneManager {
 
     let sky = null;
     if (this.weatherSky?.usesVolumetricClouds) {
-      const skyPass = pass(this.skyScene, this.camera, { samples: 0 });
-      skyPass.name = 'Dynamic atmosphere and volumetric clouds';
-      skyPass.setResolutionScale(this.weatherSky.workload.internalScale);
-      this._skyPass = skyPass;
-      sky = skyPass.getTextureNode();
+      // One bounded quarter-resolution fullscreen material now evaluates the
+      // current cloud ray and resolves/reprojects history into the same target.
+      // There is no intermediate current-sky render target or readback path.
+      this._cloudTemporal = new CloudTemporalNode(
+        this.weatherSky, this.camera, this.weatherSky.workload.internalScale,
+      );
+      sky = this._cloudTemporal.getTextureNode();
+      this.scene.backgroundNode = null;
     } else {
-      // Clear weather is rendered by the same verified sky node as the scene
-      // background. There is no empty cloud target, pass, or temporal resolve.
-      this._skyPass = null;
+      // Clear weather allocates and submits no cloud pass or cloud history target.
+      this._cloudTemporal = null;
+      this.scene.backgroundNode = this.weatherSky?.backgroundNode ?? null;
     }
 
-    // Anti-alias the lit beauty and its atmosphere together, then apply the cinematic
-    // grade. A restrained low-resolution glare pass supports bright ball, tracer, and
-    // water highlights without softening the full-resolution resolved scene.
+    // Anti-alias the lit beauty and the temporal cloud background together, then
+    // apply the cinematic grade. Cloud integration therefore happens before the
+    // full-resolution scene TRAA rather than in a separate post stage.
     const aa = resettableTraa(color, depth, vel, this.camera, sky);
     // Thin, high-contrast blades are precisely the case where TRAA's optional
     // subpixel correction turns a stable history into a changing per-pixel weight.
     // Keep normal motion/disocclusion handling, but avoid that documented square/
     // shimmer trade-off in the production golf-environment path.
     aa.useSubpixelCorrection = false;
+    // The cloud raymarch owns a deterministic subpixel phase. Keep camera projection
+    // jitter off for cloudy weather; CloudTemporalNode reprojects the low-res target
+    // using the actual camera matrices and rejects disoccluded opacity changes.
+    aa.cameraJitterEnabled = this.weatherSky?.cloudsEnabled ? false : true;
     this._traa = aa;
     // Grounding is authored by real directional shadows, sky irradiance, material
     // normals, terrain alignment, and physical burial. The former screen-space AO
@@ -194,11 +201,8 @@ export class SceneManager {
     this._daylightPmremRevision = -1;
     this.weatherSky?.dispose();
     this.weatherSky = new WeatherSky(this.renderer, environment, workload, skyManifest);
-    this.skyScene.backgroundNode = this.weatherSky.usesVolumetricClouds
-      ? this.weatherSky.backgroundNode : null;
     this.scene.background = null;
-    this.scene.backgroundNode = this.weatherSky.usesVolumetricClouds
-      ? null : this.weatherSky.backgroundNode;
+    this.scene.backgroundNode = this.weatherSky.usesVolumetricClouds ? null : this.weatherSky.backgroundNode;
     this._environmentUnsubscribe?.();
     this._environmentBindings = environment;
     this.scene.userData.environmentLighting?.configureEnvironment(environment);
@@ -206,14 +210,12 @@ export class SceneManager {
     applyDaylight();
     this._environmentUnsubscribe = environment.onChange(applyDaylight);
     this._setupPost();
+    this.invalidateTemporalHistory('weather-sky graph');
   }
 
-  // Authored cloud coverage is a live Conditions control, but it must not cost a
-  // pipeline teardown. Clouds are visible-background only: `iblBackgroundNode` is built
-  // cloud-free on purpose, so PMREM/IBL/water cannot change, and `_setupPost` branches
-  // solely on `usesVolumetricClouds` (permanently false). So a coverage change needs at
-  // most a new background node — and inside the enabled range, nothing at all, because
-  // the shader already reads coverage from the live uniform every frame.
+  // Authored cloud coverage is a live Conditions control. Edits inside the enabled
+  // range update uniforms in the existing volume graph; crossing clear/cloudy changes
+  // the graph and rebuilds the existing Scene MRT background variant.
   refreshWeatherSkyClouds() {
     if (!this.weatherSky || !this._environmentBindings) return this;
     const wanted = cloudsAreEnabled(this._environmentBindings.clouds.value);
@@ -222,15 +224,15 @@ export class SceneManager {
     this.weatherSky = new WeatherSky(
       this.renderer, this._environmentBindings, previous.workload, this.skyManifest,
     );
-    this.weatherSky.setTemporalFrame(previous.temporalFrame);
+    // A cloud graph switch has no meaningful reprojection predecessor. Start a new
+    // jitter sequence and reject TRAA history after installing the matching pass.
+    this.weatherSky.setTemporalFrame(0);
     this.scene.backgroundNode = this.weatherSky.usesVolumetricClouds
       ? null : this.weatherSky.backgroundNode;
-    this.skyScene.backgroundNode = this.weatherSky.usesVolumetricClouds
-      ? this.weatherSky.backgroundNode : null;
     previous.dispose();
-    // Compiling in or out the cloud grade changes every sky pixel at once. There is no
-    // meaningful prior image to reproject across that edit, so drop the history rather
-    // than let TRAA blend two different atmospheres.
+    this._setupPost();
+    // Compiling in or out the volume changes every sky pixel at once. There is no
+    // meaningful prior image to reproject across that edit.
     this.invalidateTemporalHistory('cloud-coverage');
     return this;
   }
@@ -441,14 +443,18 @@ export class SceneManager {
     const simulationDt = this.freezeSimulation ? 0 : dt;
     if (!this.freezeSimulation) this._elapsed += dt;
     for (const fn of this._updates) fn(simulationDt, this._elapsed);
-    // Keep a stable ray-start phase until the dedicated cloud history resolve is
-    // connected. Moving the volume comes from environment time/wind, not screen noise.
-    this.weatherSky?.setTemporalFrame(0);
+    // Advance one shared temporal phase per presented frame. Cloud ray jitter is
+    // reprojected by the existing TRAA background input; freezing it at zero would
+    // turn the volume into a static undersampled slice and defeat reconstruction.
+    if (this.weatherSky) this.weatherSky.setTemporalFrame(this.weatherSky.temporalFrame + 1);
     this._beginMotionFrame();
     // A moving broadcast camera already supplies real sub-pixel sample diversity.
-    // Keep the authored projection exact during that motion; otherwise the Halton
-    // offset presents as a rapid full-frame resize/breathing pulse on detailed turf.
-    if (this._traa) this._traa.cameraJitterEnabled = !this._cameraMoving;
+    // Keep cloudy projection exact; the low-resolution sky graph owns its own
+    // deterministic phase and CloudTemporalNode carries the camera reprojection.
+    if (this._traa) {
+      this._traa.cameraJitterEnabled = this.weatherSky?.cloudsEnabled
+        ? false : !this._cameraMoving;
+    }
     this.postProcessing.render();
   }
 

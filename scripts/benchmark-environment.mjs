@@ -35,6 +35,10 @@ const gpuP95BudgetMs = Number(arg('gpu-p95-ms', 14));
 const rafP95BudgetMs = Number(arg('raf-p95-ms', 18.5));
 const maxHitches = Number(arg('max-hitches', 0));
 const maxRenderPasses = Number(arg('max-render-passes', 8));
+// Canonical cloudy runtime contract. These values describe the shipped GPU
+// resource and the single low-resolution sky integration plus its ping-pong resolve.
+const cloudVolumeDimensions = '96x96x96';
+const cloudLightTransportMode = 'sun-offset-volume-probe';
 // Sub-byte average error and two-tenths of one percent high-delta coverage remain
 // well below visible motion, while accommodating the fixed-resolution volumetric
 // cloud resolve at extreme sky-heavy camera pitches. Earlier broken resize/LOD
@@ -756,7 +760,7 @@ async function collectScenario(scenario) {
     return {
       ...(await sm.weatherSky.readDiagnostics()),
       usesVolumetricClouds: sm.weatherSky.usesVolumetricClouds === true,
-      hasSkyPass: sm._skyPass !== null,
+      hasCloudTemporalPass: sm._cloudTemporal !== null,
     };
   });
   const waterReflectionDiagnostics = await page.evaluate(() => window.golf.range.waterReflectionDiagnostics());
@@ -832,32 +836,59 @@ async function collectScenario(scenario) {
     && treeBeautyDiagnostics.reduce((sum, beauty) => sum + beauty.behindRejected + beauty.frustumRejected, 0) < 1) {
     pushError(`${scenario.id} tree beauty classifier submitted every source; offscreen/behind rejection was not exercised`);
   }
-  // Clear weather deliberately has no volumetric noise allocation or sky pass:
-  // WeatherSky binds its analytic background directly to the main scene.  The
-  // distribution thresholds apply only when the authored weather actually
-  // enables clouds; treating the clear-weather zero diagnostics as a failed
-  // sample was a stale benchmark contract.
-  const cloudPasses = gpuTiming.passes.filter(({ label }) =>
-    label === 'Dynamic atmosphere and volumetric clouds'
-      || /weather cloud/i.test(label));
-  const cloudNoiseTextures = stats.textureMemory.entries.filter(({ name }) =>
-    name === 'weather-cloud-noise-gpu');
+  // Clear weather deliberately has no volumetric pass or storage texture: WeatherSky
+  // binds its analytic background directly to the main scene. Cloudy weather is
+  // validated by the live mode/workload contract, the truthful GPU volume resource,
+  // one bounded fused raymarch/history pass, and one same-resolution ping-pong resolve. It is not
+  // validated through a CPU-side noise field or invented density statistics.
+  const cloudPasses = (gpuTiming.passes || []).filter(({ label }) =>
+    /fused raymarch \+ temporal resolve|WeatherCloud|weather cloud/i.test(label));
   const cloudsEnabled = weatherDiagnostics.usesVolumetricClouds === true;
   if (!cloudsEnabled) {
-    const unexpectedNoiseDiagnostics = weatherDiagnostics.sampleCount !== 0
-      || weatherDiagnostics.minimum !== 0
-      || weatherDiagnostics.maximum !== 0
-      || weatherDiagnostics.mean !== 0
-      || weatherDiagnostics.nonZeroFraction !== 0
+    const unexpectedCloudWork = weatherDiagnostics.mode !== 'clear-sky'
+      || weatherDiagnostics.proceduralNoise !== false
+      || weatherDiagnostics.gpuOnly !== true
+      || weatherDiagnostics.raySteps !== 0
+      || weatherDiagnostics.lightTransportSamples !== 0
+      || weatherDiagnostics.lightTransportMode !== 'none'
+      || weatherDiagnostics.noiseOctaves !== 0
       || weatherDiagnostics.usesVolumetricClouds
-      || weatherDiagnostics.hasSkyPass;
-    if (unexpectedNoiseDiagnostics || cloudPasses.length || cloudNoiseTextures.length) {
-      pushError(`${scenario.id} clear weather unexpectedly allocated volumetric cloud work: diagnostics=${JSON.stringify(weatherDiagnostics)}, passes=${JSON.stringify(cloudPasses.map(({ label }) => label))}, textures=${JSON.stringify(cloudNoiseTextures.map(({ name }) => name))}`);
+      || weatherDiagnostics.hasCloudTemporalPass
+      || weatherDiagnostics.renderTopology !== 'analytic-background'
+      || weatherDiagnostics.cloudHistory?.pingPong
+      || weatherDiagnostics.cloudHistory?.previousFrameSampling
+      || weatherDiagnostics.cloudVolume?.gpuResident
+      || weatherDiagnostics.cloudVolume?.initStatus !== 'none'
+      || weatherDiagnostics.cloudVolume?.sampledInRaymarch;
+    if (unexpectedCloudWork || cloudPasses.length) {
+      pushError(`${scenario.id} clear weather unexpectedly allocated volumetric cloud work: diagnostics=${JSON.stringify(weatherDiagnostics)}, passes=${JSON.stringify(cloudPasses.map(({ label }) => label))}`);
     }
-  } else if (weatherDiagnostics.minimum > 0.05 || weatherDiagnostics.maximum < 0.95
-    || weatherDiagnostics.mean < 0.4 || weatherDiagnostics.mean > 0.6
-    || weatherDiagnostics.nonZeroFraction < 0.98) {
-    pushError(`${scenario.id} cloud noise volume failed its GPU distribution gate`);
+  } else {
+    const volume = weatherDiagnostics.cloudVolume;
+    const validCloudRuntime = weatherDiagnostics.mode === 'gpu-volume-raymarch'
+      && weatherDiagnostics.proceduralNoise === true
+      && weatherDiagnostics.gpuOnly === true
+      && weatherDiagnostics.hasCloudTemporalPass === true
+      && weatherDiagnostics.renderTopology === 'fused-temporal-volume'
+      && weatherDiagnostics.cloudHistory?.pingPong === true
+      && weatherDiagnostics.cloudHistory?.previousFrameSampling === true
+      && weatherDiagnostics.cloudHistory?.cameraReprojection === true
+      && weatherDiagnostics.cloudHistory?.disocclusionRejection === true
+      && weatherDiagnostics.cloudHistory?.transmittanceAware === true
+      && weatherDiagnostics.raySteps > 0
+      && weatherDiagnostics.lightTransportSamples > 0
+      && weatherDiagnostics.lightTransportMode === cloudLightTransportMode
+      && weatherDiagnostics.noiseOctaves >= 2
+      && volume?.dimensions?.join('x') === cloudVolumeDimensions
+      && volume.channels === 4
+      && volume.format === 'rgba8unorm'
+      && volume.gpuResident === true
+      && volume.initStatus === 'submitted'
+      && volume.sampledInRaymarch === true
+      && cloudPasses.some(({ label }) => /fused raymarch \+ temporal resolve/i.test(label));
+    if (!validCloudRuntime) {
+      pushError(`${scenario.id} cloud runtime contract failed: diagnostics=${JSON.stringify(weatherDiagnostics)}, passes=${JSON.stringify(cloudPasses.map(({ label }) => label))}`);
+    }
   }
   if (scenario.id === 'pond-contact') {
     if (!waterReflectionDiagnostics.length
@@ -928,13 +959,15 @@ try {
     return {
       webgpu: sm.renderer.backend?.isWebGPUBackend === true,
       webgl: sm.renderer.backend?.isWebGLBackend === true,
-      // Volumetric weather owns the separate sky scene; clear weather deliberately
-      // skips that full-screen pass and binds the shared verified sky directly to
-      // the main scene. Both paths must share a valid PMREM and fail closed on load.
+      // Clear weather binds the shared verified sky directly to the main scene.
+      // Cloudy weather renders one fused quarter-resolution raymarch/history pass
+      // before full-resolution scene TRAA. Both paths share a valid PMREM and fail closed.
       atmosphere: !!sm.weatherSky
         && (sm.weatherSky.usesVolumetricClouds
-          ? sm.skyScene.backgroundNode === sm.weatherSky.backgroundNode
-          : sm.scene.backgroundNode === sm.weatherSky.backgroundNode && sm._skyPass === null)
+          ? sm.scene.backgroundNode === null
+            && sm._cloudTemporal !== null
+          : sm.scene.backgroundNode === sm.weatherSky.backgroundNode
+            && sm._cloudTemporal === null)
         && !!sm.scene.environment?.isTexture && !environmentLoadError,
       turf: !!range.terrain?.assetsReady,
       trees: !!range.trees,
