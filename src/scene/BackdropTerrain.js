@@ -1497,7 +1497,11 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // vertex relief in a narrow join belt so the shared sampler remains watertight
   // and cannot expose one-pixel blue slits at grazing angles.
   const shellJoinFade = bounds
-    ? smoothstep(0.0, 90.0, shellEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
+    // The ribbon overlaps Band A by 72 m and its coarse radial interpolation
+    // can carry a displaced face across that belt. Fade the added structural
+    // relief to the shared sampler over a continuous 240 m boundary so both
+    // meshes meet with the same undeformed edge instead of exposing a slit.
+    ? smoothstep(0.0, 240.0, shellEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
     : float(1.0);
   const joinedVertexRelief = vertexDisplacement.mul(shellFade).mul(shellJoinFade);
   material.positionNode = vec3(vertexX, vertexY, vertexZ)
@@ -1893,7 +1897,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
         .sub((bounds.maxZ - bounds.minZ) * 0.5)).max(0.0)
     : float(0.0);
   const worldJoinFade = bounds
-    ? smoothstep(0.0, 90.0, worldEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
+    ? smoothstep(0.0, 240.0, worldEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
     : float(1.0);
   const vertexReliefBump = vec3(
     structuralGradientVarying.x, 0.0, structuralGradientVarying.y,
