@@ -296,6 +296,10 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
   assert.match(source, /clouds\.w/);
   assert.match(source, /cloudAdvectionScale/);
   assert.match(source, /sunProbe = this\._cloudVolumeSample/);
+  assert.match(source, /const localSunTransmittance = exp\(\s*density\.mul\(360\)\.mul\(SUN_EXTINCTION\)/,
+    'cloud cores must reuse primary density for bounded local self-shadowing');
+  assert.match(source, /sunTransmittance\)\.mul\(localSunTransmittance\)/,
+    'direct light must preserve bright edges while attenuating dense cores');
   assert.match(source, /for \(let pair = 0; pair < 3; pair\+\+\)/,
     'six primary samples must be grouped into three adjacent probe-sharing pairs');
   assert.match(source, /float\(pair \* 2\)\.add\(0\.5\)\.add\(jitter\)/,

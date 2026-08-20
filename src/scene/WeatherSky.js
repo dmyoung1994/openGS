@@ -560,7 +560,13 @@ export class WeatherSky {
               const crown = smoothstep(0.18, 0.78, normalizedHeight);
               const ambient = ambientTop.mul(float(0.48).add(normalizedHeight.mul(0.52)))
                 .mul(float(0.72).add(powder));
-              const direct = sunTint.mul(sunTransmittance).mul(phase)
+              // Reuse the primary density as a short local sun segment. This
+              // preserves bright low-density rims while giving dense cores a
+              // physically bounded self-shadow instead of uniform haze.
+              const localSunTransmittance = exp(
+                density.mul(360).mul(SUN_EXTINCTION).negate(),
+              );
+              const direct = sunTint.mul(sunTransmittance).mul(localSunTransmittance).mul(phase)
                 .mul(float(0.72).add(crown.mul(0.28))).mul(1.9);
               const radiance = ambient.add(direct).mul(float(0.86).add(viewDepth.mul(0.10)));
               const opticalDepth = density.mul(stepLength).mul(CLOUD_EXTINCTION);
