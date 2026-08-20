@@ -519,14 +519,15 @@ export class WeatherSky {
     return Fn(() => {
       const transmittance = float(1).toVar();
       const scattered = vec3(0).toVar();
-      // Rotate a stable, analytic per-pixel low-discrepancy phase by the shared
+      // Rotate a stable, high-frequency interleaved-gradient phase by the shared
       // deterministic frame sequence. The target coordinate stays in shader (no
-      // noise texture); fract keeps every pixel in one valid interval and a broad
-      // analytic gradient field avoids both white hash grain and diagonal lattice.
+      // noise texture); interleaved gradient noise decorrelates neighboring pixels
+      // without introducing a sampled noise asset or a low-frequency smear.
       const framePhase = fract(
         this.currentJitter.x.mul(1.7).add(this.currentJitter.y.mul(2.3)).add(0.5),
       );
-      const pixelPhase = mx_noise_float(pixel.mul(0.08)).mul(0.17).add(0.5);
+      const pixelGradient = fract(pixel.dot(vec2(0.06711056, 0.00583715)));
+      const pixelPhase = fract(pixelGradient.mul(52.9829189)).mul(0.17).add(0.5);
       const jitter = fract(framePhase.add(pixelPhase)).mul(0.84).add(0.08);
       If(validRay.and(horizonMask.greaterThan(0.002)), () => {
         for (let pair = 0; pair < 3; pair++) {

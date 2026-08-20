@@ -277,8 +277,10 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
     'view samples must use one deterministic phase inside each stratified interval');
   assert.match(source, /const framePhase = fract\(/,
     'cloud sampling must rotate its phase with the deterministic temporal sequence');
-  assert.match(source, /const pixelPhase = mx_noise_float\(pixel\.mul\(0\.08\)\)/,
-    'cloud sampling must use a stable smooth analytic phase of the low-resolution target pixel');
+  assert.match(source, /const pixelGradient = fract\(pixel\.dot\(vec2\(0\.06711056, 0\.00583715\)\)\)/,
+    'cloud sampling must use high-frequency interleaved gradient noise');
+  assert.doesNotMatch(source, /pixelPhase = mx_noise_float\(pixel\.mul\(0\.08\)\)/,
+    'cloud sampling must not use a low-frequency screen-correlated phase');
   assert.match(source, /const jitter = fract\(framePhase\.add\(pixelPhase\)\)/,
     'cloud sampling must combine frame rotation and stable pixel phase without clamping');
   assert.doesNotMatch(source, /rayLength\.min\(steps \* 700\)/,
