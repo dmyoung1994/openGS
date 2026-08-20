@@ -1444,8 +1444,8 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
     .mul(vertexRidgeEnvelope).clamp(0.0, 0.72);
   const structuralFaceVarying = varying(vertexStructuralFace, 'vAlpineStructuralFace');
   const structuralCavityVarying = varying(vertexStructuralCavity, 'vAlpineStructuralCavity');
-  const vertexStructuralRelief = vertexStructuralFace.mul(36.0)
-    .sub(vertexStructuralCavity.mul(24.0));
+  const vertexStructuralRelief = vertexStructuralFace.mul(70.0)
+    .sub(vertexStructuralCavity.mul(48.0));
   // Evaluate the same signed structural displacement at two fixed world-space
   // offsets. The resulting gradient is carried once to the fragment graph;
   // fragments no longer rebuild ten structural noise samples for lighting.
@@ -1468,7 +1468,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
       .add(secondary.max(0.0).mul(0.36));
     const cavity = float(0.0).sub(signedStrike).max(0.0).mul(0.64)
       .add(float(0.0).sub(secondary).max(0.0).mul(0.36));
-    return face.mul(36.0).sub(cavity.mul(24.0)).mul(vertexRidgeEnvelope);
+    return face.mul(70.0).sub(cavity.mul(48.0)).mul(vertexRidgeEnvelope);
   };
   const structuralEpsilon = 48.0;
   const structuralGradient = vec4(
@@ -2028,6 +2028,9 @@ function buildPatch(minX, maxX, minZ, maxZ, spacing, sample, grid = null) {
   geometry.setAttribute('backdropCover', new Float32BufferAttribute(cover, 4));
   geometry.setIndex(new Uint32BufferAttribute(indices.subarray(0, index), 1));
   geometry.computeBoundingSphere();
+  // positionNode can add up to the bounded structural buttress amplitude;
+  // include that shader-only displacement in frustum culling bounds.
+  geometry.boundingSphere.radius += 72;
   return geometry;
 }
 
