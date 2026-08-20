@@ -38,7 +38,7 @@ const maxRenderPasses = Number(arg('max-render-passes', 8));
 // Canonical cloudy runtime contract. These values describe the shipped GPU
 // resource and the single low-resolution sky integration plus its ping-pong resolve.
 const cloudVolumeDimensions = '96x96x96';
-const cloudLightTransportMode = 'sun-offset-volume-probe';
+const cloudLightTransportMode = 'paired-sun-offset-volume-probe';
 // Sub-byte average error and two-tenths of one percent high-delta coverage remain
 // well below visible motion, while accommodating the fixed-resolution volumetric
 // cloud resolve at extreme sky-heavy camera pitches. Earlier broken resize/LOD
@@ -850,6 +850,7 @@ async function collectScenario(scenario) {
       || weatherDiagnostics.gpuOnly !== true
       || weatherDiagnostics.raySteps !== 0
       || weatherDiagnostics.lightTransportSamples !== 0
+      || weatherDiagnostics.lightProbeSteps !== 0
       || weatherDiagnostics.lightTransportMode !== 'none'
       || weatherDiagnostics.noiseOctaves !== 0
       || weatherDiagnostics.usesVolumetricClouds
@@ -877,6 +878,7 @@ async function collectScenario(scenario) {
       && weatherDiagnostics.cloudHistory?.transmittanceAware === true
       && weatherDiagnostics.raySteps > 0
       && weatherDiagnostics.lightTransportSamples > 0
+      && weatherDiagnostics.lightProbeSteps === 3
       && weatherDiagnostics.lightTransportMode === cloudLightTransportMode
       && weatherDiagnostics.noiseOctaves >= 2
       && volume?.dimensions?.join('x') === cloudVolumeDimensions

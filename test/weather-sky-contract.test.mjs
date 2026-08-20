@@ -73,9 +73,10 @@ test('WeatherSky accepts only the authoritative GPU environment bridge and expos
   assert.equal(diagnostics.proceduralNoise, true);
   assert.equal(diagnostics.gpuOnly, true);
   assert.equal(diagnostics.raySteps, sky.workload.raySteps);
-  assert.equal(WEATHER_SKY_WORKLOADS.high.raySteps, 4);
+  assert.equal(WEATHER_SKY_WORKLOADS.high.raySteps, 6);
   assert.equal(diagnostics.lightTransportSamples, sky.workload.lightTransportSamples);
-  assert.equal(diagnostics.lightTransportMode, 'sun-offset-volume-probe');
+  assert.equal(diagnostics.lightProbeSteps, 3);
+  assert.equal(diagnostics.lightTransportMode, 'paired-sun-offset-volume-probe');
   assert.equal(Object.hasOwn(diagnostics, 'hasSkyPass'), false);
   assert.equal(diagnostics.renderTopology, 'fused-temporal-volume');
   assert.equal(diagnostics.noiseOctaves, sky.workload.noiseOctaves);
@@ -177,12 +178,13 @@ test('the shared cloud predicate is the one WeatherSky latches on', () => {
 });
 
 test('all weather tiers retain the same cloud/atmosphere contract and differ only in bounded workload values', () => {
-  const required = ['id', 'internalScale', 'raySteps', 'lightTransportSamples', 'noiseOctaves', 'jitterPeriod'];
+  const required = ['id', 'internalScale', 'raySteps', 'lightTransportSamples', 'lightProbeSteps', 'noiseOctaves', 'jitterPeriod'];
   for (const workload of Object.values(WEATHER_SKY_WORKLOADS)) {
     assert.deepEqual(Object.keys(workload).sort(), required.slice().sort());
     assert.ok(Object.isFrozen(workload));
     assert.ok(workload.raySteps >= 4);
     assert.equal(workload.lightTransportSamples, 1);
+    assert.equal(workload.lightProbeSteps, 3);
     assert.ok(workload.noiseOctaves >= 2);
   }
 });
@@ -292,6 +294,12 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
   assert.match(source, /clouds\.w/);
   assert.match(source, /cloudAdvectionScale/);
   assert.match(source, /sunProbe = this\._cloudVolumeSample/);
+  assert.match(source, /for \(let pair = 0; pair < 3; pair\+\+\)/,
+    'six primary samples must be grouped into three adjacent probe-sharing pairs');
+  assert.match(source, /float\(pair \* 2\)\.add\(0\.5\)\.add\(jitter\)/,
+    'each paired sun probe must be sampled at the adjacent-segment midpoint');
+  assert.match(source, /for \(let segment = 0; segment < 2; segment\+\+\)/,
+    'each pair must update front-to-back transmittance for both primary segments');
 });
 
 test('cloud formation has no static noise texture, bake, readback, or renderer fallback', async () => {

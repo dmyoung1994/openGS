@@ -19,6 +19,8 @@ const MIN_RAY_STEPS = 4;
 const MAX_RAY_STEPS = 20;
 const MIN_LIGHT_SAMPLES = 1;
 const MAX_LIGHT_SAMPLES = 1;
+const MIN_LIGHT_PROBE_STEPS = 3;
+const MAX_LIGHT_PROBE_STEPS = 3;
 const MIN_NOISE_OCTAVES = 2;
 const MAX_NOISE_OCTAVES = 4;
 const MIN_INTERNAL_SCALE = 0.125;
@@ -73,6 +75,9 @@ function normaliseWorkload(workload) {
     lightTransportSamples: positiveInteger(
       workload.lightTransportSamples, 'lightTransportSamples', MIN_LIGHT_SAMPLES, MAX_LIGHT_SAMPLES,
     ),
+    lightProbeSteps: positiveInteger(
+      workload.lightProbeSteps, 'lightProbeSteps', MIN_LIGHT_PROBE_STEPS, MAX_LIGHT_PROBE_STEPS,
+    ),
     noiseOctaves: positiveInteger(workload.noiseOctaves, 'noiseOctaves', MIN_NOISE_OCTAVES, MAX_NOISE_OCTAVES),
     jitterPeriod: positiveInteger(workload.jitterPeriod, 'jitterPeriod', 2, 256),
   });
@@ -124,13 +129,13 @@ export const WEATHER_SKY_WORKLOADS = Object.freeze({
   // One low-resolution target performs a global AABB/slab march. The history node
   // ping-pongs that same target before the full-resolution scene TRAA.
   high: Object.freeze({
-    id: 'high', internalScale: CLOUD_TARGET_SCALE, raySteps: 4, lightTransportSamples: 1, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'high', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, lightProbeSteps: 3, noiseOctaves: 2, jitterPeriod: 64,
   }),
   balanced: Object.freeze({
-    id: 'balanced', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'balanced', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, lightProbeSteps: 3, noiseOctaves: 2, jitterPeriod: 64,
   }),
   conservative: Object.freeze({
-    id: 'conservative', internalScale: CLOUD_TARGET_SCALE, raySteps: 4, lightTransportSamples: 1, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'conservative', internalScale: CLOUD_TARGET_SCALE, raySteps: 6, lightTransportSamples: 1, lightProbeSteps: 3, noiseOctaves: 2, jitterPeriod: 64,
   }),
 });
 
@@ -180,7 +185,8 @@ export class WeatherSky {
       internalScale: this.cloudsEnabled ? this.workload.internalScale : 0,
       raySteps: this.cloudsEnabled ? this.workload.raySteps : 0,
       lightTransportSamples: this.cloudsEnabled ? this.workload.lightTransportSamples : 0,
-      lightTransportMode: this.cloudsEnabled ? 'sun-offset-volume-probe' : 'none',
+      lightProbeSteps: this.cloudsEnabled ? this.workload.lightProbeSteps : 0,
+      lightTransportMode: this.cloudsEnabled ? 'paired-sun-offset-volume-probe' : 'none',
       noiseOctaves: this.cloudsEnabled ? this.workload.noiseOctaves : 0,
       jitterPeriod: this.cloudsEnabled ? this.workload.jitterPeriod : 0,
       cloudVolume: volumeDiagnostics,
@@ -507,9 +513,9 @@ export class WeatherSky {
       .mul(this.environment.sunIlluminanceScale.max(0).pow(0.35));
     const ambientTop = this.environment.skyRadiance(vec3(0, 1, 0), { includeSun: false });
 
-    // Static unrolled samples keep high tier at four bounded view taps. The phase
-    // jitter changes the sampled depths deterministically while frozen-time history
-    // converges those subpixel phases through CloudTemporalNode.
+    // Static unrolled samples use six primary taps grouped into three adjacent
+    // pairs. Each pair shares one midpoint sun probe (9 volume fetches worst case),
+    // while optical transmittance is still updated independently per segment.
     return Fn(() => {
       const transmittance = float(1).toVar();
       const scattered = vec3(0).toVar();
@@ -523,42 +529,46 @@ export class WeatherSky {
       const pixelPhase = mx_noise_float(pixel.mul(0.08)).mul(0.17).add(0.5);
       const jitter = fract(framePhase.add(pixelPhase)).mul(0.84).add(0.08);
       If(validRay.and(horizonMask.greaterThan(0.002)), () => {
-        for (let step = 0; step < steps; step++) {
-          // Stratify one phase inside each of the N intervals. `jitter` already
-          // occupies [0,1], so adding a half-step duplicates/overruns the final
-          // interval and then clamps it against the AABB exit.
-          const sampleDistance = rayEntry.add(stepLength
-            .mul(float(step).add(jitter))).clamp(rayEntry, rayExit);
-          const position = cameraOrigin.add(direction.mul(sampleDistance));
-          const normalizedHeight = position.y.sub(clouds.z).div(slab).clamp(0, 1);
-          const volume = this._cloudVolumeSample(position, time, wind, advectionTime);
-          const density = this._cloudDensityFromVolume(volume, normalizedHeight, clouds, true);
-          If(density.greaterThan(CLOUD_EMPTY_THRESHOLD), () => {
-            // One true sun-offset volume probe provides neighboring material for
-            // self-shadowing. Empty pixels pay only the primary filtered fetch.
-            const sunProbePosition = position.add(sunDirection.mul(240));
-            const sunProbe = this._cloudVolumeSample(
-              sunProbePosition, time, wind, advectionTime,
-            );
-            const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
-            const neighborDensity = this._cloudDensityFromVolume(
-              sunProbe, probeHeight, clouds, false,
-            );
-            const viewDepth = sampleDistance.sub(rayEntry).div(rayLength.max(1)).clamp(0, 1);
-            const sunTransmittance = exp(neighborDensity.mul(240).mul(SUN_EXTINCTION).negate());
-            const powder = oneMinus(exp(density.mul(-2.2))).mul(0.30);
-            const crown = smoothstep(0.18, 0.78, normalizedHeight);
-            const ambient = ambientTop.mul(float(0.48).add(normalizedHeight.mul(0.52)))
-              .mul(float(0.72).add(powder));
-            const direct = sunTint.mul(sunTransmittance).mul(phase)
-              .mul(float(0.72).add(crown.mul(0.28))).mul(1.9);
-            const radiance = ambient.add(direct).mul(float(0.86).add(viewDepth.mul(0.10)));
-            const opticalDepth = density.mul(stepLength).mul(CLOUD_EXTINCTION);
-            const segmentTransmittance = exp(opticalDepth.negate());
-            const segmentAlpha = oneMinus(segmentTransmittance);
-            scattered.addAssign(transmittance.mul(segmentAlpha).mul(radiance));
-            transmittance.mulAssign(segmentTransmittance);
-          });
+        for (let pair = 0; pair < 3; pair++) {
+          // The probe is deliberately at the midpoint between this pair's two
+          // stratified view samples, so its sun transmittance is coherent for both.
+          const probeDistance = rayEntry.add(stepLength
+            .mul(float(pair * 2).add(0.5).add(jitter))).clamp(rayEntry, rayExit);
+          const probePosition = cameraOrigin.add(direction.mul(probeDistance));
+          const sunProbePosition = probePosition.add(sunDirection.mul(240));
+          const sunProbe = this._cloudVolumeSample(
+            sunProbePosition, time, wind, advectionTime,
+          );
+          const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
+          const neighborDensity = this._cloudDensityFromVolume(
+            sunProbe, probeHeight, clouds, false,
+          );
+          const sunTransmittance = exp(neighborDensity.mul(240).mul(SUN_EXTINCTION).negate());
+          for (let segment = 0; segment < 2; segment++) {
+            const step = pair * 2 + segment;
+            // Stratify one phase inside each of the six AABB intervals.
+            const sampleDistance = rayEntry.add(stepLength
+              .mul(float(step).add(jitter))).clamp(rayEntry, rayExit);
+            const position = cameraOrigin.add(direction.mul(sampleDistance));
+            const normalizedHeight = position.y.sub(clouds.z).div(slab).clamp(0, 1);
+            const volume = this._cloudVolumeSample(position, time, wind, advectionTime);
+            const density = this._cloudDensityFromVolume(volume, normalizedHeight, clouds, true);
+            If(density.greaterThan(CLOUD_EMPTY_THRESHOLD), () => {
+              const viewDepth = sampleDistance.sub(rayEntry).div(rayLength.max(1)).clamp(0, 1);
+              const powder = oneMinus(exp(density.mul(-2.2))).mul(0.30);
+              const crown = smoothstep(0.18, 0.78, normalizedHeight);
+              const ambient = ambientTop.mul(float(0.48).add(normalizedHeight.mul(0.52)))
+                .mul(float(0.72).add(powder));
+              const direct = sunTint.mul(sunTransmittance).mul(phase)
+                .mul(float(0.72).add(crown.mul(0.28))).mul(1.9);
+              const radiance = ambient.add(direct).mul(float(0.86).add(viewDepth.mul(0.10)));
+              const opticalDepth = density.mul(stepLength).mul(CLOUD_EXTINCTION);
+              const segmentTransmittance = exp(opticalDepth.negate());
+              const segmentAlpha = oneMinus(segmentTransmittance);
+              scattered.addAssign(transmittance.mul(segmentAlpha).mul(radiance));
+              transmittance.mulAssign(segmentTransmittance);
+            });
+          }
         }
       });
       const cloudAlpha = oneMinus(transmittance).mul(horizonMask).clamp(0, 0.96);
