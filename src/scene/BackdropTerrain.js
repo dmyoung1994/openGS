@@ -1502,8 +1502,8 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   const shellJoinFade = bounds
     // The ribbon overlaps Band A by 72 m and its coarse radial interpolation
     // can carry a displaced face across that belt. Fade the added structural
-    // relief to the shared sampler over a continuous 240 m boundary so both
-    // meshes meet with the same undeformed edge instead of exposing a slit.
+    // relief to zero throughout the ±72 m overlap, then ramp it back over the
+    // next 90 m (72→162 m absolute distance) so both meshes meet undeformed.
     ? smoothstep(72.0, 162.0, shellEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
     : float(1.0);
   const joinedVertexRelief = vertexDisplacement.mul(shellFade).mul(shellJoinFade);
