@@ -1694,7 +1694,9 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // the nominal line. The narrower altitude ramp keeps a cap without whitening
   // the whole massif.
   const snowAccumulationRaw = snowPotential.mul(0.68).add(snowDrift.mul(0.18))
-    .sub(ribs.mul(0.52)).sub(faultRib.mul(0.24)).add(snowBand.mul(0.05));
+    .sub(ribs.mul(0.52)).sub(faultRib.mul(0.24)).add(snowBand.mul(0.05))
+    // Proud structural faces shed wind-packed snow; vertex cavities retain it.
+    .sub(structuralFace.mul(0.40)).add(structuralCavity.mul(0.14));
   // Remap the physical accumulation into the established threshold contract;
   // the lower gain broadens the transition without reintroducing a hard cap.
   const snowAccumulation = snowAccumulationRaw.mul(0.86).add(0.14).clamp(0.0, 1.0);
@@ -1858,8 +1860,14 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   );
   const toeExposure = toeOutcrop.mul(0.58)
     .add(toeStructural.mul(0.28)).add(toeScreeExposure.mul(0.18)).clamp(0.0, 1.0);
+  const structuralToeOutcrop = structuralFace
+    .mul(smoothstep(100.0, 420.0, altitude))
+    .mul(float(1.0).sub(treeGate.mul(0.65))).mul(0.14);
+  const structuralToeScree = structuralCavity
+    .mul(smoothstep(70.0, 360.0, altitude))
+    .mul(float(1.0).sub(treeGate.mul(0.50))).mul(0.12);
   const mineralCoverage = rockMask.mul(0.64).add(faceStone.mul(0.18))
-    .add(toeExposure.mul(0.30)).clamp(0.0, 1.0);
+    .add(toeExposure.mul(0.30)).add(structuralToeOutcrop).clamp(0.0, 1.0);
   albedo = mix(albedo, mineral, mineralCoverage);
   // Talus and wash sit below the cliff face. Let their broad field expose a
   // restrained mineral patch even when a vegetated vertex gate interpolates
@@ -1867,7 +1875,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // uninterrupted green slab and the scree channel disappears at distance.
   albedo = mix(albedo, screeRubble,
     screeMask.mul(0.84).mul(float(1.0).sub(rockMask))
-      .add(toeScreeExposure.mul(0.16)).clamp(0.0, 1.0));
+      .add(toeScreeExposure.mul(0.16)).add(structuralToeScree).clamp(0.0, 1.0));
   albedo = mix(albedo, mix(snowShade, snowLit, snowTone), snowMask);
 
   // --- normals --------------------------------------------------------------

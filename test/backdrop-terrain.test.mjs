@@ -692,3 +692,19 @@ test('alpine high faces carry oriented fault blocks, chutes, and coupled PBR str
     - Math.min(...samples.map((sample) => sample.structuralRelief)) > 16,
     'fault blocks and chutes must carry signed landform contrast');
 });
+
+test('alpine structural material couples snow scour, hollow loading, and bounded toe exposure', async () => {
+  const source = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
+  assert.match(source, /sub\(structuralFace\.mul\(0\.40\)\)\.add\(structuralCavity\.mul\(0\.14\)\)/,
+    'proud faces must scour snow while cavities load it');
+  assert.match(source, /const structuralToeOutcrop = structuralFace[\s\S]*smoothstep\(100\.0, 420\.0, altitude\)/,
+    'structural toe outcrop must be altitude bounded');
+  assert.match(source, /const structuralToeScree = structuralCavity[\s\S]*smoothstep\(70\.0, 360\.0, altitude\)/,
+    'structural cavities must route to bounded toe scree');
+  assert.match(source, /add\(structuralToeOutcrop\)/);
+  assert.match(source, /add\(structuralToeScree\)/);
+  const snowResponse = (base, face, cavity) => Math.max(0, Math.min(1, base - face * 0.40 + cavity * 0.14));
+  assert.ok(snowResponse(0.7, 1, 0) < snowResponse(0.7, 0, 1),
+    'the same base accumulation must favor cavities over proud faces');
+  assert.ok(0.14 + 0.12 <= 0.30, 'toe structural additions must stay bounded');
+});
