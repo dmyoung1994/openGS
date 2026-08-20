@@ -35,9 +35,12 @@ class TRAANode extends TempNode {
 	 * @param {TextureNode} depthNode - A node that represents the scene's depth.
 	 * @param {TextureNode} velocityNode - A node that represents the scene's velocity.
 	 * @param {Camera} camera - The camera the scene is rendered with.
-	 * @param {?TextureNode} backgroundNode - Atmosphere texture resolved into the temporal history.
+	 * @param {?TextureNode} backgroundNode - Legacy clear-weather background texture.
+	 * @param {?TextureNode} cloudNode - Depth-aware cloud transport (RGB scatter, A transmittance).
+	 * @param {?WeatherSky} cloudSky - Explicit analytic sky source for clear-depth pixels.
+	 * @param {?TextureNode} cloudSourceNode - Quarter-resolution source depth metadata.
 	 */
-	constructor( beautyNode, depthNode, velocityNode, camera, backgroundNode = null ) {
+	constructor( beautyNode, depthNode, velocityNode, camera, backgroundNode = null, cloudNode = null, cloudSky = null, cloudSourceNode = null ) {
 
 		super( 'vec4' );
 
@@ -96,6 +99,24 @@ class TRAANode extends TempNode {
 		 * @type {?TextureNode}
 		 */
 		this.backgroundNode = backgroundNode;
+
+		/**
+		 * Depth-aware cloud transport. RGB is scattered radiance and alpha is
+		 * transmittance, never a background replacement.
+		 */
+		this.cloudNode = cloudNode;
+		this.cloudSky = cloudSky;
+		this.cloudSourceNode = cloudSourceNode;
+		if ( this.cloudNode && !this.cloudSky ) {
+
+			throw new TypeError( 'TRAA cloud transport requires an analytic WeatherSky source.' );
+
+		}
+		if ( this.cloudNode && ( ! this.cloudSourceNode || typeof this.cloudSourceNode.load !== 'function' ) ) {
+
+			throw new TypeError( 'TRAA cloud transport requires source depth metadata.' );
+
+		}
 
 		/** A reset/cut rejects history in the resolve shader for exactly one frame. */
 		this._historyValid = uniform( 0 );
@@ -679,9 +700,136 @@ class TRAANode extends TempNode {
 
 		};
 
-		const sampleCurrentColor = ( positionTexel, textureSize ) => {
+		// Cloud transport is rendered after Scene MRT but before this resolve. Build
+		// the same explicit world ray used by the cloud quad for analytic background
+		// fill; positionWorldDirection would resolve against the wrong fullscreen
+		// camera here.
+		const worldDirectionForUv = ( sampleUV ) => {
+
+			const ndc = vec2(
+				sampleUV.x.mul( 2 ).sub( 1 ),
+				sampleUV.y.mul( - 2 ).add( 1 ),
+			);
+			const viewDirection = this._cameraProjectionMatrixInverse
+				.mul( vec4( ndc, 1, 1 ) ).xyz.normalize();
+			return this._cameraWorldMatrix
+				.mul( vec4( viewDirection, 0 ) ).xyz.normalize();
+
+		};
+
+		const cameraWorldPosition = this._cameraWorldMatrix.mul( vec4( 0, 0, 0, 1 ) ).xyz;
+
+		const sampleDepthAwareCloud = ( sampleUV, sceneDepth, finiteGeometry ) => {
+
+			const lowResSize = this.cloudNode.size();
+			const lowResCoordinate = sampleUV.mul( lowResSize ).sub( 0.5 )
+				.clamp( vec2( 0 ), lowResSize.sub( 1 ) );
+			const lowResBase = lowResCoordinate.floor();
+			const lowResFraction = lowResCoordinate.fract();
+			const fullViewPosition = getViewPosition(
+				sampleUV, sceneDepth, this._cameraProjectionMatrixInverse,
+			);
+			const fullWorldPosition = this._cameraWorldMatrix
+				.mul( vec4( fullViewPosition, 1 ) ).xyz;
+			const fullOpaqueDistance = finiteGeometry.select(
+				fullWorldPosition.sub( cameraWorldPosition ).length(), 0,
+			);
+			const distanceTolerance = fullOpaqueDistance.mul( 0.04 ).max( 6 );
+			const fallbackTolerance = fullOpaqueDistance.mul( 0.12 ).max( 24 );
+
+			const compatibleTransport = vec4( 0, 0, 0, 0 ).toVar();
+			const compatibleWeight = float( 0 ).toVar();
+			const compatibleCount = float( 0 ).toVar();
+			const nearestCompatibleTransport = vec4( 0, 0, 0, 0 ).toVar();
+			const nearestCompatibleMetric = float( 1e9 ).toVar();
+			const nearestCompatibleFound = float( 0 ).toVar();
+
+			for ( const [ x, y ] of [ [ 0, 0 ], [ 1, 0 ], [ 0, 1 ], [ 1, 1 ] ] ) {
+
+				const tapTexel = lowResBase.add( vec2( x, y ) )
+					.clamp( vec2( 0 ), lowResSize.sub( 1 ) );
+				const tapTransport = this.cloudNode.load( tapTexel );
+				const tapSource = this.cloudSourceNode.load( tapTexel );
+				const tapFinite = tapSource.r.greaterThan( 0.5 );
+				const classCompatible = tapFinite.notEqual( finiteGeometry ).not();
+				const tapDistanceDelta = tapSource.g.sub( fullOpaqueDistance ).abs();
+				const distanceCompatible = tapDistanceDelta.lessThan( distanceTolerance );
+				// Sky never consumes a finite/geometry-clamped tap. Finite pixels require
+				// both class and opaque-distance agreement for normal bilinear reconstruction.
+				const compatible = finiteGeometry
+					.select( classCompatible.and( distanceCompatible ), classCompatible );
+				const weight = ( x === 0 ? lowResFraction.x.oneMinus() : lowResFraction.x )
+					.mul( y === 0 ? lowResFraction.y.oneMinus() : lowResFraction.y );
+
+				If( compatible, () => {
+
+					compatibleTransport.addAssign( tapTransport.mul( weight ) );
+					compatibleWeight.addAssign( weight );
+					compatibleCount.addAssign( 1 );
+
+				} );
+
+				// Bounded nearest-compatible fallback handles a narrow edge where no tap
+				// passes strict distance agreement, while still obeying source class.
+				const fallbackMetric = finiteGeometry.select( tapDistanceDelta, 0 );
+				If( classCompatible.and( fallbackMetric.lessThan( nearestCompatibleMetric ) ), () => {
+
+					nearestCompatibleTransport.assign( tapTransport );
+					nearestCompatibleMetric.assign( fallbackMetric );
+					nearestCompatibleFound.assign( 1 );
+
+				} );
+
+			}
+
+			const ordinaryBilinear = this.cloudNode.sample( sampleUV );
+			const compatibleAverage = compatibleTransport.div( compatibleWeight.max( 0.0001 ) );
+			const boundedFallback = nearestCompatibleMetric.lessThan( fallbackTolerance )
+				.and( nearestCompatibleFound.greaterThan( 0.5 ) );
+			const hasNormalBilinear = compatibleCount.greaterThan( 3.5 );
+			const neutralTransport = vec4( 0, 0, 0, 1 );
+			return hasNormalBilinear.select(
+				ordinaryBilinear,
+				compatibleWeight.greaterThan( 0.0001 ).select(
+					compatibleAverage,
+					boundedFallback.select( nearestCompatibleTransport, neutralTransport ),
+				),
+			);
+
+		};
+
+		const sampleCloudComposite = ( positionTexel, textureSize, skyRadianceOverride = null ) => {
+
+			const sampleUV = positionTexel.add( 0.5 ).div( textureSize );
+			const sceneColor = this.beautyNode.load( positionTexel ).max( 0 );
+			// The depth read is unconditional for every full-resolution TRAA pixel.
+			// It decides whether the opaque scene or analytic sky is the incoming
+			// radiance, while the cloud layer always composes physically in front.
+			const sceneDepth = sampleComparableDepth( positionTexel );
+			const finiteGeometry = sceneDepth.lessThan( 0.999999 );
+			const cloudLayer = sampleDepthAwareCloud( sampleUV, sceneDepth, finiteGeometry );
+			const cloudScatter = cloudLayer.rgb;
+			const cloudTransmittance = cloudLayer.a;
+			// The center pixel's sky is shared by the four variance neighbors. Sky
+			// changes slowly over that footprint; reusing it avoids five analytic
+			// atmosphere evaluations per moving TRAA pixel without changing cloud
+			// transport or depth coverage.
+			const analyticSky = ( skyRadianceOverride || this.cloudSky.skyRadiance(
+				worldDirectionForUv( sampleUV ), { includeSun: true },
+			) ).max( 0 );
+			const sceneRadiance = finiteGeometry.select( sceneColor.rgb, analyticSky );
+			// This is the only cloud/scene composition rule: opaque geometry remains
+			// visible through front clouds, and behind-geometry cloud samples were
+			// already rejected by the depth-clamped cloud interval.
+			const compositedRadiance = sceneRadiance.mul( cloudTransmittance ).add( cloudScatter );
+			return vec4( compositedRadiance, 1 );
+
+		};
+
+		const sampleCurrentColor = ( positionTexel, textureSize, skyRadianceOverride = null ) => {
 
 			const sceneColor = this.beautyNode.load( positionTexel ).max( 0 );
+			if ( this.cloudNode ) return sampleCloudComposite( positionTexel, textureSize, skyRadianceOverride );
 			if ( ! this.backgroundNode ) return sceneColor;
 			const sampleUV = positionTexel.add( 0.5 ).div( textureSize );
 			const backgroundColor = this.backgroundNode.sample( sampleUV );
@@ -967,4 +1115,16 @@ const _haltonOffsets = /*@__PURE__*/ Array.from(
  * @param {Camera} camera - The camera the scene is rendered with.
  * @returns {TRAANode}
  */
-export const traa = ( beautyNode, depthNode, velocityNode, camera, backgroundNode = null ) => new TRAANode( convertToTexture( beautyNode ), depthNode, velocityNode, camera, backgroundNode );
+export const traa = (
+	beautyNode,
+	depthNode,
+	velocityNode,
+	camera,
+	backgroundNode = null,
+	cloudNode = null,
+	cloudSky = null,
+	cloudSourceNode = null,
+) => new TRAANode(
+	convertToTexture( beautyNode ), depthNode, velocityNode, camera,
+	backgroundNode, cloudNode, cloudSky, cloudSourceNode,
+);

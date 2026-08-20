@@ -338,8 +338,8 @@ test('cloud temporal resolve is a real same-target ping-pong with reprojection a
   assert.match(source, /opacityAgreement/);
   assert.doesNotMatch(source, /copyTextureToTexture/,
     'fused temporal resolve must not initialize or copy an intermediate current-sky target');
-  assert.match(source, /const currentColor = this\.weatherSky[\s\S]*radianceForRay/,
-    'temporal resolve must evaluate current cloud radiance in the same material');
+  assert.match(source, /const currentColor = this\.weatherSky[\s\S]*cloudTransportForRay/,
+    'temporal resolve must evaluate current cloud transport in the same material');
   assert.doesNotMatch(source, /spatialDelta|offset of \[\[1, 1\]/,
     'temporal resolve must not add a destructive quincunx preblur');
   assert.match(source, /fused raymarch \+ temporal resolve/);
@@ -347,8 +347,10 @@ test('cloud temporal resolve is a real same-target ping-pong with reprojection a
     'fullscreen cloud rays must be built from explicit scene-camera matrices');
   assert.match(source, /currentUv\.y\.mul\(-2\)\.add\(1\)/,
     'fullscreen UV.y must be converted from QuadMesh texture orientation to clip-space Y');
-  assert.match(source, /currentWorld\.mul\(vec4\(viewDirection\.mul\(10000\), 1\)\)/,
-    'camera-local sky rays must receive one world transform during reprojection');
+  assert.match(source, /marchState\.representativeDistance/,
+    'cloud history must reproject from the marched representative distance');
+  assert.match(source, /const representativePoint = this\._currentPosition[\s\S]*\.add\(worldDirection\.mul\(representativeDistance\)\)/,
+    'the marched world direction must be offset from camera position without a second rotation');
   assert.match(source, /previousNdc\.y\.mul\(-0\.5\)\.add\(0\.5\)/,
     'reprojected clip-space Y must return to the same top-left history UV convention');
   assert.doesNotMatch(source, /worldDirection\.mul\(10000\)/,

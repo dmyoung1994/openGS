@@ -7,8 +7,20 @@ import { convertToTexture } from 'three/tsl';
 // stable and invalidates history in-shader for one resolve; that also preserves the
 // atmosphere now carried inside the temporal color rather than flashing raw beauty.
 export class ResettableTRAANode extends TRAANode {
-  constructor(beautyNode, depthNode, velocityNode, camera, backgroundNode = null) {
-    super(convertToTexture(beautyNode), depthNode, velocityNode, camera, backgroundNode);
+  constructor(
+    beautyNode,
+    depthNode,
+    velocityNode,
+    camera,
+    backgroundNode = null,
+    cloudNode = null,
+    cloudSky = null,
+    cloudSourceNode = null,
+  ) {
+    super(
+      convertToTexture(beautyNode), depthNode, velocityNode, camera,
+      backgroundNode, cloudNode, cloudSky, cloudSourceNode,
+    );
   }
 
   reset() {
@@ -18,5 +30,15 @@ export class ResettableTRAANode extends TRAANode {
   }
 }
 
-export const resettableTraa = (beautyNode, depthNode, velocityNode, camera, backgroundNode = null) =>
-  new ResettableTRAANode(beautyNode, depthNode, velocityNode, camera, backgroundNode);
+export const resettableTraa = (
+  beautyNode,
+  depthNode,
+  velocityNode,
+  camera,
+  backgroundNode = null,
+  cloudNode = null,
+  cloudSky = null,
+  cloudSourceNode = null,
+) => new ResettableTRAANode(
+  beautyNode, depthNode, velocityNode, camera, backgroundNode, cloudNode, cloudSky, cloudSourceNode,
+);

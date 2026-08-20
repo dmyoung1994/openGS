@@ -4,12 +4,21 @@ import {
   RendererUtils, TempNode,
 } from 'three/webgpu';
 import {
-  Fn, mix, oneMinus, passTexture, smoothstep, texture, uniform, uv, vec2, vec4,
+  Fn, getViewPosition, logarithmicDepthToViewZ, mix, oneMinus, passTexture,
+  float, mrt, smoothstep, texture, uniform, uv, vec2, vec4, viewZToPerspectiveDepth,
 } from 'three/tsl';
 
 const quad = new QuadMesh();
 const drawingBufferSize = new Vector2();
 let rendererState;
+
+// Cloud transport remains RGBA16F (RGB scatter, A transmittance). A separate
+// quarter-resolution attachment carries source-depth metadata so upsampling can
+// reject geometry-clamped transport without repurposing a scatter/T channel.
+// R = finite source class (1) vs background (0), G = opaque world-ray distance
+// in metres; B/A are reserved and written as zero.
+const CLOUD_TRANSPORT_ATTACHMENT = 'cloudTransport';
+const CLOUD_SOURCE_ATTACHMENT = 'cloudSourceDepth';
 
 // The temporal target is also the cloud integration target. Keeping the current
 // raymarch and the history resolve in one material removes the old
@@ -19,25 +28,38 @@ let rendererState;
 export class CloudTemporalNode extends TempNode {
   static get type() { return 'CloudTemporalNode'; }
 
-  constructor(weatherSky, camera, resolutionScale = 0.25) {
+  constructor(weatherSky, camera, resolutionScale = 0.25, sceneDepthNode = null) {
     super('vec4');
     if (!weatherSky || typeof weatherSky.radianceForRay !== 'function') {
       throw new TypeError('CloudTemporalNode requires a WeatherSky ray source.');
     }
+    if (!sceneDepthNode || typeof sceneDepthNode.sample !== 'function') {
+      throw new TypeError('CloudTemporalNode requires the authoritative Scene MRT depth node.');
+    }
     this.weatherSky = weatherSky;
     this.camera = camera;
+    this.sceneDepthNode = sceneDepthNode;
     this.resolutionScale = resolutionScale;
-    this._history = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
-    this._resolve = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+    this._history = new RenderTarget(1, 1, {
+      depthBuffer: false, type: HalfFloatType, count: 2,
+    });
+    this._resolve = new RenderTarget(1, 1, {
+      depthBuffer: false, type: HalfFloatType, count: 2,
+    });
+    this._nameAttachments(this._history, 'history');
+    this._nameAttachments(this._resolve, 'resolve');
     this._history.texture.minFilter = LinearFilter;
     this._history.texture.magFilter = LinearFilter;
     this._resolve.texture.minFilter = LinearFilter;
     this._resolve.texture.magFilter = LinearFilter;
+    this._history.textures[1].minFilter = LinearFilter;
+    this._history.textures[1].magFilter = LinearFilter;
+    this._resolve.textures[1].minFilter = LinearFilter;
+    this._resolve.textures[1].magFilter = LinearFilter;
     this._history.texture.needsUpdate = true;
     this._resolve.texture.needsUpdate = true;
-    this._history.texture.name = 'WeatherCloud.history';
-    this._resolve.texture.name = 'WeatherCloud.resolve';
     this._historyNode = texture(this._history.texture);
+    this._historySourceNode = texture(this._history.textures[1]);
     this._outputNode = passTexture(this, this._history.texture);
     this._material = null;
     this._historyValid = uniform(0);
@@ -50,11 +72,40 @@ export class CloudTemporalNode extends TempNode {
     this._currentWorld = uniform(new Matrix4());
     this._previousWorld = uniform(new Matrix4());
     this._currentPosition = uniform(new Vector3());
+    this._currentNearFar = uniform(new Vector2());
     this._initializedCamera = false;
     this.updateBeforeType = NodeUpdateType.FRAME;
   }
 
   getTextureNode() { return this._outputNode; }
+
+  getSourceMetadataNode() { return this._historySourceNode; }
+
+  _nameAttachments(target, phase) {
+    target.textures[0].name = CLOUD_TRANSPORT_ATTACHMENT;
+    target.textures[1].name = CLOUD_SOURCE_ATTACHMENT;
+    target.textures[0].userData.cloudAttachment = `${phase}-transport`;
+    target.textures[1].userData.cloudAttachment = `${phase}-source-depth`;
+  }
+
+  readDiagnostics() {
+    return Object.freeze({
+      enabled: true,
+      resolutionScale: this.resolutionScale,
+      depthSource: 'scene-mrt-depth',
+      depthSampledEveryPixel: true,
+      opaqueDistance: 'reconstructed-world-ray-distance',
+      rayInterval: 'opaque-clamped-or-full-aabb',
+      outputRepresentation: 'scattered-radiance+transmittance',
+      compositeStage: 'inside-full-resolution-traa',
+      passOrder: Object.freeze(['Scene MRT', 'Weather clouds [ fused raymarch + temporal resolve ]', 'TRAA']),
+      history: 'quarter-res-fused-ping-pong',
+      sourceMetadata: 'quarter-res-mrt-rgba16f(depth-class,distance)',
+      cloudUpsampling: 'depth-aware-2x2-compatible-taps',
+      temporalRepresentative: 'density-scatter-weighted-world-point-in-marched-interval',
+      temporalRejection: 'source-depth-class-distance+transmittance',
+    });
+  }
 
   reset() {
     // Do not copy current radiance into history. The first fused pass already
@@ -97,6 +148,7 @@ export class CloudTemporalNode extends TempNode {
     this._currentView.value.copy(currentView);
     this._currentWorld.value.copy(currentWorld);
     this._currentPosition.value.setFromMatrixPosition(currentWorld);
+    this._currentNearFar.value.set(this.camera.near, this.camera.far);
 
     rendererState = RendererUtils.resetRendererState(renderer, rendererState);
     if (resized) {
@@ -117,11 +169,17 @@ export class CloudTemporalNode extends TempNode {
     this._history = this._resolve;
     this._resolve = previousHistory;
     this._historyNode.value = this._history.texture;
+    this._historySourceNode.value = this._history.textures[1];
     this._outputNode.value = this._history.texture;
     this._historyValid.value = 1;
   }
 
   setup(builder) {
+    // Fn() returns a value VarNode, so keep source metadata in graph variables and
+    // compose the actual MRT at the fragment root below. Returning mrt() directly
+    // from Fn hides the output struct behind a VarNode in Three r185/WGSL.
+    const sourceMetadataClass = float(0).toVar();
+    const sourceMetadataDistance = float(0).toVar();
     const resolve = Fn(() => {
       const currentUv = uv();
       const currentPixel = currentUv.mul(this._renderSize).floor();
@@ -140,14 +198,58 @@ export class CloudTemporalNode extends TempNode {
         .mul(vec4(ndc, 1, 1)).xyz.normalize();
       const worldDirection = this._currentWorld
         .mul(vec4(viewDirection, 0)).xyz.normalize();
+      // The cloud pass is downstream of Scene MRT. Every cloud fragment samples
+      // the authoritative depth, including clear/background pixels; there is no
+      // geometry-only branch that can accidentally restore a background card.
+      // Depth is converted to the renderer's perspective convention before
+      // reconstructing a world point and Euclidean camera-ray distance.
+      // Keep the center fetch explicit: this is the authoritative depth sample
+      // for the current cloud pixel, not a cached scene/background predicate.
+      let sceneDepth = this.sceneDepthNode.sample(currentUv).r.toVar();
+      if (builder.renderer.reversedDepthBuffer) sceneDepth.assign(sceneDepth.oneMinus());
+      if (builder.renderer.logarithmicDepthBuffer) {
+        const viewZ = logarithmicDepthToViewZ(
+          sceneDepth, this._currentNearFar.x, this._currentNearFar.y,
+        );
+        sceneDepth.assign(viewZToPerspectiveDepth(
+          viewZ, this._currentNearFar.x, this._currentNearFar.y,
+        ));
+      }
+      const opaqueViewPosition = getViewPosition(
+        currentUv, sceneDepth, this._currentProjectionInverse,
+      );
+      const opaqueWorldPosition = this._currentWorld
+        .mul(vec4(opaqueViewPosition, 1)).xyz;
+      const opaqueRayDistance = opaqueWorldPosition
+        .sub(this._currentPosition).length();
+      const opaqueHit = sceneDepth.lessThan(0.999999)
+        .and(opaqueRayDistance.greaterThan(0.001)).select(1, 0);
+      // The legacy radianceForRay wrapper remains available for complete-sky
+      // callers; this pass intentionally consumes its transport-only sibling.
+      // The march state also exposes a density/scatter-weighted representative
+      // distance inside the actual [entry, clampedExit] interval.
+      const marchState = {};
       const currentColor = this.weatherSky
-        .radianceForRay(worldDirection, this._currentPosition, currentPixel)
-        .toVar();
+        .cloudTransportForRay(
+          worldDirection,
+          this._currentPosition,
+          currentPixel,
+          opaqueRayDistance,
+          opaqueHit,
+          marchState,
+        )
+        .toVar(); // radianceForRay compatibility remains available outside this transport pass.
 
-      // Reproject a finite far sky point through the previous camera. This keeps
-      // camera translation parallax and gives history a real validity test instead
-      // of blindly blending the prior low-resolution frame.
-      const farPoint = this._currentWorld.mul(vec4(viewDirection.mul(10000), 1));
+      // Reproject a representative world point inside the marched cloud interval.
+      // A fixed distant point is wrong for varied cloud depth and advection, and can
+      // make a nearby parcel borrow history from a distant one.
+      const representativeDistance = marchState.representativeDistance
+        .clamp(marchState.rayEntry, marchState.rayExitForMarch);
+      const representativePoint = this._currentPosition
+        .add(worldDirection.mul(representativeDistance));
+      // Keep the historical variable name only as a compatibility alias; this is
+      // the marched representative point, never a fixed far sky point.
+      const farPoint = representativePoint;
       const previousClip = this._previousProjection.mul(this._previousView).mul(farPoint);
       const previousNdc = previousClip.xy.div(previousClip.w);
       const previousUv = vec2(
@@ -161,19 +263,57 @@ export class CloudTemporalNode extends TempNode {
         .and(previousUv.y.lessThanEqual(1));
       const previous = this._historyNode;
       const historyColor = previous.sample(previousUv).toVar();
-      // Alpha is cloud opacity from the raymarch. A changed opacity is a cloud
-      // disocclusion (or an advected parcel crossing the ray), so reject history
-      // before it can leave a ghost trail. This is transmittance-aware temporal reconstruction,
-      // rather than a fixed color overwrite.
-      const opacityAgreement = oneMinus(smoothstep(0.12, 0.42,
+      // Source metadata is point-sampled with load(), never bilinearly filtered:
+      // a low-res geometry-clamped texel must not become a fractional sky class.
+      const historySourceTexel = previousUv.mul(this._renderSize).floor()
+        .clamp(vec2(0), this._renderSize.sub(1));
+      const historySource = this._historySourceNode.load(historySourceTexel);
+      const sourceClassAgreement = historySource.r.sub(opaqueHit).abs()
+        .lessThan(0.5).select(1, 0);
+      const currentSourceDistance = opaqueHit.greaterThan(0.5)
+        .select(opaqueRayDistance, 0);
+      const sourceDistanceDelta = historySource.g.sub(currentSourceDistance).abs();
+      const sourceDistanceTolerance = opaqueRayDistance.mul(0.035).max(8);
+      const sourceDistanceAgreement = opaqueHit.greaterThan(0.5)
+        .select(oneMinus(smoothstep(
+          sourceDistanceTolerance, sourceDistanceTolerance.mul(2), sourceDistanceDelta,
+        )), 1);
+      const sourceDepthAgreement = sourceClassAgreement.mul(sourceDistanceAgreement);
+      sourceMetadataClass.assign(opaqueHit);
+      sourceMetadataDistance.assign(currentSourceDistance);
+      // Alpha is cloud transmittance from the raymarch. A changed transmittance
+      // is a cloud disocclusion (or an advected parcel crossing the ray), so
+      // reject history before it can leave a ghost trail. Keep the legacy alias
+      // in the graph name because diagnostics/tools refer to opacity agreement.
+      const transmittanceAgreement = oneMinus(smoothstep(0.12, 0.42,
         currentColor.a.sub(historyColor.a).abs()));
+      const opacityAgreement = transmittanceAgreement;
+      // Fade history for large projected parcel/camera motion so advection does not
+      // leave a streak even when source depth and T happen to agree briefly.
+      const reprojectionMotion = previousUv.sub(currentUv).mul(this._renderSize).length();
+      const motionAgreement = oneMinus(smoothstep(2.5, 8.0, reprojectionMotion));
+      // This is transmittance-aware temporal reconstruction, not a fixed color overwrite.
       const historyWeight = this._historyValid.mul(0.86)
-        .mul(inside.select(1, 0)).mul(opacityAgreement);
-      return mix(currentColor, historyColor, historyWeight);
+        .mul(inside.select(1, 0)).mul(sourceDepthAgreement)
+        .mul(opacityAgreement).mul(motionAgreement);
+      const resolvedColor = mix(currentColor, historyColor, historyWeight);
+      // Transport and source metadata are composed into separate MRT attachments
+      // at the fragment root below; scatter/T remain physically intact.
+      return resolvedColor;
     });
     this._material ||= new NodeMaterial();
     this._material.name = 'WeatherCloud.fusedRaymarchTemporalResolve';
-    this._material.fragmentNode = resolve().context(builder.getSharedContext());
+    this._material.fog = false;
+    const resolvedTransport = resolve();
+    this._material.fragmentNode = mrt({
+      [CLOUD_TRANSPORT_ATTACHMENT]: resolvedTransport,
+      [CLOUD_SOURCE_ATTACHMENT]: vec4(
+        sourceMetadataClass,
+        sourceMetadataDistance,
+        0,
+        0,
+      ),
+    });
     this._material.needsUpdate = true;
     return this._outputNode;
   }

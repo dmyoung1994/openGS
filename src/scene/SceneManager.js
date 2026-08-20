@@ -144,15 +144,18 @@ export class SceneManager {
     const depth = scenePass.getTextureNode('depth');
     const vel = scenePass.getTextureNode('velocity');
 
-    let sky = null;
+    let cloudLayer = null;
+    let cloudSourceLayer = null;
     if (this.weatherSky?.usesVolumetricClouds) {
       // One bounded quarter-resolution fullscreen material now evaluates the
       // current cloud ray and resolves/reprojects history into the same target.
       // There is no intermediate current-sky render target or readback path.
       this._cloudTemporal = new CloudTemporalNode(
         this.weatherSky, this.camera, this.weatherSky.workload.internalScale,
+        depth,
       );
-      sky = this._cloudTemporal.getTextureNode();
+      cloudLayer = this._cloudTemporal.getTextureNode();
+      cloudSourceLayer = this._cloudTemporal.getSourceMetadataNode();
       this.scene.backgroundNode = null;
     } else {
       // Clear weather allocates and submits no cloud pass or cloud history target.
@@ -160,10 +163,19 @@ export class SceneManager {
       this.scene.backgroundNode = this.weatherSky?.backgroundNode ?? null;
     }
 
-    // Anti-alias the lit beauty and the temporal cloud background together, then
-    // apply the cinematic grade. Cloud integration therefore happens before the
-    // full-resolution scene TRAA rather than in a separate post stage.
-    const aa = resettableTraa(color, depth, vel, this.camera, sky);
+    // Compose sceneRadiance * cloudTransmittance + cloudScatter inside the
+    // full-resolution TRAA current frame, then resolve that composited result
+    // against history. Clear weather keeps the zero-cost scene path above.
+    const aa = resettableTraa(
+      color,
+      depth,
+      vel,
+      this.camera,
+      null,
+      cloudLayer,
+      this.weatherSky?.usesVolumetricClouds ? this.weatherSky : null,
+      cloudSourceLayer,
+    );
     // Thin, high-contrast blades are precisely the case where TRAA's optional
     // subpixel correction turns a stable history into a changing per-pixel weight.
     // Keep normal motion/disocclusion handling, but avoid that documented square/

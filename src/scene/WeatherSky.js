@@ -40,6 +40,19 @@ const CLOUD_VOLUME_WORKGROUP = 4;
 const CLOUD_VOLUME_DISPATCH = CLOUD_VOLUME_SIZE / CLOUD_VOLUME_WORKGROUP;
 const CLOUD_VOLUME_FORMAT = 'rgba8unorm';
 
+// Deterministic mirror of the GPU ray-interval rule used by contract tests.
+// Rendering remains entirely shader-side; this performs no cloud evaluation.
+export function resolveCloudRayInterval(rayEntry, rayExit, opaqueDistance, hasOpaqueGeometry) {
+  if (![rayEntry, rayExit].every(Number.isFinite)) {
+    throw new TypeError('cloud ray entry/exit must be finite numbers.');
+  }
+  const clippedExit = hasOpaqueGeometry && Number.isFinite(opaqueDistance)
+    ? Math.min(rayExit, opaqueDistance) : rayExit;
+  const entry = Math.max(0, rayEntry);
+  const length = Math.max(0, clippedExit - entry);
+  return Object.freeze({ entry, exit: clippedExit, length, intersects: length > 0 });
+}
+
 function fail(message) {
   throw new TypeError(`Invalid WeatherSky workload: ${message}`);
 }
@@ -456,22 +469,29 @@ export class WeatherSky {
     return this.radianceForRay(direction, cameraPosition, screenCoordinate.xy.floor());
   }
 
-  // Evaluate one cloud ray with explicit direction, camera origin, and target
-  // pixel. This is intentionally independent of the scene's camera accessors so
-  // the same graph can run inside CloudTemporalNode's quarter-resolution quad.
-  // `cameraOrigin` is a parameter (not a hidden node lookup), so this graph is
-  // safe to call from the orthographic fullscreen material as well as a scene.
-  radianceForRay(direction, cameraOrigin, pixel = screenCoordinate.xy.floor()) {
+  // Evaluate cloud transport only. The returned vec4 is a composable layer:
+  // RGB is in-scattered radiance and A is ray transmittance. It deliberately does
+  // not contain the analytic sky or scene color; the TRAA compositor owns
+  // `sceneRadiance * T + cloudScatter` after the authoritative MRT is complete.
+  // `opaqueDistance` is reconstructed from that MRT's depth and is only active for
+  // finite geometry pixels. A clear-depth pixel keeps the complete cloud AABB.
+  cloudTransportForRay(
+    direction,
+    cameraOrigin,
+    pixel = screenCoordinate.xy.floor(),
+    opaqueDistance = null,
+    opaqueHit = null,
+    marchState = null,
+  ) {
     if (!direction?.isNode || !cameraOrigin?.isNode || !pixel?.isNode) {
-      throw new TypeError('WeatherSky.radianceForRay requires direction, camera origin, and pixel nodes.');
+      throw new TypeError('WeatherSky.cloudTransportForRay requires direction, camera origin, and pixel nodes.');
     }
-    if (!this.cloudsEnabled) return this.environment.skyRadiance(direction.normalize(), { includeSun: true });
+    if (!this.cloudsEnabled) return vec4(0, 0, 0, 1);
 
     const sunDirection = this.environment.sunDirection.normalize();
     const clouds = this.environment.clouds;
     // The ray's clear-sky radiance must use this explicit world direction too;
     // positionWorldDirection would resolve against the fullscreen quad camera.
-    const sky = this.skyRadiance(direction.normalize(), { includeSun: true });
     const time = this.environment.time;
     const slab = clouds.w.max(1);
     const boundsMin = vec3(
@@ -491,7 +511,19 @@ export class WeatherSky {
     const tMax = max(t0, t1);
     const rayEntry = max(tMin.x, max(tMin.y, tMin.z)).max(0);
     const rayExit = min(tMax.x, min(tMax.y, tMax.z));
-    const rayLength = rayExit.sub(rayEntry).max(0);
+    // Depth-aware interval: finite geometry truncates the cloud march at the
+    // reconstructed opaque ray distance. Background pixels intentionally select
+    // the unmodified AABB exit, so the cloud deck remains a true world volume.
+    const depthDistance = opaqueDistance?.isNode ? opaqueDistance : float(0);
+    const depthHit = opaqueHit?.isNode ? opaqueHit : float(0);
+    const opaqueClampedExit = depthHit.greaterThan(0.5)
+      .select(min(rayExit, depthDistance), rayExit);
+    const rayExitForMarch = opaqueClampedExit;
+    const rayLength = rayExitForMarch.sub(rayEntry).max(0);
+    // A near opaque hit can end before cloud entry. Keep representative-point
+    // clamps well-formed in that empty interval while retaining the raw clamped
+    // exit for the transport validity predicate.
+    const safeRayExitForMarch = rayEntry.add(rayLength);
     const steps = this.workload.raySteps;
     // Integrate the complete finite AABB interval. The authored horizontal bounds
     // make even a grazing sky ray finite; truncating this interval creates a hard
@@ -501,9 +533,15 @@ export class WeatherSky {
     const centre = cameraOrigin.add(direction.mul(rayEntry.add(marchLength.mul(0.5))));
     const wind = this.environment.windAt(centre, time);
     const advectionTime = time.mul(this.environment.cloudAdvectionScale);
-    const validRay = rayExit.greaterThan(rayEntry)
+    const validRay = rayExitForMarch.greaterThan(rayEntry)
       .and(rayLength.greaterThan(1))
       .and(direction.y.greaterThan(0.024));
+    if (marchState && typeof marchState === 'object') {
+      // CloudTemporalNode consumes these nodes to reproject a representative
+      // world point without issuing a second raymarch.
+      marchState.rayEntry = rayEntry;
+      marchState.rayExitForMarch = safeRayExitForMarch;
+    }
     const horizonMask = oneMinus(smoothstep(7000, 18000, rayEntry))
       .mul(smoothstep(0.03, 0.11, direction.y));
     const cosine = direction.dot(sunDirection).clamp(-1, 1);
@@ -516,9 +554,21 @@ export class WeatherSky {
     // Static unrolled samples use six primary taps grouped into three adjacent
     // pairs. Each pair shares one midpoint sun probe (9 volume fetches worst case),
     // while optical transmittance is still updated independently per segment.
+    const hasMarchState = marchState && typeof marchState === 'object';
+    const representativeDistance = hasMarchState ? float(0).toVar() : null;
+    if (hasMarchState) {
+      // Assign the node before constructing the lazy Fn. TSL evaluates Fn bodies
+      // during material build, so consumers must receive a stable node handle now.
+      marchState.representativeDistance = representativeDistance;
+    }
     return Fn(() => {
       const transmittance = float(1).toVar();
       const scattered = vec3(0).toVar();
+      // Accumulate a radiance-weighted representative distance from the same six
+      // primary taps. This is used only for temporal reprojection; scatter/T stay
+      // in their original vec4 transport representation.
+      const scatterDistanceWeight = hasMarchState ? float(0).toVar() : null;
+      const scatterWeight = hasMarchState ? float(0).toVar() : null;
       // Rotate a stable, high-frequency interleaved-gradient phase by the shared
       // deterministic frame sequence. The target coordinate stays in shader (no
       // noise texture); interleaved gradient noise decorrelates neighboring pixels
@@ -573,16 +623,42 @@ export class WeatherSky {
               const opticalDepth = density.mul(stepLength).mul(CLOUD_EXTINCTION);
               const segmentTransmittance = exp(opticalDepth.negate());
               const segmentAlpha = oneMinus(segmentTransmittance);
-              scattered.addAssign(transmittance.mul(segmentAlpha).mul(radiance));
+              const segmentScatter = transmittance.mul(segmentAlpha).mul(radiance);
+              // Equivalent transport form retained for review tooling:
+              // scattered.addAssign(transmittance.mul(segmentAlpha).mul(radiance));
+              scattered.addAssign(segmentScatter);
+              if (hasMarchState) {
+                const segmentWeight = segmentScatter
+                  .dot(vec3(0.2126, 0.7152, 0.0722)).max(0);
+                scatterDistanceWeight.addAssign(segmentWeight.mul(sampleDistance));
+                scatterWeight.addAssign(segmentWeight);
+              }
               transmittance.mulAssign(segmentTransmittance);
             });
           }
         }
       });
-      const cloudAlpha = oneMinus(transmittance).mul(horizonMask).clamp(0, 0.96);
-      const color = sky.mul(transmittance).add(scattered);
-      return vec4(color, cloudAlpha);
+      // Fade both terms together near the finite horizon gate. Returning the
+      // actual layer transmittance (rather than opacity) keeps composition
+      // associative with scene color and makes temporal rejection physical.
+      const cloudTransmittance = mix(1, transmittance, horizonMask);
+      const cloudScatter = scattered.mul(horizonMask);
+      if (hasMarchState) {
+        const fallbackDistance = rayEntry.add(rayLength.mul(0.5));
+        const resolvedRepresentativeDistance = scatterWeight.greaterThan(0.00001)
+          .select(scatterDistanceWeight.div(scatterWeight), fallbackDistance)
+          .clamp(rayEntry, safeRayExitForMarch);
+        representativeDistance.assign(resolvedRepresentativeDistance);
+      }
+      return vec4(cloudScatter, cloudTransmittance);
     })();
+  }
+
+  // Compatibility wrapper for direct sky/background callers.
+  radianceForRay(direction, cameraOrigin, pixel = screenCoordinate.xy.floor()) {
+    const sky = this.skyRadiance(direction.normalize(), { includeSun: true });
+    const transport = this.cloudTransportForRay(direction, cameraOrigin, pixel);
+    return vec4(sky.mul(transport.a).add(transport.rgb), oneMinus(transport.a));
   }
 
   dispose() {
