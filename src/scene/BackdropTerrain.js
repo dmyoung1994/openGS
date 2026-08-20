@@ -4,7 +4,7 @@ import {
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   attribute, cameraPosition, float, mix, mx_noise_float, normalGeometry, normalWorld, positionGeometry, positionWorld,
-  smoothstep, transformNormalToView, varying, vec3, vec4, vertexColor,
+  smoothstep, transformNormalToView, varying, vec2, vec3, vec4, vertexColor,
 } from 'three/tsl';
 import { Noise } from '../util/noise.js';
 import { createRng, deriveSeed } from '../util/random.js';
@@ -1374,12 +1374,38 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   const vertexX = positionGeometry.x;
   const vertexY = positionGeometry.y;
   const vertexZ = positionGeometry.z;
-  const vertexMacro = mx_noise_float(vec3(
-    vertexX.mul(1 / 520), vertexY.mul(1 / 520), vertexZ.mul(1 / 520).add(seed + 3.0),
+  const vertexMacroAt = (x, z) => mx_noise_float(vec3(
+    x.mul(1 / 520), vertexY.mul(1 / 520), z.mul(1 / 520).add(seed + 3.0),
+  ));
+  const vertexMesoAt = (x, z) => mx_noise_float(vec3(
+    x.mul(1 / 120), vertexY.mul(1 / 120), z.mul(1 / 120).add(seed + 29.0),
+  ));
+  const vertexMacroRaw = vertexMacroAt(vertexX, vertexZ);
+  const vertexMesoRaw = vertexMesoAt(vertexX, vertexZ);
+  const vertexMacro = vertexMacroRaw.mul(0.5).add(0.5);
+  const vertexMeso = vertexMesoRaw.mul(0.5).add(0.5);
+  const broadMacroGradient = vec2(
+    vertexMacroAt(vertexX.add(24.0), vertexZ).sub(vertexMacroRaw).div(24.0),
+    vertexMacroAt(vertexX, vertexZ.add(24.0)).sub(vertexMacroRaw).div(24.0),
+  );
+  const broadMesoGradient = vec2(
+    vertexMesoAt(vertexX.add(9.0), vertexZ).sub(vertexMesoRaw).div(9.0),
+    vertexMesoAt(vertexX, vertexZ.add(9.0)).sub(vertexMesoRaw).div(9.0),
+  );
+  const vertexStrataWarp = mx_noise_float(vec3(
+    vertexX.mul(0.0018).add(seed + 79.0), vertexY.mul(0.0016), vertexZ.mul(0.0019),
+  )).mul(42.0);
+  const vertexBeddingAxis = vertexX.mul(0.34).add(vertexZ.mul(0.20))
+    .add(vertexY.mul(0.14)).add(vertexStrataWarp);
+  const vertexBedding = mx_noise_float(vec3(
+    vertexBeddingAxis.mul(1 / 95),
+    vertexY.mul(1 / 260).add(vertexStrataWarp.mul(0.004)),
+    vertexZ.sub(vertexX.mul(0.4)).add(vertexStrataWarp.mul(0.18)).mul(1 / 340).add(seed + 67.0),
   )).mul(0.5).add(0.5);
-  const vertexMeso = mx_noise_float(vec3(
-    vertexX.mul(1 / 120), vertexY.mul(1 / 120), vertexZ.mul(1 / 120).add(seed + 29.0),
-  )).mul(0.5).add(0.5);
+  const broadValuesVarying = varying(vec3(vertexMacro, vertexMeso, vertexBedding), 'vAlpineBroadValues');
+  const broadGradientsVarying = varying(vec4(
+    broadMacroGradient.x, broadMacroGradient.y, broadMesoGradient.x, broadMesoGradient.y,
+  ), 'vAlpineBroadGradients');
   // A single anisotropic field supplies signed strike/fault/bedding relief. The
   // three axes deliberately have different world scales and oblique directions:
   // its positive lobe is a resistant ridge, its negative lobe is a chute. This
@@ -1537,8 +1563,6 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
     .mul(float(1.0).sub(smoothstep(520.0, 1650.0, viewDistance)));
   // Keep the normal fields at the same physical wavelengths as the GPU vertex
   // relief so a ridge cannot silhouette one way and light another.
-  const macro = worldField(world, 1 / 520, seed + 3.0, 24.0);
-  const meso = worldField(world, 1 / 120, seed + 29.0, 9.0);
   const fine = biplanarField(world, normalWorld, 1 / 41, seed + 53.0, 2.5, projectionWeight);
   // The micro octave is a single true 3D sample: it is cheap, world-anchored,
   // and varies along Y on vertical faces. The 41 m biplanar field owns normal
@@ -1549,7 +1573,8 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
     world.y.mul(1 / 8.5), world.z.mul(1 / 8.5),
   )).mul(0.5).add(0.5);
   const grain = { value: grainSample, gradX: float(0.0), gradZ: float(0.0) };
-  const mesoValue = mix(float(0.5), meso.value, mesoVisibility);
+  const macroValue = broadValuesVarying.x;
+  const mesoValue = mix(float(0.5), broadValuesVarying.y, mesoVisibility);
   const fineValue = mix(float(0.5), fine.value, fineVisibility);
   const grainValue = mix(float(0.5), grain.value, grainVisibility);
 
@@ -1557,18 +1582,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // world axis so it cuts ACROSS the faces like real strata instead of drawing
   // contour rings around the basin at constant elevation. Height participates as
   // a shallow cross-axis term, never as the contour coordinate by itself.
-  const strataWarp = mx_noise_float(vec3(
-    world.x.mul(0.0018).add(seed + 79.0),
-    world.y.mul(0.0016),
-    world.z.mul(0.0019),
-  )).mul(42.0);
-  const beddingAxis = world.x.mul(0.34).add(world.z.mul(0.20))
-    .add(altitude.mul(0.14)).add(strataWarp);
-  const bedding = mx_noise_float(vec3(
-    beddingAxis.mul(1 / 95),
-    world.y.mul(1 / 260).add(strataWarp.mul(0.004)),
-    world.z.sub(world.x.mul(0.4)).add(strataWarp.mul(0.18)).mul(1 / 340).add(seed + 67.0),
-  )).mul(0.5).add(0.5);
+  const bedding = broadValuesVarying.z;
 
   // Resistant ribs vs. incised gullies. This is the relief field that drives both
   // the height blends and the normal perturbation, so albedo, shading and the
@@ -1595,7 +1609,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // the single most obvious tell that terrain was classified by elevation. A
   // +/-90 m wander over ~600 m of world makes the same transition read as a
   // ragged tree line following the ground.
-  const bandJitter = macro.value.sub(0.5).mul(180.0);
+  const bandJitter = macroValue.sub(0.5).mul(180.0);
   const altitudeExposure = smoothstep(150.0, 430.0, altitude.add(bandJitter));
   const rockNominal = rockGate.mul(0.90)
     .add(cliffGate.mul(0.72))
@@ -1608,7 +1622,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
     .add(smoothstep(0.30, 0.72, mesoValue).mul(smoothstep(70.0, 360.0, altitude)).mul(0.48))
     .sub(treeGate.mul(0.70))
     .clamp(0.0, 1.0);
-  const vegetationRelief = treeGate.mul(0.45).add(macro.value.mul(0.30)).add(0.28).clamp(0.0, 1.0);
+  const vegetationRelief = treeGate.mul(0.45).add(macroValue.mul(0.30)).add(0.28).clamp(0.0, 1.0);
   // Broad vertex gates intentionally stay low-resolution. Carry a restrained
   // outcrop allowance from the same cliff/scree/wash fields so lower faces can
   // break through interpolated tree cover instead of becoming one green slab.
@@ -1673,7 +1687,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // Wind scours the ribs and loads the lee hollows, so snow accumulates against
   // the inverse of the rock relief plus a broad drift field.
   const snowDrift = float(1.0).sub(ribs).mul(0.72)
-    .add(macro.value.mul(0.16)).add(beddingRib.mul(0.28))
+    .add(macroValue.mul(0.16)).add(beddingRib.mul(0.28))
     .add(faultRib.mul(0.22)).add(ledgeCatch.mul(0.34)).clamp(0.0, 1.0);
   // Accumulation is a thresholded lee-hollow signal, not a linear white band:
   // resistant ribs scour clean while bedding/fault hollows retain snow below
@@ -1693,7 +1707,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   const snowCavity = faultRib.mul(0.42).add(beddingRib.mul(0.18))
     .add(washGate.mul(0.24)).clamp(0.0, 1.0);
   const snowTone = smoothstep(0.22, 0.86, upness).mul(0.72)
-    .add(macro.value.mul(0.12)).add(mesoValue.mul(0.16))
+    .add(macroValue.mul(0.12)).add(mesoValue.mul(0.16))
     .sub(snowCavity.mul(0.48)).sub(faultRib.mul(0.16)).clamp(0.08, 1.0);
 
   // --- scree ----------------------------------------------------------------
@@ -1740,7 +1754,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
 
   // Vegetated substrate.
   const meadowShare = smoothstep(0.35, 0.75,
-    float(1.0).sub(treeGate).mul(0.55).add(macro.value.mul(0.45))
+    float(1.0).sub(treeGate).mul(0.55).add(macroValue.mul(0.45))
       .add(smoothstep(60.0, 220.0, altitude).mul(0.35)));
   let albedo = mix(conifer, meadowGrass, meadowShare);
 
@@ -1752,7 +1766,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // Pull the correlated meso/bedding signal away from its mid-grey centre so
   // distant faces keep broad lithology planes after aerial transmittance. This
   // reuses fields already paid for above; it is contrast, not another octave.
-  const faceValue = mesoValue.mul(0.48).add(macro.value.mul(0.28))
+  const faceValue = mesoValue.mul(0.48).add(macroValue.mul(0.28))
     .add(beddingValue.mul(0.24));
   const faceContrast = faceValue.sub(0.5).mul(1.85).add(0.5).clamp(0.0, 1.0);
   // Separate broad lithology from light direction.  A single pale granite
@@ -1793,7 +1807,7 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // toward neutral at distance rather than aliasing into a noisy gray wash.
   const mineralVariation = mesoValue.sub(0.5).mul(0.78)
     .add(fineValue.sub(0.5).mul(0.28))
-    .add(macro.value.sub(0.5).mul(0.42))
+    .add(macroValue.sub(0.5).mul(0.42))
     .add(grainValue.sub(0.5).mul(0.06))
     // These two signals are anisotropic and warped in world space, so their
     // extra contrast reads as broad strike-aligned faces/chutes at 50--300 m,
@@ -1888,12 +1902,12 @@ function worldMaterial(name, biome, { environment = null, snowline = 400, bounds
   // Dropping them to a literal few metres removes the perturbation entirely and
   // leaves a featureless grey shape, which is the opposite failure.
   const bump = vec3(
-    meso.gradX.mul(8.0).mul(mesoVisibility)
-      .add(macro.gradX.mul(14.0))
+    broadGradientsVarying.z.mul(8.0).mul(mesoVisibility)
+      .add(broadGradientsVarying.x.mul(14.0))
       .add(fine.gradX.mul(5.0).mul(fineVisibility)),
     0.0,
-    meso.gradZ.mul(8.0).mul(mesoVisibility)
-      .add(macro.gradZ.mul(14.0))
+    broadGradientsVarying.w.mul(8.0).mul(mesoVisibility)
+      .add(broadGradientsVarying.y.mul(14.0))
       .add(fine.gradZ.mul(5.0).mul(fineVisibility)),
   ).mul(rockDetail.mul(0.85).add(screeMask.mul(0.25)).add(0.06));
   // The normal response follows the same strike/secondary spatial derivatives

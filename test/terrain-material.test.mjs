@@ -212,7 +212,7 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
   // got centimetre-scale relief at the course edge and ~10 m of it at 2 km. That
   // is what drew the dark streaked banding across the far faces. Gradients are
   // now taken at a fixed offset in metres, as Hollow's HeightToNormal does.
-  assert.match(source, /meso\.gradX\.mul\(8\.0\)/,
+  assert.match(source, /broadGradientsVarying\.z\.mul\(8\.0\)/,
     'resistant ribs need meso normal breakup at a real world amplitude');
   assert.doesNotMatch(source, /dFdx\(/,
     'backdrop normals must not come from screen-space derivatives');
@@ -226,12 +226,12 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
 test('alpine normal graph uses one derivative per relief scale and no value normals', async () => {
   const source = await readFile(new URL('src/scene/BackdropTerrain.js', ROOT), 'utf8');
   const normalGraph = source.slice(source.indexOf('const structuralGradientVarying = varying('), source.indexOf('// Matte dielectric throughout'));
-  assert.equal((normalGraph.match(/meso\.gradX\.mul\(8\.0\)/g) || []).length, 1);
-  assert.equal((normalGraph.match(/macro\.gradX\.mul\(14\.0\)/g) || []).length, 1);
+  assert.equal((normalGraph.match(/broadGradientsVarying\.z\.mul\(8\.0\)/g) || []).length, 1);
+  assert.equal((normalGraph.match(/broadGradientsVarying\.x\.mul\(14\.0\)/g) || []).length, 1);
   assert.equal((normalGraph.match(/fine\.gradX\.mul\(5\.0\)/g) || []).length, 1);
-  assert.doesNotMatch(normalGraph, /meso\.grad[XYZ]\.mul\(12\.0\)/,
+  assert.doesNotMatch(normalGraph, /broadGradientsVarying\.[zw]\.mul\(12\.0\)/,
     'meso normal must not stack duplicate amplitudes');
-  assert.doesNotMatch(normalGraph, /macro\.grad[XYZ]\.mul\(12\.0\)/,
+  assert.doesNotMatch(normalGraph, /broadGradientsVarying\.[xy]\.mul\(12\.0\)/,
     'macro normal must not stack duplicate amplitudes');
   assert.doesNotMatch(normalGraph, /const structuralNormal\s*=|structuralFace\.sub\(0\.5\).*vec3/,
     'mask values must not be used as arbitrary normal XYZ offsets');

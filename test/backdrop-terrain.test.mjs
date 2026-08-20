@@ -34,8 +34,8 @@ test('alpine geology is shader-only and has no granite texture runtime path', as
     'detail octaves must be derivative-aware');
   assert.match(material, /cameraPosition\.sub\(world\)\.length\(\)/,
     'detail handoff must include view distance');
-  assert.match(material, /const strataWarp = mx_noise_float/,
-    'stratification must be warped in world space');
+  assert.match(material, /const vertexStrataWarp = mx_noise_float/,
+    'stratification must be evaluated in the vertex graph');
   assert.match(material, /const weatheringMask = smoothstep/,
     'weathering needs a shared slope/relief mask');
   assert.match(material, /const mineralGrade = float\(1\.0\)\.add\(mineralVariation\)/,
@@ -577,8 +577,9 @@ test('alpine surface response is classified per pixel, not baked per vertex', as
   // Three scales of world-anchored relief, each sampled with its own gradient so
   // the normal perturbation is a property of the terrain rather than of the
   // projection. The previous version derived every bump from dFdx/dFdy.
-  assert.match(source, /function worldField\(world, frequency, seedZ, epsilon\)/);
-  assert.match(source, /gradX: at\(world\.x\.add\(epsilon\), world\.z\)\.sub\(center\)\.div\(epsilon\)/);
+  assert.match(source, /const broadGradientsVarying = varying\(/);
+  assert.doesNotMatch(source, /const macro = worldField\(|const meso = worldField\(|const strataWarp = mx_noise_float/,
+    'broad macro/meso/bedding fields must not be reconstructed per fragment');
   assert.doesNotMatch(source, /dFdx\(|dFdy\(/,
     'screen-space derivatives scale with pixel footprint, not with the ground');
   // Displacement-weighted blending, after Hollow-TerrainSystem's SampleOMPV.
@@ -588,7 +589,7 @@ test('alpine surface response is classified per pixel, not baked per vertex', as
   // Snow is placed by threshold and only shaped by relief: a height blend
   // saturates, so using it to position a snowline whites out the whole massif.
   assert.match(source, /const snowMask = smoothstep\(0\.56, 0\.82, snowAccumulation\)/);
-  assert.match(source, /const bandJitter = macro\.value\.sub\(0\.5\)\.mul\(180\.0\)/,
+  assert.match(source, /const bandJitter = macroValue\.sub\(0\.5\)\.mul\(180\.0\)/,
     'altitude bands must wander in world space or they read as contour stripes');
   assert.match(source, /material\.roughnessNode = mix\(mineralRough, float\(0\.86\), snowMask\)/);
 });
