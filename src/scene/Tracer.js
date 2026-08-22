@@ -18,7 +18,7 @@ import { disposeComputeNodes, disposeWebGPUAttributes } from './WebGPUResourceDi
 // Tracer history is deliberately bounded and overflow is fatal. Silently wrapping a
 // ring while a shot is in progress would draw unrelated head/tail segments together,
 // which is a corrupt renderer state rather than a useful lower-quality mode.
-const SUBDIVISIONS = 6;
+const SUBDIVISIONS = 8;
 
 export class Tracer {
   constructor(scene, { renderer, max = 2048 } = {}) {
@@ -39,8 +39,7 @@ export class Tracer {
     this.uPoint = uniform(this._point);
     this.uPointCount = uniform(0, 'uint');
     this.uOpacity = uniform(1);
-    this.uCorePixels = uniform(3.0);
-    this.uHaloPixels = uniform(11.0);
+    this.uRibbonPixels = uniform(6.4);
 
     this._appendCompute = Fn(() => {
       this._points.element(this.uAppendIndex).assign(vec4(this.uPoint, 1.0));
@@ -117,36 +116,40 @@ export class Tracer {
     const viewCenter = cameraViewMatrix.mul(vec4(center, 1.0));
     const viewTangent = cameraViewMatrix.mul(vec4(tangent, 0.0)).xyz;
     const clip = cameraProjectionMatrix.mul(viewCenter);
-    const perpendicular = vec2(viewTangent.y.negate(), viewTangent.x).normalize();
+    // A chase camera can look almost directly down the flight tangent. Normalizing
+    // its near-zero screen projection produced unstable ribbon spikes. Fall back to
+    // a horizontal screen-width basis for that end-on limit.
+    const tangentScreen = viewTangent.xy;
+    const tangentScreenLength = tangentScreen.dot(tangentScreen).sqrt();
+    const perpendicular = tangentScreenLength.greaterThan(0.0001).select(
+      vec2(tangentScreen.y.negate(), tangentScreen.x).div(tangentScreenLength),
+      vec2(1.0, 0.0),
+    );
     const along = float(segment).add(t).div(float(this.uPointCount.sub(uint(1))).max(1.0));
-    const headTaper = smoothstep(0.0, 0.08, along).mul(smoothstep(1.0, 0.82, along));
+    const tailTaper = smoothstep(0.0, 0.035, along);
+    const headProfile = mix(1.0, 0.34, smoothstep(0.62, 0.96, along));
+    const endpointTaper = tailTaper
+      .mul(headProfile)
+      .mul(oneMinus(smoothstep(0.985, 1.0, along)));
     const side = positionGeometry.x;
-    // Stable pixel width at every camera distance. The halo occupies the full
-    // ribbon; a white-hot core is produced analytically in the fragment shader.
-    const halfWidthPx = this.uHaloPixels.mul(0.5).mul(headTaper.max(0.15));
+    // Foresight-style broadcast ribbon: a solid, restrained line that gradually
+    // narrows toward the ball. Only its final endpoint collapses completely.
+    const halfWidthPx = this.uRibbonPixels.mul(0.5).mul(endpointTaper.max(0.025));
     const ndcOffset = perpendicular.mul(side).mul(halfWidthPx.mul(2.0)).div(screenSize);
     const finalClip = vec4(clip.xy.add(ndcOffset.mul(clip.w)), clip.z, clip.w);
 
     const vSide = varying(side, 'vTracerSide');
     const vAlong = varying(along, 'vTracerAlong');
+    const fragmentTaper = smoothstep(0.0, 0.035, vAlong)
+      .mul(oneMinus(smoothstep(0.985, 1.0, vAlong)));
     const edge = float(1.0).sub(vSide.abs());
-    const coreFraction = this.uCorePixels.div(this.uHaloPixels).clamp(0.05, 0.95);
-    // `edge` is 1 at the centre and 0 at the silhouette, so a three-pixel
-    // core inside an eleven-pixel ribbon begins at 1 - 3/11, not at 3/11.
-    const coreThreshold = oneMinus(coreFraction);
-    const core = smoothstep(coreThreshold.sub(0.08), coreThreshold.add(0.08), edge);
-    const halo = smoothstep(0.0, 0.92, edge);
-    const tail = smoothstep(0.0, 0.06, vAlong);
-    // A normal-composited ember silhouette survives a bright fair-weather sky;
-    // additive orange immediately sums toward white and erases the tracer's hue.
-    // The core warms toward the ball while the tail stays deep orange, matching a
-    // broadcast tracer without pretending it is a physical light source.
-    const ember = vec3(0.92, 0.055, 0.006);
-    const amber = vec3(1.0, 0.44, 0.025);
-    const hotCore = vec3(1.0, 0.94, 0.68);
-    const flightColor = mix(ember, amber, smoothstep(0.05, 0.92, vAlong));
-    const color = mix(flightColor, hotCore, core.pow(3.0).mul(0.72));
-    const alpha = halo.mul(float(0.68).add(core.mul(0.32))).mul(tail).mul(this.uOpacity);
+    // The reference has no luminous halo or pale centre. A saturated blue body
+    // carries its contrast, with a roughly one-pixel analytic edge for clean TAA.
+    const edgeCoverage = smoothstep(0.0, 0.30, edge);
+    const deepBroadcastBlue = vec3(0.002, 0.052, 0.44);
+    const flightBlue = vec3(0.0, 0.18, 0.78);
+    const color = mix(deepBroadcastBlue, flightBlue, smoothstep(0.04, 0.86, vAlong));
+    const alpha = edgeCoverage.mul(fragmentTaper).mul(this.uOpacity).clamp(0.0, 1.0);
 
     const mat = new MeshBasicNodeMaterial({
       transparent: true,
@@ -179,11 +182,6 @@ export class Tracer {
     this.uPointCount.value = this.count;
     this.renderer.compute(this._appendCompute);
     this.line.visible = this.count >= 2;
-  }
-
-  fade(dt) {
-    if (this.uOpacity.value > 0) this.uOpacity.value = Math.max(0, this.uOpacity.value - dt / 3.0);
-    if (this.uOpacity.value === 0) this.line.visible = false;
   }
 
   dispose() {

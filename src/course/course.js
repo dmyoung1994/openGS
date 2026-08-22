@@ -171,7 +171,26 @@ function validatePond(raw, index, bounds) {
 
 function validateEnvironment(raw, context) {
   const environment = object(raw, 'course.environment');
-  rejectUnknown(environment, new Set(['objectBudget', 'placements', 'scatter', 'assembly', 'edgeDressing', 'exclusions']), 'course.environment');
+  rejectUnknown(environment, new Set(['foliageAlias', 'foliageAliases', 'objectBudget', 'placements', 'scatter', 'assembly', 'edgeDressing', 'exclusions']), 'course.environment');
+  const foliageAliasPattern = /^(builtin|local)\.[a-z0-9]+(?:[.-][a-z0-9]+)*\.v[1-9][0-9]*$/;
+  const foliageAlias = environment.foliageAlias;
+  if (foliageAlias !== undefined && (typeof foliageAlias !== 'string'
+    || !foliageAliasPattern.test(foliageAlias))) {
+    fail('course.environment.foliageAlias must be a versioned builtin.* or local.* alias');
+  }
+  const foliageAliases = environment.foliageAliases;
+  if (foliageAliases !== undefined) {
+    if (!Array.isArray(foliageAliases) || foliageAliases.length < 1 || foliageAliases.length > 3
+      || foliageAliases.some((alias) => typeof alias !== 'string' || !foliageAliasPattern.test(alias))) {
+      fail('course.environment.foliageAliases must contain 1..3 versioned builtin.* or local.* aliases');
+    }
+    if (new Set(foliageAliases).size !== foliageAliases.length) {
+      fail('course.environment.foliageAliases must not contain duplicates');
+    }
+    if (foliageAlias !== undefined) {
+      fail('course.environment must declare foliageAlias or foliageAliases, not both');
+    }
+  }
   if (!Number.isInteger(environment.objectBudget) || environment.objectBudget < 0 || environment.objectBudget > ENVIRONMENT_OBJECT_BUDGET) {
     fail(`course.environment.objectBudget must be an integer in [0, ${ENVIRONMENT_OBJECT_BUDGET}]`);
   }
@@ -203,6 +222,8 @@ function validateEnvironment(raw, context) {
     fail(`course.environment declares ${total} objects, exceeding its hard budget of ${environment.objectBudget}`);
   }
   return {
+    ...(foliageAlias ? { foliageAlias } : {}),
+    ...(foliageAliases ? { foliageAliases: Object.freeze([...foliageAliases]) } : {}),
     objectBudget: environment.objectBudget,
     placements: Object.freeze(placements), scatter: Object.freeze(scatter), assembly: Object.freeze(assembly),
     edgeDressing: Object.freeze(edgeDressing), exclusions: Object.freeze(exclusions), objectCount: total,

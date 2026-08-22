@@ -11,10 +11,11 @@ import { Vector3, Euler, Quaternion } from 'three';
 // never interferes with normal play. main.js flips it on/off and, while active,
 // calls update(dt) instead of director.update() and re-purposes Space to "rise".
 export class FreeCamera {
-  constructor(camera, domElement, terrain) {
+  constructor(camera, domElement, terrain, { onDragEnd = null } = {}) {
     this.camera = camera;
     this.dom = domElement;
     this.terrain = terrain;
+    this.onDragEnd = typeof onDragEnd === 'function' ? onDragEnd : null;
     this.groundClearance = 0.5;  // stay this far above the turf — don't clip through
     this.active = false;
     this.dragging = false;
@@ -58,6 +59,11 @@ export class FreeCamera {
       if (!this.dragging) return;
       this.dragging = false;
       if (this.active) this.dom.style.cursor = 'grab';
+      // A long mouse look intentionally feeds motion vectors into TRAA while the
+      // camera moves. Once it stops, that history no longer represents the final
+      // view and can smear high-contrast branches across the trunk for several
+      // frames. Invalidate exactly once at the interaction boundary.
+      this.onDragEnd?.();
     };
 
     window.addEventListener('keydown', this._onKeyDown);

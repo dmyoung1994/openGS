@@ -375,6 +375,8 @@
         "columns": 4,
         "rows": 2,
         "frameSize": 512,
+        "cardAspect": 0.3632,
+        "frameUv": { "offsetU": 0.33, "offsetV": 0.04, "scaleU": 0.34, "scaleV": 0.92 },
         "normalDepth": false
       },
       "wind": {
@@ -399,17 +401,17 @@
         "sourceAssetId": "blenderkit-grand-fir-8m",
         "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/89409ff4-ba59-44c1-b482-4da17ed3f718/",
         "sourceHash": "9e30585f4ddeabe5eb9233a5731783dbf905ea642350f10cd7cca993212b5d3f",
-        "pipelineVersion": "build_bk_tree@2-role-split-node-graph-tile-bake+neutral-impostor@2"
+        "pipelineVersion": "build_bk_tree@3-role-split-spatial-card-selection+preserve-area+neutral-impostor@2"
       },
       "dimensions": {
         "width": 5.782,
-        "height": 8.109,
-        "depth": 5.495
+        "height": 8.115,
+        "depth": 5.501
       },
       "bounds": {
         "radius": 2.891,
         "baseY": 0.034,
-        "topY": 8.143
+        "topY": 8.149
       },
       "placement": {
         "minSpacing": 6,
@@ -429,14 +431,14 @@
         {
           "level": 0,
           "url": "/assets/trees/bk_grand_fir_lod0.glb",
-          "sha256": "732526af5a17e8a5d3373dfebd73902da3e9091405ef9c7fc567b930a998d2ae",
+          "sha256": "c34a286f6c7742f2e778ee56a3d6c83e03a748f19a84de11bcd2f14c4dae6d7a",
           "maxDistance": 28,
           "geometry": "glb"
         },
         {
           "level": 1,
           "url": "/assets/trees/bk_grand_fir_lod1.glb",
-          "sha256": "d7789442fd36bf476f1d4885913fd18547e5724485764d2dcd3d04effe1b2e7e",
+          "sha256": "4a11b5dabc11c347796519f249016b65939e0db784f4bd87526130b29aec75f4",
           "maxDistance": 6000,
           "geometry": "glb"
         }
@@ -444,9 +446,9 @@
       "impostor": {
         "kind": "baked-atlas",
         "url": "/assets/trees/bk_grand_fir_impostor.png",
-        "sha256": "bcb2540dac930f36ed0d2de6eb082550f97fa38fc6a8f19642588e88fe096ebe",
+        "sha256": "f43bdca8d82d8885eb911495ace4c4e0d47d3ef79686db81a12de3191ab2e291",
         "sourceLod": 0,
-        "generator": "scripts/bake_tree_impostor.py@2-hard-cutout",
+        "generator": "build_bk_tree@3-spatial-cards-preserve-area+scripts/bake_tree_impostor.py@2-hard-cutout",
         "azimuthFrames": 8,
         "elevationFrames": 1,
         "columns": 4,
@@ -460,6 +462,83 @@
         "branchStiffness": 0.72,
         "leafStiffness": 0.38,
         "gustResponse": 0.52
+      }
+    },
+    {
+      "id": "blenderkit-douglas-fir-summer",
+      "category": "tree",
+      "biomes": [
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "LicenseRef-BlenderKit-RoyaltyFree",
+        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/61faa48a-786a-427f-a318-5242f98447bb/"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "blenderkit-tree-dougles-fir-summer",
+        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/61faa48a-786a-427f-a318-5242f98447bb/",
+        "sourceHash": "19bc2d96a53e6554ccb454e521804994f19ad644b595f17dcd85d9ff2ecb96af",
+        "pipelineVersion": "build_bk_tree@4-native-mature-color-opacity-grade+neutral-impostor@2"
+      },
+      "dimensions": {
+        "width": 13.048,
+        "height": 25.439,
+        "depth": 12.85
+      },
+      "bounds": {
+        "radius": 6.631,
+        "baseY": 0,
+        "topY": 25.439
+      },
+      "placement": {
+        "minSpacing": 6,
+        "maxSlopeDegrees": 30,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 8
+        }
+      },
+      "grounding": {
+        "burialFraction": 0.012
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/bk_douglas_fir_summer_lod0.glb",
+          "sha256": "75f44d7208557ba1cefeb333ceb6f316b3d42517c0dba81951e9df5bc343c04f",
+          "maxDistance": 32,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/bk_douglas_fir_summer_lod1.glb",
+          "sha256": "20f753e00a0debfb3531421c44ec244196a727ed3d26f10ae7a73175ac6161e5",
+          "maxDistance": 6000,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "baked-atlas",
+        "url": "/assets/trees/bk_douglas_fir_summer_impostor.png",
+        "sha256": "e5eeb950ca23c75304964bac8bc657aeee2c7632f8368e438045a4e6c5a7893b",
+        "sourceLod": 0,
+        "generator": "build_bk_tree@4+scripts/bake_tree_impostor.py@2-hard-cutout",
+        "azimuthFrames": 8,
+        "elevationFrames": 1,
+        "columns": 4,
+        "rows": 2,
+        "frameSize": 512,
+        "normalDepth": false
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.98,
+        "branchStiffness": 0.84,
+        "leafStiffness": 0.68,
+        "gustResponse": 0.35
       }
     },
     {

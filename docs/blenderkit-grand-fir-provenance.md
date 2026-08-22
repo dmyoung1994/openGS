@@ -27,7 +27,8 @@ rather than by quietly widening the CC0 check.
 ## Build
 
 ```
-Blender -b --python scripts/build_bk_tree.py -- bk_grand_fir
+Blender -b --python scripts/build_bk_tree.py -- bk_grand_fir_v10 \
+  --output-dir public/assets/trees_candidates/bk_grand_fir_v10
 Blender --background --python scripts/bake_tree_impostor.py -- \
   --input public/assets/trees/bk_grand_fir_lod0.glb \
   --output public/assets/trees/bk_grand_fir_impostor.png --frames 8 --size 512 \
@@ -35,7 +36,7 @@ Blender --background --python scripts/bake_tree_impostor.py -- \
 node scripts/qa_tree_impostor.mjs public/assets/trees/bk_grand_fir_impostor.png
 ```
 
-Pipeline version: `build_bk_tree@2-role-split-node-graph-tile-bake+neutral-impostor@2`
+Pipeline version: `build_bk_tree@3-role-split-spatial-card-selection+preserve-area+neutral-impostor@2`
 
 ### Why role-split rather than a combined atlas
 
@@ -71,11 +72,11 @@ Baked tile means (linear, inside authored coverage):
 
 | file | sha256 | triangles |
 | --- | --- | --- |
-| `bk_grand_fir_lod0.glb` | `732526af5a17e8a5d3373dfebd73902da3e9091405ef9c7fc567b930a998d2ae` | 165 000 (trunk 9k, branches 26k, foliage 78k, foliage_2 52k) |
-| `bk_grand_fir_lod1.glb` | `d7789442fd36bf476f1d4885913fd18547e5724485764d2dcd3d04effe1b2e7e` | 38 499 |
-| `bk_grand_fir_impostor.png` | `bcb2540dac930f36ed0d2de6eb082550f97fa38fc6a8f19642588e88fe096ebe` | 8 azimuth frames, 4x2, 512 px |
+| `bk_grand_fir_lod0.glb` | `c34a286f6c7742f2e778ee56a3d6c83e03a748f19a84de11bcd2f14c4dae6d7a` | 165 000 (trunk 9k, branches 26k, foliage 78k, foliage_2 52k) |
+| `bk_grand_fir_lod1.glb` | `4a11b5dabc11c347796519f249016b65939e0db784f4bd87526130b29aec75f4` | 38 499 (trunk 2.5k, branches 6k, foliage 18k, foliage_2 12k) |
+| `bk_grand_fir_impostor.png` | `f43bdca8d82d8885eb911495ace4c4e0d47d3ef79686db81a12de3191ab2e291` | 8 azimuth frames, 4x2, 512 px |
 
-Dimensions 5.782 x 8.109 x 5.495 m, bounds radius 2.891, baseY 0.034, topY 8.143.
+Dimensions 5.782 x 8.115 x 5.501 m, bounds radius 2.891, baseY 0.034, topY 8.149.
 
 ## Impostor bake change
 
@@ -89,13 +90,15 @@ accepts `--exclude-material` for dropping a role from the card bake.
 QA gate result: coverage 17.0%, mean sRGB 51.1/62.3/31.5, green:red 1.22,
 flat fraction 0.224 — passes.
 
-## LOD1 thins cards, it does not decimate them
+## LODs preserve aggregate foliage area
 
 Collapse decimation welds a needle quad's corners together and destroys the
-silhouette its alpha depends on, so the old LOD1 arrived as shredded lace — and
-it could not even reach its budget (`foliage_2` stopped at 42 776 triangles
-against a 12 000 target). `thin_cards_to()` instead deletes WHOLE seeded cards:
-LOD1 foliage is now 4 508 intact cards / 18 000 triangles and `foliage_2` is
-2 350 / 12 000. Roles are classified by measured alpha coverage
-(`has_cutout` on the baked tile), because marking the opaque trunk as a card role
-thinned it to zero triangles and shipped a fir with no trunk.
+silhouette its alpha depends on. Random whole-card deletion avoids torn cards
+but still creates empty crown tiers. `thin_cards_to()` now bins card centroids in
+a 12 x 12 x 36 crown grid, gives every occupied cell first refusal, and scales
+surviving authored cards around their own centroids (1.12x LOD0, 1.38x LOD1).
+This is bounded aggregate-area preservation: it keeps authored negative space
+while stopping the lower crown from collapsing into a trunk and a few shelves.
+LOD0 retains 19,526 + 10,365 intact foliage cards; LOD1 retains 4,726 + 2,508.
+Roles remain classified by measured alpha coverage (`has_cutout` on the baked
+tile), so opaque trunk and branch geometry are never treated as foliage cards.

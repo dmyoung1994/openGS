@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "compatibilityVersion": 1,
+  "candidateOnly": true,
+  "foliageAlias": "builtin.sugar-maple.northeastern.v1",
+  "species": {
+    "id": "sugar-maple",
+    "commonName": "Sugar maple",
+    "botanicalName": "Acer saccharum",
+    "nativeHeightMeters": 18.5,
+    "clusterScaleMeters": [
+      0.5,
+      4.5
+    ]
+  },
+  "generationSpecHash": "b55e7133f2b5f8eae7c1c4965984bab23990179f09b385e693730271ef49c83f",
+  "processor": {
+    "id": "foliage-pipeline-v3",
+    "config": "sugar-maple.v1.json",
+    "configSha256": "1a1c368bbb4473803335592fc66a9b52d98bf8e8e0b82a116fefd2103eecd5f8"
+  },
+  "requiredFiles": [
+    {
+      "file": "sugar-maple-cluster-atlas.png",
+      "sha256": "0eb668035af8264fd3e70a90f6e8e47656c835afee3d648fc702816392e7ee3e",
+      "bytes": 1454074
+    },
+    {
+      "file": "sugar-maple-cluster-atlas.ktx2",
+      "sha256": "0405f72bbc6f1e75b1aa97779ef8d31988e2803f89f590561cb34fa1933bb411",
+      "bytes": 789260
+    },
+    {
+      "file": "sugar-maple-material-mask.png",
+      "sha256": "f70d98ccf96aaf6c2ebf8a8c49ea4dbaa5b4401968713d10d5c74645b688cc79",
+      "bytes": 804182
+    },
+    {
+      "file": "sugar-maple-material-mask.ktx2",
+      "sha256": "4f8e8ce5f0e543f32d0ea800635cf7d0b5523061fd19753c9cd892fe11d91378",
+      "bytes": 469094
+    },
+    {
+      "file": "sugar-maple-cluster-atlas.json",
+      "sha256": "bd4e0d50fc75e6a6295223a6518c8d9b3a2c8086a25f8f6ce408e0bfc118550e",
+      "bytes": 17692
+    },
+    {
+      "file": "sugar-maple-bark-albedo.jpg",
+      "sha256": "bee5ec22196e9e31ad0c95a5a9b4636571cc0124d5bb27a92f1e307d289cc60d",
+      "bytes": 528304
+    },
+    {
+      "file": "sugar-maple-bark-normal.jpg",
+      "sha256": "2d67393ba76a0f49cf965fa0c99d8c16268e71e87b1203d35539bfdb971a514e",
+      "bytes": 819101
+    },
+    {
+      "file": "sugar-maple-bark-arm.jpg",
+      "sha256": "9e3f82263247ce4f619692cea4c4f6fe9936ff465a86623481849062642c7d05",
+      "bytes": 484806
+    }
+  ],
+  "materialChannels": {
+    "albedo": "sRGB RGBA; A is coverage",
+    "materialMask": "linear RGBA; R roughness, G transmission, B/A coverage"
+  },
+  "structuralMaterial": {
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/island_tree_01",
+    "provenance": "config-relative:../../../docs/deciduous-branch-bark-provenance.md",
+    "textures": {
+      "albedo": "sugar-maple-bark-albedo.jpg",
+      "normal": "sugar-maple-bark-normal.jpg",
+      "arm": "sugar-maple-bark-arm.jpg"
+    }
+  },
+  "runtime": {
+    "metadata": "sugar-maple-cluster-atlas.json",
+    "albedo": {
+      "png": "sugar-maple-cluster-atlas.png",
+      "ktx2": "sugar-maple-cluster-atlas.ktx2"
+    },
+    "materialMask": {
+      "png": "sugar-maple-material-mask.png",
+      "ktx2": "sugar-maple-material-mask.ktx2"
+    },
+    "bark": {
+      "albedo": "sugar-maple-bark-albedo.jpg",
+      "normal": "sugar-maple-bark-normal.jpg",
+      "arm": "sugar-maple-bark-arm.jpg"
+    }
+  },
+  "hierarchy": {
+    "levels": [
+      0,
+      1,
+      2
+    ],
+    "selection": "projected-screen-error",
+    "transition": "exclusive-stable-membership"
+  },
+  "validation": {
+    "state": "candidate",
+    "maximumMeasuredMipDrift": 0.0005443096160888672,
+    "transparentOverdrawEstimate": 0.7134526591372236
+  },
+  "provenance": {
+    "sourceFile": "sugar-maple-source-sheet-v1.png",
+    "sourceSha256": "3d60b5a96bba9bf2c6581fedaf337e9647e8eab405272ee524bcd091af57abea",
+    "promptRecord": "config-relative:../../../public/assets/trees_candidates/generated_sugar_maple/README.md"
+  }
+}

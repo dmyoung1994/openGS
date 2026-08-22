@@ -10,6 +10,7 @@ import {
 import { Noise } from '../util/noise.js';
 import { createRng, deriveSeed } from '../util/random.js';
 import { NORTH_CASCADES_DEM } from '../terrain/northCascadesDem.js';
+import { disposeWebGPUGeometries } from './WebGPUResourceDisposal.js';
 
 const _backdropTextureLoader = new TextureLoader();
 
@@ -17,12 +18,13 @@ const _backdropTextureLoader = new TextureLoader();
 // A shared height sampler owns every patch and distance band, so seams cannot form.
 // The playable heightfield remains the only collision/surface source.
 export class BackdropTerrain {
-  constructor({ terrain, bounds, seed, biome = 'temperate-maritime', environment = null }) {
+  constructor({ terrain, bounds, seed, biome = 'temperate-maritime', environment = null, renderer = null }) {
     this.group = new Group();
     this.group.name = `${biome}-procedural-world`;
     this.biome = biome;
     this.seed = seed >>> 0;
     this.environment = environment;
+    this.renderer = renderer;
 
     if (biome === 'temperate-alpine') this._buildAlpine(terrain, bounds);
     else this._buildMaritime(terrain, bounds);
@@ -144,10 +146,12 @@ export class BackdropTerrain {
       if (object.geometry) geometries.add(object.geometry);
       if (object.material) materials.add(object.material);
     });
-    for (const geometry of geometries) geometry.dispose();
+    if (this.renderer) disposeWebGPUGeometries(this.renderer, [...geometries]);
+    else for (const geometry of geometries) geometry.dispose();
     for (const material of materials) material.dispose();
     for (const texture of this._rockTextures || []) texture.dispose();
     this.group.clear();
+    this.renderer = null;
   }
 }
 

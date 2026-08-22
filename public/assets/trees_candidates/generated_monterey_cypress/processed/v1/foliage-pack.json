@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "compatibilityVersion": 1,
+  "candidateOnly": true,
+  "foliageAlias": "builtin.monterey-cypress.coastal.v1",
+  "species": {
+    "id": "monterey-cypress",
+    "commonName": "Monterey cypress",
+    "botanicalName": "Hesperocyparis macrocarpa",
+    "nativeHeightMeters": 18,
+    "clusterScaleMeters": [
+      0.45,
+      4.2
+    ]
+  },
+  "generationSpecHash": "424746f45674af1c0bbcf7de49c7fa82b7966056f3ab97fad984c87cc0fa5d35",
+  "processor": {
+    "id": "foliage-pipeline-v3",
+    "config": "monterey-cypress.v1.json",
+    "configSha256": "8fbbfc696c0ede57afd1f3a55652574351e91ea622d99ced005507848a3002bc"
+  },
+  "requiredFiles": [
+    {
+      "file": "monterey-cypress-cluster-atlas.png",
+      "sha256": "9929e2e092efe10b0846664d748b4658a1684d3b571e504a398259ffd34800a8",
+      "bytes": 2070079
+    },
+    {
+      "file": "monterey-cypress-cluster-atlas.ktx2",
+      "sha256": "d4f1375c1d0760cb4257046a766154a497da78c1d2baa6a963c2030a2e96d970",
+      "bytes": 1000034
+    },
+    {
+      "file": "monterey-cypress-material-mask.png",
+      "sha256": "f37d53f7740b31fb29559fd494f96b8229cfc80462c837502e3e4ed03de71af1",
+      "bytes": 1404290
+    },
+    {
+      "file": "monterey-cypress-material-mask.ktx2",
+      "sha256": "3b33bea4f0ec6d952c7c39a330681845ca1b371b35d115514bd7b5c660762187",
+      "bytes": 675252
+    },
+    {
+      "file": "monterey-cypress-cluster-atlas.json",
+      "sha256": "042415ea8fa9e446f375788c023a3f98d0b5a623917f8d39deba247754da2d10",
+      "bytes": 16987
+    },
+    {
+      "file": "monterey-cypress-bark-albedo.jpg",
+      "sha256": "5c76836b01c3536fa0e24207b67bf4f3315b53ebe2b4ecc6f08dfcf3f8d74929",
+      "bytes": 725265
+    },
+    {
+      "file": "monterey-cypress-bark-normal.jpg",
+      "sha256": "05c46455531781b6cf18cae0648cf627f60ee942adaa8bcbfd1592fc2506a9e0",
+      "bytes": 1016849
+    },
+    {
+      "file": "monterey-cypress-bark-arm.jpg",
+      "sha256": "336a4680cd571b6076b67afee2310b290b8900d9d126eb39ec1ae92e95be2ea9",
+      "bytes": 801278
+    }
+  ],
+  "materialChannels": {
+    "albedo": "sRGB RGBA; A is coverage",
+    "materialMask": "linear RGBA; R roughness, G transmission, B/A coverage"
+  },
+  "structuralMaterial": {
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/pine_tree_01",
+    "provenance": "config-relative:../../../docs/conifer-v3-provenance.md",
+    "textures": {
+      "albedo": "monterey-cypress-bark-albedo.jpg",
+      "normal": "monterey-cypress-bark-normal.jpg",
+      "arm": "monterey-cypress-bark-arm.jpg"
+    }
+  },
+  "runtime": {
+    "metadata": "monterey-cypress-cluster-atlas.json",
+    "albedo": {
+      "png": "monterey-cypress-cluster-atlas.png",
+      "ktx2": "monterey-cypress-cluster-atlas.ktx2"
+    },
+    "materialMask": {
+      "png": "monterey-cypress-material-mask.png",
+      "ktx2": "monterey-cypress-material-mask.ktx2"
+    },
+    "bark": {
+      "albedo": "monterey-cypress-bark-albedo.jpg",
+      "normal": "monterey-cypress-bark-normal.jpg",
+      "arm": "monterey-cypress-bark-arm.jpg"
+    }
+  },
+  "hierarchy": {
+    "levels": [
+      0,
+      1,
+      2
+    ],
+    "selection": "projected-screen-error",
+    "transition": "exclusive-stable-membership"
+  },
+  "validation": {
+    "state": "candidate",
+    "maximumMeasuredMipDrift": 0.0009033679962158203,
+    "transparentOverdrawEstimate": 0.6542732740563294
+  },
+  "provenance": {
+    "sourceFile": "monterey-cypress-source-sheet-v1.png",
+    "sourceSha256": "b6c8c8d17a190ffa3ec606ad79fdc59f1d140570594106287c3b9dcaccef5606",
+    "promptRecord": "config-relative:../../../public/assets/trees_candidates/generated_monterey_cypress/README.md"
+  }
+}

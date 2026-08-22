@@ -1,0 +1,850 @@
+{
+  "schemaVersion": 2,
+  "candidateOnly": true,
+  "foliageAlias": "builtin.sugar-maple.northeastern.v1",
+  "species": "sugar-maple",
+  "coordinateSystem": {
+    "up": "+Y",
+    "branchBaseDirection": "card-local edge declared per cluster baseEdge",
+    "units": "meters"
+  },
+  "source": {
+    "file": "sugar-maple-source-sheet-v1.png",
+    "sha256": "3d60b5a96bba9bf2c6581fedaf337e9647e8eab405272ee524bcd091af57abea",
+    "generatedAt": "2026-08-21",
+    "provider": "OpenAI ImageGen built-in tool",
+    "mode": "stylized-concept",
+    "promptRecord": "config-relative:../../../public/assets/trees_candidates/generated_sugar_maple/README.md"
+  },
+  "sourceLayout": {
+    "mode": "components-2x4",
+    "columns": 2,
+    "rows": 4
+  },
+  "atlas": {
+    "width": 2048,
+    "height": 2048,
+    "padding": 24,
+    "alphaCleanupThreshold": 18,
+    "alphaCoverageThreshold": 51,
+    "rgbDilationRadius": 18,
+    "png": "sugar-maple-cluster-atlas.png",
+    "ktx2": "sugar-maple-cluster-atlas.ktx2",
+    "materialMaskPng": "sugar-maple-material-mask.png",
+    "materialMaskKtx2": "sugar-maple-material-mask.ktx2"
+  },
+  "metrics": {
+    "alphaCoverage": 0.08136487007141113,
+    "meanAlpha": 0.07623324487723557,
+    "occupiedArea": 1190969,
+    "atlasUtilization": 0.2839491367340088,
+    "transparentOverdrawEstimate": 0.7134526591372236,
+    "maximumMeasuredMipDrift": 0.0005443096160888672,
+    "mipCoverage": [
+      {
+        "level": 0,
+        "width": 2048,
+        "height": 2048,
+        "thresholdCoverage": 0.08136487007141113,
+        "meanAlpha": 0.07623324487723557,
+        "coverageDrift": 0,
+        "alphaScale": 1
+      },
+      {
+        "level": 1,
+        "width": 1024,
+        "height": 1024,
+        "thresholdCoverage": 0.08133506774902344,
+        "meanAlpha": 0.0547999662511489,
+        "coverageDrift": -0.000029802322387695312,
+        "alphaScale": 0.71875
+      },
+      {
+        "level": 2,
+        "width": 512,
+        "height": 512,
+        "thresholdCoverage": 0.08142852783203125,
+        "meanAlpha": 0.043650399002374385,
+        "coverageDrift": 0.00006365776062011719,
+        "alphaScale": 0.796875
+      },
+      {
+        "level": 3,
+        "width": 256,
+        "height": 256,
+        "thresholdCoverage": 0.0816802978515625,
+        "meanAlpha": 0.03887526568244485,
+        "coverageDrift": 0.0003154277801513672,
+        "alphaScale": 0.890625
+      },
+      {
+        "level": 4,
+        "width": 128,
+        "height": 128,
+        "thresholdCoverage": 0.0819091796875,
+        "meanAlpha": 0.03589680989583333,
+        "coverageDrift": 0.0005443096160888672,
+        "alphaScale": 0.921875
+      },
+      {
+        "level": 5,
+        "width": 64,
+        "height": 64,
+        "thresholdCoverage": 0.08154296875,
+        "meanAlpha": 0.03539656096813725,
+        "coverageDrift": 0.0001780986785888672,
+        "alphaScale": 0.984375
+      },
+      {
+        "level": 6,
+        "width": 32,
+        "height": 32,
+        "thresholdCoverage": 0.0810546875,
+        "meanAlpha": 0.03329120710784314,
+        "coverageDrift": -0.0003101825714111328,
+        "alphaScale": 0.9375
+      },
+      {
+        "level": 7,
+        "width": 16,
+        "height": 16,
+        "thresholdCoverage": 0.08203125,
+        "meanAlpha": 0.04068627450980392,
+        "coverageDrift": 0.0006663799285888672,
+        "alphaScale": 1.21875
+      },
+      {
+        "level": 8,
+        "width": 8,
+        "height": 8,
+        "thresholdCoverage": 0.078125,
+        "meanAlpha": 0.050980392156862744,
+        "coverageDrift": -0.003239870071411133,
+        "alphaScale": 1.25
+      },
+      {
+        "level": 9,
+        "width": 4,
+        "height": 4,
+        "thresholdCoverage": 0.0625,
+        "meanAlpha": 0.06053921568627451,
+        "coverageDrift": -0.018864870071411133,
+        "alphaScale": 1.1875
+      },
+      {
+        "level": 10,
+        "width": 2,
+        "height": 2,
+        "thresholdCoverage": 0,
+        "meanAlpha": 0.000980392156862745,
+        "coverageDrift": -0.08136487007141113,
+        "alphaScale": 0.015625
+      },
+      {
+        "level": 11,
+        "width": 1,
+        "height": 1,
+        "thresholdCoverage": 0,
+        "meanAlpha": 0,
+        "coverageDrift": -0.08136487007141113,
+        "alphaScale": 0.015625
+      }
+    ],
+    "compression": {
+      "mode": "UASTC",
+      "atlasPngBytes": 1454074,
+      "atlasKtx2Bytes": 789260,
+      "maskPngBytes": 804182,
+      "maskKtx2Bytes": 469094,
+      "atlasRatio": 0.542792182516158,
+      "maskRatio": 0.5833182040881293
+    }
+  },
+  "clusters": [
+    {
+      "name": "sparse-outer-terminal",
+      "species": "sugar-maple",
+      "density": "sparse",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.5,
+      "pixelBounds": {
+        "x": 996,
+        "y": 494,
+        "width": 339,
+        "height": 360
+      },
+      "sourceBounds": {
+        "x": 106,
+        "y": 4,
+        "width": 339,
+        "height": 360
+      },
+      "aspect": 0.9416666666666667,
+      "alphaCoverage": 0.1779334644378892,
+      "supportHullUv": [
+        [
+          0.029586,
+          0.573816
+        ],
+        [
+          0.118343,
+          0.384401
+        ],
+        [
+          0.476331,
+          0.027855
+        ],
+        [
+          0.505917,
+          0.027855
+        ],
+        [
+          0.970414,
+          0.389972
+        ],
+        [
+          0.970414,
+          0.392758
+        ],
+        [
+          0.931953,
+          0.657382
+        ],
+        [
+          0.597633,
+          0.972145
+        ],
+        [
+          0.449704,
+          0.930362
+        ],
+        [
+          0.068047,
+          0.654596
+        ]
+      ],
+      "supportHullArea": 0.5452031686225,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.952145,
+        "lateralHalfExtent": 0.470414
+      },
+      "rectangularTransparentOverdrawEstimate": 0.8220665355621108,
+      "transparentOverdrawEstimate": 0.673638242258473,
+      "uv": {
+        "u0": 0.486328125,
+        "v0": 0.5830078125,
+        "u1": 0.65185546875,
+        "v1": 0.7587890625
+      }
+    },
+    {
+      "name": "small-young-branchlet",
+      "species": "sugar-maple",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.3,
+      "pixelBounds": {
+        "x": 1383,
+        "y": 494,
+        "width": 281,
+        "height": 333
+      },
+      "sourceBounds": {
+        "x": 622,
+        "y": 31,
+        "width": 281,
+        "height": 333
+      },
+      "aspect": 0.8438438438438438,
+      "alphaCoverage": 0.2010515853932224,
+      "supportHullUv": [
+        [
+          0.035714,
+          0.569277
+        ],
+        [
+          0.478571,
+          0.03012
+        ],
+        [
+          0.514286,
+          0.03012
+        ],
+        [
+          0.964286,
+          0.539157
+        ],
+        [
+          0.714286,
+          0.900602
+        ],
+        [
+          0.310714,
+          0.945783
+        ],
+        [
+          0.1,
+          0.683735
+        ],
+        [
+          0.035714,
+          0.572289
+        ]
+      ],
+      "supportHullArea": 0.5027113865534999,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.925783,
+        "lateralHalfExtent": 0.464286
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7989484146067776,
+      "transparentOverdrawEstimate": 0.6000655828156263,
+      "uv": {
+        "u0": 0.67529296875,
+        "v0": 0.59619140625,
+        "u1": 0.8125,
+        "v1": 0.7587890625
+      }
+    },
+    {
+      "name": "layered-ascending-spray",
+      "species": "sugar-maple",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 3.5,
+      "pixelBounds": {
+        "x": 48,
+        "y": 48,
+        "width": 395,
+        "height": 398
+      },
+      "sourceBounds": {
+        "x": 90,
+        "y": 365,
+        "width": 395,
+        "height": 398
+      },
+      "aspect": 0.992462311557789,
+      "alphaCoverage": 0.2896698683289867,
+      "supportHullUv": [
+        [
+          0.025381,
+          0.284635
+        ],
+        [
+          0.451777,
+          0.025189
+        ],
+        [
+          0.472081,
+          0.025189
+        ],
+        [
+          0.890863,
+          0.324937
+        ],
+        [
+          0.974619,
+          0.493703
+        ],
+        [
+          0.85533,
+          0.770781
+        ],
+        [
+          0.540609,
+          0.974811
+        ],
+        [
+          0.261421,
+          0.861461
+        ],
+        [
+          0.025381,
+          0.287154
+        ]
+      ],
+      "supportHullArea": 0.567837307928,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.954811,
+        "lateralHalfExtent": 0.474619
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7103301316710133,
+      "transparentOverdrawEstimate": 0.4898717215570556,
+      "uv": {
+        "u0": 0.0234375,
+        "v0": 0.7822265625,
+        "u1": 0.21630859375,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "dense-interior",
+      "species": "sugar-maple",
+      "density": "dense",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 3.8,
+      "pixelBounds": {
+        "x": 491,
+        "y": 48,
+        "width": 429,
+        "height": 398
+      },
+      "sourceBounds": {
+        "x": 557,
+        "y": 365,
+        "width": 429,
+        "height": 398
+      },
+      "aspect": 1.0778894472361809,
+      "alphaCoverage": 0.40503801056564875,
+      "supportHullUv": [
+        [
+          0.023364,
+          0.755668
+        ],
+        [
+          0.056075,
+          0.445844
+        ],
+        [
+          0.469626,
+          0.025189
+        ],
+        [
+          0.490654,
+          0.025189
+        ],
+        [
+          0.936916,
+          0.304786
+        ],
+        [
+          0.976636,
+          0.491184
+        ],
+        [
+          0.920561,
+          0.609572
+        ],
+        [
+          0.565421,
+          0.974811
+        ],
+        [
+          0.392523,
+          0.957179
+        ]
+      ],
+      "supportHullArea": 0.5883616781819999,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.954811,
+        "lateralHalfExtent": 0.476636
+      },
+      "rectangularTransparentOverdrawEstimate": 0.5949619894343512,
+      "transparentOverdrawEstimate": 0.31158329037134036,
+      "uv": {
+        "u0": 0.23974609375,
+        "v0": 0.7822265625,
+        "u1": 0.44921875,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "forked-edge",
+      "species": "sugar-maple",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 3.2,
+      "pixelBounds": {
+        "x": 481,
+        "y": 494,
+        "width": 467,
+        "height": 361
+      },
+      "sourceBounds": {
+        "x": 36,
+        "y": 766,
+        "width": 467,
+        "height": 361
+      },
+      "aspect": 1.293628808864266,
+      "alphaCoverage": 0.22638756250481948,
+      "supportHullUv": [
+        [
+          0.021459,
+          0.547222
+        ],
+        [
+          0.060086,
+          0.380556
+        ],
+        [
+          0.495708,
+          0.027778
+        ],
+        [
+          0.517167,
+          0.030556
+        ],
+        [
+          0.944206,
+          0.530556
+        ],
+        [
+          0.978541,
+          0.727778
+        ],
+        [
+          0.875536,
+          0.916667
+        ],
+        [
+          0.206009,
+          0.972222
+        ],
+        [
+          0.083691,
+          0.916667
+        ]
+      ],
+      "supportHullArea": 0.62920207928,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.952222,
+        "lateralHalfExtent": 0.478541
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7736124374951805,
+      "transparentOverdrawEstimate": 0.640198959984563,
+      "uv": {
+        "u0": 0.23486328125,
+        "v0": 0.58251953125,
+        "u1": 0.462890625,
+        "v1": 0.7587890625
+      }
+    },
+    {
+      "name": "dark-mature",
+      "species": "sugar-maple",
+      "density": "dense",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 3.4,
+      "pixelBounds": {
+        "x": 48,
+        "y": 494,
+        "width": 385,
+        "height": 366
+      },
+      "sourceBounds": {
+        "x": 565,
+        "y": 761,
+        "width": 385,
+        "height": 366
+      },
+      "aspect": 1.0519125683060109,
+      "alphaCoverage": 0.4189837484919452,
+      "supportHullUv": [
+        [
+          0.026042,
+          0.550685
+        ],
+        [
+          0.223958,
+          0.178082
+        ],
+        [
+          0.486979,
+          0.027397
+        ],
+        [
+          0.510417,
+          0.027397
+        ],
+        [
+          0.919271,
+          0.309589
+        ],
+        [
+          0.973958,
+          0.610959
+        ],
+        [
+          0.609375,
+          0.953425
+        ],
+        [
+          0.257813,
+          0.967123
+        ],
+        [
+          0.145833,
+          0.868493
+        ]
+      ],
+      "supportHullArea": 0.6167061267014998,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.947123,
+        "lateralHalfExtent": 0.473958
+      },
+      "rectangularTransparentOverdrawEstimate": 0.5810162515080548,
+      "transparentOverdrawEstimate": 0.32061036796745956,
+      "uv": {
+        "u0": 0.0234375,
+        "v0": 0.580078125,
+        "u1": 0.21142578125,
+        "v1": 0.7587890625
+      }
+    },
+    {
+      "name": "weathered-variation",
+      "species": "sugar-maple",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.9,
+      "pixelBounds": {
+        "x": 1473,
+        "y": 48,
+        "width": 393,
+        "height": 397
+      },
+      "sourceBounds": {
+        "x": 76,
+        "y": 1125,
+        "width": 393,
+        "height": 397
+      },
+      "aspect": 0.9899244332493703,
+      "alphaCoverage": 0.2972612661116132,
+      "supportHullUv": [
+        [
+          0.02551,
+          0.472222
+        ],
+        [
+          0.030612,
+          0.406566
+        ],
+        [
+          0.507653,
+          0.025253
+        ],
+        [
+          0.522959,
+          0.025253
+        ],
+        [
+          0.836735,
+          0.285354
+        ],
+        [
+          0.97449,
+          0.699495
+        ],
+        [
+          0.954082,
+          0.757576
+        ],
+        [
+          0.798469,
+          0.929293
+        ],
+        [
+          0.443878,
+          0.974747
+        ],
+        [
+          0.030612,
+          0.681818
+        ]
+      ],
+      "supportHullArea": 0.6067495584285,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.954747,
+        "lateralHalfExtent": 0.47449
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7027387338883868,
+      "transparentOverdrawEstimate": 0.5100758426894796,
+      "uv": {
+        "u0": 0.71923828125,
+        "v0": 0.78271484375,
+        "u1": 0.9111328125,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "silhouette-breaker",
+      "species": "sugar-maple",
+      "density": "sparse",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 3.6,
+      "pixelBounds": {
+        "x": 968,
+        "y": 48,
+        "width": 457,
+        "height": 398
+      },
+      "sourceBounds": {
+        "x": 544,
+        "y": 1124,
+        "width": 457,
+        "height": 398
+      },
+      "aspect": 1.1482412060301508,
+      "alphaCoverage": 0.23344842373794575,
+      "supportHullUv": [
+        [
+          0.02193,
+          0.61461
+        ],
+        [
+          0.179825,
+          0.18136
+        ],
+        [
+          0.392544,
+          0.025189
+        ],
+        [
+          0.407895,
+          0.025189
+        ],
+        [
+          0.97807,
+          0.387909
+        ],
+        [
+          0.97807,
+          0.506297
+        ],
+        [
+          0.791667,
+          0.871537
+        ],
+        [
+          0.616228,
+          0.947103
+        ],
+        [
+          0.285088,
+          0.962217
+        ],
+        [
+          0.026316,
+          0.622166
+        ]
+      ],
+      "supportHullArea": 0.6088176856824999,
+      "attachmentFrame": {
+        "baseUv": [
+          0.5,
+          0.02
+        ],
+        "axisUv": [
+          0,
+          1
+        ],
+        "growthExtent": 0.942217,
+        "lateralHalfExtent": 0.47807
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7665515762620543,
+      "transparentOverdrawEstimate": 0.6165544641229596,
+      "uv": {
+        "u0": 0.47265625,
+        "v0": 0.7822265625,
+        "u1": 0.69580078125,
+        "v1": 0.9765625
+      }
+    }
+  ]
+}

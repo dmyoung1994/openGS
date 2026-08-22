@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 2,
+  "source": "conifer_v9_lod0.glb",
+  "representation": "lighting-neutral-srgb-albedo-alpha",
+  "runtimeLightingRequired": true,
+  "frames": 8,
+  "columns": 4,
+  "rows": 2,
+  "frameSize": 512,
+  "gutterPixels": 8,
+  "azimuthConvention": "frame i = i / frames * 2pi, camera clockwise around glTF +Y",
+  "bakeUpAxis": "+Z",
+  "boundsMin": [
+    -3.067023754119873,
+    -2.8506414890289307,
+    0.0
+  ],
+  "boundsMax": [
+    3.174440622329712,
+    3.3612701892852783,
+    18.92620277404785
+  ]
+}

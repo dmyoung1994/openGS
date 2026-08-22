@@ -13,6 +13,7 @@ import { surface } from '../physics/groundInteraction.js';
 import { buildZoneMap, zoneAt as zoneAtTexel } from './ZoneMap.js';
 import {
   turfBase,
+  turfBladeBase,
   MOW_STRIPE_PERIOD_M,
   MOW_STRIPE_CROSS_SLOPE,
 } from './turfColor.js';
@@ -512,12 +513,15 @@ export class Terrain {
     // authoritative 0.6 m height texture remains intact for bilinear reconstruction,
     // normals, and physics. This removes low-value far vertices without changing any
     // golfer-height landform or surface boundary. The outer ring keeps its 4.8 m
-    // anchor so camera snapping/temporal history remain unchanged.
+    // anchor so camera snapping/temporal history remain unchanged. Its 384 m
+    // reach is intentional: the flight director can rise without following the
+    // ball all the way downrange, and a 288 m reach exposed sky between the
+    // playable edge and the backdrop shell.
     const rings = [
       { half: 36, step: 0.9, inner: 0 },
       { half: 72, step: 1.8, inner: 36 },
       { half: 144, step: 3.6, inner: 72 },
-      { half: 288, step: 4.8, inner: 144 },
+      { half: 384, step: 4.8, inner: 144 },
     ];
     const group = new Group();
     group.name = 'terrain-gpu-clipmap';
@@ -1222,7 +1226,7 @@ export class Terrain {
     // A 20 mm collar is optically rougher than an 11 mm fairway; the former 0.75
     // value inverted that physical ordering and merged collar/green into one sheen.
     zoneRoughness = mix(zoneRoughness, float(0.87), m.fringe);
-    zoneRoughness = mix(zoneRoughness, float(0.66), m.green);
+    zoneRoughness = mix(zoneRoughness, float(0.60), m.green);
     zoneRoughness = mix(zoneRoughness, float(0.75), m.tee);
     const surfaceRoughness = mix(mix(rGrassV, float(0.97), steepR), zoneRoughness, 0.56);
     // The water-bank shelf is damp mineral soil/gravel, not a painted radial ring:
@@ -1243,7 +1247,7 @@ export class Terrain {
     let cutSpecular = float(0.90);
     cutSpecular = mix(cutSpecular, float(0.98), m.visualFairway);
     cutSpecular = mix(cutSpecular, float(0.92), m.fringe);
-    cutSpecular = mix(cutSpecular, float(1.14), m.green);
+    cutSpecular = mix(cutSpecular, float(1.20), m.green);
     cutSpecular = mix(cutSpecular, float(1.05), m.tee);
     mat.specularIntensityNode = this.uSpecular.mul(mowSpecular).mul(cutSpecular);
     // The zone tint is the turf's ALBEDO — the light rig and tone-map decide how
@@ -1253,6 +1257,10 @@ export class Terrain {
     // video-game green. Reference turf photographs at H 80 deg / S 0.20 / L 0.36.
     const grassCol = (name, extra = 1) => {
       const c = turfBase(name, new Color()).multiplyScalar(extra);
+      return vec3(c.r, c.g, c.b);
+    };
+    const roughUndercoat = (name) => {
+      const c = turfBladeBase(name, new Color());
       return vec3(c.r, c.g, c.b);
     };
     // Sand keeps its darkening: removing it along with the turf's blew the bunkers out
@@ -1270,11 +1278,16 @@ export class Terrain {
       // occlusion for real (its canopy-AO channel means 0.596 against the mown bake's
       // 0.758, because long grass genuinely shadows itself far more), and stacking a
       // hand-picked multiplier on top of a measured one double-counts.
-      rough: grassCol('rough'), deepRough: grassCol('deepRough'),
-      // Maintained turf shares one pigment family. Green/fringe identity comes from
-      // real cut height, roughness, normal response, gameplay SDF, and the flag—not
-      // a brighter nested albedo decal that becomes two target rings from overhead.
-      green: grassCol('fairway'), fringe: grassCol('fairway'), tee: grassCol('tee'),
+      // Use the exact same chlorophyll tint as the geometry above. Texture, AO,
+      // normals, and real lighting still give the substrate depth; exposed pixels
+      // no longer reveal a different grey-green material between blade ribbons.
+      rough: roughUndercoat('rough'), deepRough: roughUndercoat('deepRough'),
+      // The putting surface is the same believable plant family but not the same
+      // material as fairway. Its dedicated gameplay pigment is slightly cleaner and
+      // more yellow-green; the restrained exposure multiplier prevents a bright
+      // nested target decal while cut height and dielectric response do most of the
+      // separation under real light.
+      green: grassCol('green', 0.92), fringe: grassCol('fringe', 0.96), tee: grassCol('tee'),
       sand: vec3(sc.r, sc.g, sc.b),
     };
     mat.colorNode = turfColorNode(tAlb.rgb, m, {
@@ -1619,11 +1632,13 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   // A restrained grade separates cut turf families at gameplay distance while
   // preserving the physical palette: putting green is brighter/cleaner, fairway
   // olive, rough/deep rough darker and more moisture-muted.
-  let zoneGrade = float(0.88);
-  zoneGrade = mix(zoneGrade, float(0.84), m.rough);
+  // The geometric blade colour averages about 0.90 after its stable age/tuft
+  // variation. Use the same mean undercoat value for both long-grass classes.
+  let zoneGrade = float(0.90);
+  zoneGrade = mix(zoneGrade, float(0.90), m.rough);
   zoneGrade = mix(zoneGrade, float(0.96), m.visualFairway);
   zoneGrade = mix(zoneGrade, float(0.940), m.fringe);
-  zoneGrade = mix(zoneGrade, float(0.925), m.green);
+  zoneGrade = mix(zoneGrade, float(0.950), m.green);
   zoneGrade = mix(zoneGrade, float(0.985), m.tee);
   c = c.mul(mix(zoneGrade, float(1.0), m.sand));
 

@@ -10,7 +10,7 @@ const field = () => new Uint8Array(41 * 21);
 const grid = Object.freeze({ minX: -20, minZ: -10, spacing: 1 });
 const at = (data, x, z) => data[(z - grid.minZ) * 41 + (x - grid.minX)];
 
-test('dense-canopy bake keeps isolated crowns mild and makes only overlap strong', () => {
+test('dense-canopy bake keeps suppression bounded when perimeter crowns overlap', () => {
   const isolated = bakeDenseCanopyMask(field(), 41, 21, grid, [
     { x: 0, z: 0, canopyRadius: 10 },
   ]);
@@ -27,9 +27,8 @@ test('dense-canopy bake keeps isolated crowns mild and makes only overlap strong
   const first = bakeDenseCanopyMask(field(), 41, 21, grid, placements);
   const second = bakeDenseCanopyMask(field(), 41, 21, grid, placements);
   assert.deepEqual(first, second, 'the authored world-space field must be deterministic');
-  assert.ok(at(first, 0, 0) > 112, 'overlapping crown interiors must create strong suppression');
-  assert.ok(at(first, 0, 0) > at(isolated, 0, 0),
-    'forest overlap must be materially stronger than an isolated crown');
+  assert.ok(at(first, 0, 0) <= at(isolated, 0, 0),
+    'adding neighboring crowns must not repeatedly erase the same grass roots');
   assert.equal(at(first, -13, 0), 0, 'the mask cannot extend beyond authored crown bounds');
   assert.equal(at(first, 13, 0), 0, 'the mask cannot extend beyond authored crown bounds');
 
@@ -76,20 +75,22 @@ test('canopy suppression changes only stable candidate density, never grass geom
   assert.match(source, /const GRID = 192/);
   assert.match(source, /const ROUGH_BLADE_WIDTH_MIN_M = 0\.0075/);
   assert.match(source, /const ROUGH_BLADE_WIDTH_MAX_M = 0\.018/);
-  assert.match(source, /const FAR_TIER_TERMINAL_RADIUS = 0\.74/);
+  assert.match(source, /const BLADE_H = \{ rough: 0\.20, deepRough: 0\.32 \}/,
+    'rough and deep rough must retain the restored dense blade profile');
   assert.match(source, /const BLADE_SEGMENTS = 3/);
 
   const bakeBody = source.slice(
     source.indexOf('export function bakeDenseCanopyMask'),
-    source.indexOf('// One curve owns both stochastic thinning'),
+    source.indexOf('function densityAtDistance'),
   );
   assert.doesNotMatch(bakeBody, /camera|ball/i,
     'the suppression field must remain static and world-space authored');
 });
 
-test('Range shares exact authored conifer records between beauty and grass bake', async () => {
+test('Range shares its exact selected tree records between beauty and grass bake', async () => {
   const source = await rangeSource();
-  assert.match(source, /const treePlacements = this\._treePlacements\(\)/);
+  assert.match(source, /const allTreePlacements = this\._treePlacements\(\)/);
+  assert.match(source, /const treePlacements = this\.foliageAlias[\s\S]*buildRangePerimeterFoliage/);
   assert.match(source, /canopyPlacements: treePlacements/);
   assert.match(source, /this\._buildTreeLine\(treePlacements\)/);
   assert.match(source, /canopyRadius: asset\.bounds\.radius \* placement\.scale/,

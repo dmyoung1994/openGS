@@ -118,6 +118,32 @@ const TREE_ALPHA_CUTOFF = 0.05;
 // at address distance. A lower far-only threshold preserves that real thin feature;
 // geometry retains the crisper cutoff above.
 const TREE_IMPOSTOR_ALPHA_CUTOFF = 0.06;
+
+// Reject the atlas's lowest-alpha fringe rather than turning it into fully opaque
+// needle hairs. A fixed measured cutoff remains depth-writing, deterministic, and
+// stable on moving crowns; alpha hashing was reviewed here but produced persistent
+// stipple under wind even after TRAA accumulation.
+const TREE_FOLIAGE_ALPHA_CUTOFF = 0.05;
+function useStableFoliageCoverage(material, alphaNode) {
+  material.opacityNode = alphaNode;
+  material.alphaTest = TREE_FOLIAGE_ALPHA_CUTOFF;
+  material.alphaHash = false;
+  material.transparent = false;
+  material.depthWrite = true;
+}
+
+// Alpha-cut conifer sprays cannot tolerate independent high-frequency vertex
+// phases: the resulting triangle shear changes texture coverage faster than TRAA
+// can reproject it. Keep the authored hierarchy, but make every semantic layer a
+// coherent low-frequency response to the shared gust. Leaves travel only slightly
+// farther than their supporting branches, so attachment points never crawl.
+function treeWindResponses(wind) {
+  if (wind.model !== 'hierarchical-tree-v1') return Object.freeze({ trunk: 0, branch: 0, leaf: 0, gust: 0 });
+  const trunk = (1 - wind.trunkStiffness) * 2.0;
+  const branch = trunk + Math.max(0, wind.trunkStiffness - wind.branchStiffness) * 0.75;
+  const leaf = branch + Math.max(0, wind.branchStiffness - wind.leafStiffness) * 0.3;
+  return Object.freeze({ trunk, branch, leaf, gust: wind.gustResponse });
+}
 // At the 72–108m band, crowns are still large enough for any binary coverage
 // transition to read as holes. Keep full geometry through the playable edge and
 // move the GPU dual-list dissolve deeper into the tree line.
@@ -169,17 +195,18 @@ function treeResidencyThresholds(proto) {
 // has mean sRGB [65.28, 75.84, 38.14], median [67, 78, 38], and p90
 // [93, 109, 58]; its median is linear [0.0561, 0.0762, 0.0194]. The prior
 // sub-unity grades pushed this already-dark source below a plausible conifer
-// reflectance. These bounded linear targets preserve the authored olive hue:
-// bark target mean [0.080, 0.065, 0.048], needle target median [0.124, 0.168,
-// 0.042]. The p90 remains below 1.0 in every channel after this normalization.
+// reflectance. The earlier isolated-tree target was too bright once hundreds of
+// crowns formed one sunlit canopy wall, so the production target preserves the
+// authored olive hue at a darker forest-average median [0.080, 0.115, 0.030].
+// The p90 remains below 1.0 in every channel after this normalization.
 // Keep these constants scoped to the v8 atlas; shared PMREM, sun, and shadows
 // remain the sole lighting response.
 const CONIFER_CANDIDATE_BARK_SOURCE_LINEAR = Object.freeze([0.0662, 0.0551, 0.0402]);
 const CONIFER_CANDIDATE_BARK_TARGET_LINEAR = Object.freeze([0.080, 0.065, 0.048]);
 const CONIFER_CANDIDATE_NEEDLE_SOURCE_MEDIAN_LINEAR = Object.freeze([0.0561, 0.0762, 0.0194]);
-const CONIFER_CANDIDATE_NEEDLE_TARGET_MEDIAN_LINEAR = Object.freeze([0.124, 0.168, 0.042]);
+const CONIFER_CANDIDATE_NEEDLE_TARGET_MEDIAN_LINEAR = Object.freeze([0.080, 0.115, 0.030]);
 const CONIFER_CANDIDATE_BARK_LINEAR_NORMALIZATION = vec3(1.21, 1.18, 1.19);
-const CONIFER_CANDIDATE_NEEDLE_LINEAR_NORMALIZATION = vec3(2.21, 2.21, 2.16);
+const CONIFER_CANDIDATE_NEEDLE_LINEAR_NORMALIZATION = vec3(1.43, 1.51, 1.55);
 // v8 response compression. The source median above is the measured
 // linear target, not a baked light value: blending toward it keeps low-alpha
 // interior needles from collapsing to black while pulling bright tips back into
@@ -209,8 +236,14 @@ function foliageColorNode(material, tintNode) {
   // narrow and bias the response toward olive rather than multiplying a cool
   // mint tint through the PBR key/IBL twice. This is albedo shaping only; sky,
   // sun direction, shadows, and roughness remain renderer-owned.
-  return saturation(baseRgb.mul(mix(vec3(1), tintNode, 0.22)), 0.78)
-    .mul(vec3(0.80, 0.84, 0.56));
+  // The role-split licensed trees bake their evaluated Blender node graphs to
+  // lighting-neutral tiles. Their opaque needle texels measure only about
+  // 0.05/0.06/0.02 in linear light; the former sub-unit olive multiplier then
+  // crushed a physically valid canopy into near-black stipple. Normalize that
+  // low-exposure albedo into the same scene range as the vertex-colour conifers.
+  // This remains diffuse reflectance under real sun/sky/shadows, never emission.
+  return saturation(baseRgb.mul(mix(vec3(1), tintNode, 0.18)), 0.82)
+    .mul(vec3(1.46, 1.58, 1.02));
 }
 
 // Thin conifer needles transmit a small amount of sunward green when the source
@@ -455,8 +488,7 @@ function makeFoliageMaterial(base, tintNode, baseColor = null) {
     // Keep authored alpha continuous and let the fixed alpha test perform the
     // single discard. A compare/select here duplicated that branch in the
     // fragment graph for every needle texel without improving coverage.
-    m.opacityNode = texel.a;
-    m.alphaTest = TREE_ALPHA_CUTOFF;
+    useStableFoliageCoverage(m, texel.a);
   }
   m.needsUpdate = true;
   return m;
@@ -532,11 +564,21 @@ function makeTreeBeautyRecords(proto, placements, seed) {
 // per-frame upload, or readback. Source slots retain stable IDs while output slots
 // compact and reorder independently.
 export class TreeBeautyLod {
-  constructor({ renderer, camera, motionHistory, environment, proto, midProto, impostor, impostorTexture, placements, seed, lodNear = TREE_LOD_NEAR, lodFar = TREE_LOD_FAR }) {
+  constructor({ renderer, camera, motionHistory, environment, wind, proto, midProto, impostor, impostorTexture, placements, seed, lodNear = TREE_LOD_NEAR, lodFar = TREE_LOD_FAR, forceFullLod = false }) {
     if (!renderer?.isWebGPURenderer) throw new Error('TreeBeautyLod requires WebGPU; no compatibility tree path exists.');
     if (!camera) throw new Error('TreeBeautyLod requires the active camera.');
     if (!motionHistory) throw new Error('TreeBeautyLod requires SceneManager motion history for TRAA velocity.');
     if (!(environment instanceof EnvironmentGpuBindings)) throw new Error('TreeBeautyLod requires shared EnvironmentGpuBindings.');
+    if (!wind || !['none', 'hierarchical-tree-v1'].includes(wind.model)) {
+      throw new Error('TreeBeautyLod requires the catalog wind contract.');
+    }
+    if (wind.model === 'hierarchical-tree-v1') {
+      for (const key of ['trunkStiffness', 'branchStiffness', 'leafStiffness', 'gustResponse']) {
+        if (!Number.isFinite(wind[key]) || wind[key] < 0 || wind[key] > 1) {
+          throw new Error(`TreeBeautyLod wind.${key} must be finite in [0, 1].`);
+        }
+      }
+    }
     if (!proto?.parts?.length) throw new Error('TreeBeautyLod requires a catalog LOD0 prototype with at least one part.');
     if (!midProto?.parts?.length) throw new Error('TreeBeautyLod requires a catalog LOD1 prototype with at least one part.');
     assertCompatibleTreeLods(proto, midProto);
@@ -563,6 +605,9 @@ export class TreeBeautyLod {
     this.camera = camera;
     this.motionHistory = motionHistory;
     this.environment = environment;
+    this.wind = wind;
+    this.windResponse = treeWindResponses(wind);
+    this.forceFullLod = forceFullLod === true;
     this.impostor = impostor;
     this.impostorTexture = impostorTexture;
     this.sourceCount = records.transform.length / 4;
@@ -734,7 +779,8 @@ export class TreeBeautyLod {
           // residency put every production tree on the atlas card band.
           const projectedHeight = h.mul(projectionScale.y).div(max(distance, float(1.0)));
           const farBand = distance.greaterThanEqual(lodFarEffective);
-          const nearBand = distance.lessThan(lodNear)
+          const nearBand = uint(this.forceFullLod ? 1 : 0).equal(uint(1))
+            .or(distance.lessThan(lodNear))
             .or(projectedHeight.greaterThan(float(residency.lod0)));
           // The full tree height is not its perception-sensitive structure. The
           // sparse branchlet/needle detail occupies about 3% of authored height;
@@ -864,22 +910,46 @@ export class TreeBeautyLod {
     const scaledLocalPosition = vec3(localPosition.x.mul(radialScale), scaledY, localPosition.z.mul(radialScale));
     const scaledSource = scaledLocalPosition.mul(hero.w);
     const staticWorld = rotateYaw(scaledSource).add(transform.xyz).add(vec3(0, part.offsetY, 0).mul(hero.w));
-    const bendWeight = heightFraction.pow(1.7).mul(transform.w).mul(0.004);
-    // Wind is a field sampled at the instance root, not once per vertex's world
-    // position. Besides removing a large amount of redundant shader work, this
-    // keeps one tree's crown in a coherent gust while the height weight supplies
-    // the authored bend profile.
+    // Resolve semantic stiffness before deformation. Combined source atlases use
+    // their verified bark tile as structure and every other tile as foliage, so
+    // the promoted one-draw fir still receives the same botanical hierarchy as a
+    // role-split trunk / branch / leaf prototype.
+    const v4AtlasUv = uv();
+    const v4BarkTile = v4AtlasUv.x.lessThan(0.25).and(v4AtlasUv.y.lessThan(0.25));
+    const atlasFoliageMask = _isAuthoredAlphaAtlas(part)
+      ? v4BarkTile.not().select(float(1), float(0))
+      : float(part.isFoliage ? 1 : 0);
+    const trunkResponse = this.windResponse.trunk;
+    const branchResponse = this.windResponse.branch;
+    const leafResponse = this.windResponse.leaf;
+    const gustResponse = this.windResponse.gust;
+    const structuralResponse = mix(float(trunkResponse), float(branchResponse), crownMask);
+    const explicitResponse = part.role === 'trunk'
+      ? float(trunkResponse)
+      : float(part.role === 'branches' ? branchResponse : leafResponse);
+    const bendResponse = _isAuthoredAlphaAtlas(part)
+      ? mix(structuralResponse, float(leafResponse), atlasFoliageMask)
+      : explicitResponse;
+    const bendWeight = heightFraction.pow(1.7).mul(transform.w).mul(0.004)
+      .mul(bendResponse).mul(0.8 + gustResponse * 0.3);
+    // Wind is sampled once at the planted instance root. Every vertex in a
+    // semantic layer follows that coherent gust; height and authored stiffness
+    // provide the bend without shearing alpha-cut foliage triangles. Evaluating
+    // the same graph for both history frames preserves truthful TRAA velocity.
     const currentWind = this.environment.windAt(transform.xyz, this.environment.time);
     const previousWind = this.environment.windAt(transform.xyz, this.environment.previousTime);
-    const world = staticWorld.add(vec3(currentWind.x, 0, currentWind.z).mul(bendWeight));
-    const previousWorld = staticWorld.add(vec3(previousWind.x, 0, previousWind.z).mul(bendWeight));
+    const windMotionAt = (sample) => {
+      const horizontal = vec2(sample.x, sample.z).mul(bendWeight);
+      const arcDrop = horizontal.length().pow(2).div(transform.w.max(1)).mul(-0.22);
+      return vec3(horizontal.x, arcDrop, horizontal.y);
+    };
+    const world = staticWorld.add(windMotionAt(currentWind));
+    const previousWorld = staticWorld.add(windMotionAt(previousWind));
     const needleNormalWorld = rotateYaw(normalLocal).normalize();
     // v4 branchlet tiles are local source sprays, not broad tree cards. Blend a
     // bounded outward parent-puffiness normal into those tiles only, leaving
     // tile 0 (structural bark) on its authored source normal. This changes the
     // shared-light response, never the albedo into painted illumination.
-    const v4AtlasUv = uv();
-    const v4BarkTile = v4AtlasUv.x.lessThan(0.25).and(v4AtlasUv.y.lessThan(0.25));
     const v4BranchletTile = v4BarkTile.not();
     const v4ParentOutward = vec3(
       positionGeometry.x,
@@ -887,7 +957,7 @@ export class TreeBeautyLod {
       positionGeometry.z,
     ).normalize();
     const v4NormalLocal = v4BranchletTile.select(
-      normalLocal.mul(0.64).add(v4ParentOutward.mul(0.36)).normalize(),
+      normalLocal.mul(0.46).add(v4ParentOutward.mul(0.54)).normalize(),
       normalLocal,
     );
     const v4NeedleNormalWorld = rotateYaw(v4NormalLocal).normalize();
@@ -956,12 +1026,9 @@ export class TreeBeautyLod {
         .mul(atlasDaylightNormalization).toVarying('vTreeLod1SharedDaylight');
       material = new MeshBasicNodeMaterial();
       material.colorNode = roleAlbedo.mul(sharedDaylight);
-      // maskNode emits an early alpha discard for the authored atlas. This keeps
-      // the cutout/depth contract while avoiding a separate opacity graph.
-      material.maskNode = texel.a.greaterThan(TREE_ALPHA_CUTOFF);
-      material.alphaTest = TREE_ALPHA_CUTOFF;
-      material.alphaHash = false;
-      material.transparent = false;
+      // The shared stable cutoff keeps the authored atlas depth-writing without
+      // retaining its lowest-alpha fringe as opaque hair.
+      useStableFoliageCoverage(material, texel.a);
       material.side = DoubleSide;
     }
     if (candidatePhongAtlas) {
@@ -976,7 +1043,7 @@ export class TreeBeautyLod {
       const measuredNeedleAlbedo = texel.rgb.mul(CONIFER_CANDIDATE_NEEDLE_LINEAR_NORMALIZATION);
       const needleAlbedo = saturation(
         mix(
-          vec3(0.124, 0.168, 0.042),
+          vec3(0.080, 0.115, 0.030),
           measuredNeedleAlbedo,
           CONIFER_CANDIDATE_NEEDLE_CONTRAST,
         ),
@@ -1000,10 +1067,7 @@ export class TreeBeautyLod {
       material.treeEnvironment = this.environment;
       material.fog = false;
       material.colorNode = candidateAlbedo;
-      material.maskNode = texel.a.greaterThan(TREE_ALPHA_CUTOFF);
-      material.alphaTest = TREE_ALPHA_CUTOFF;
-      material.alphaHash = false;
-      material.transparent = false;
+      useStableFoliageCoverage(material, texel.a);
       material.side = DoubleSide;
     }
     if ((coniferV4 || coniferV5 || coniferV6 || coniferV7)
@@ -1035,17 +1099,14 @@ export class TreeBeautyLod {
       material.colorNode = needleTransmission(
         foliageBaseColor, transmissionFactor(), this.environment,
       );
-      material.alphaTest = TREE_ALPHA_CUTOFF;
-      material.alphaHash = false;
+      if (part.material.map) useStableFoliageCoverage(material, texture(part.material.map).a);
     }
     if (!cheapMiddleAtlas && _isAuthoredAlphaAtlas(part) && material.map) {
       // Combined v3 mesh: one draw, common PBR albedo, source alpha only.
       // Do not invoke foliage tint/offset; tile 0 is opaque bark and tiles 1–15
       // are the official alpha-covered twig sprays.
       const texel = texture(material.map);
-      material.opacityNode = texel.a;
-      material.alphaTest = TREE_ALPHA_CUTOFF;
-      material.alphaHash = false;
+      useStableFoliageCoverage(material, texel.a);
     }
     // The canonical derivative intentionally has no UV atlas: its COLOR_0 is
     // the source-role bake (bark/trunk/branches/foliage). Feed that attribute
@@ -1128,12 +1189,14 @@ export class TreeBeautyLod {
     // ruler row. Re-ground the card after scale variation so every trunk still
     // meets terrain exactly.
     const ageScale = style.x.mul(0.754877666).fract().mul(0.28).add(0.86);
-    // `transform.w` is the authored world height. The previous card treated it
-    // as both width and height, so a 19 m fir became a 20 m-wide plane with its
-    // trunk visually suspended. Preserve the catalog aspect ratio and place the
-    // plane's lower edge exactly at the source ground point.
+    // `transform.w` is the authored world height. Every atlas frame is baked to
+    // a square with transparent padding, so the card must also stay square: the
+    // alpha silhouette already carries the source tree's real width/height ratio.
+    // Hard-coding one prototype's measured crown width here crops wider species
+    // and makes them appear to shed most of their canopy as the selected view
+    // frame changes during a ball flight.
     const height = transform.w.mul(ageScale);
-    const width = height.mul(6.467 / 18.895).mul(1.06);
+    const width = height.mul(this.impostor.cardAspect ?? 1);
     // The source scan's last opaque trunk pixels are anti-aliased into a narrow
     // transparent foot. At distance that coverage disappears under alpha test and
     // exposes a bright walk-through slot beneath an otherwise grounded plane. Bury
@@ -1141,7 +1204,7 @@ export class TreeBeautyLod {
     // mature fir), matching normal forestry/terrain intersection practice and the
     // solid geometry's terrain contact. This is world grounding, not a view offset.
     const centre = transform.xyz.add(vec3(0, height.mul(0.46), 0));
-    // Keep the catalog aspect ratio as the baseline, then apply a small seeded
+    // Keep the baked square-frame contract as the baseline, then apply a small seeded
     // crown-width class. The card remains centered at the shared .46 ground
     // height, so width variation cannot reintroduce a floating trunk.
     const cardWidth = width.mul(mix(float(0.93), float(1.10), style.z));
@@ -1151,13 +1214,24 @@ export class TreeBeautyLod {
     const staticWorld = centre
       .add(cameraRight.mul(positionGeometry.x.mul(cardWidth)))
       .add(vec3(0, positionGeometry.y.mul(height), 0));
-    const bendWeight = positionGeometry.y.add(0.5).clamp(0, 1).pow(1.7).mul(transform.w).mul(0.004);
+    const trunkResponse = this.windResponse.trunk;
+    const branchResponse = this.windResponse.branch;
+    const leafResponse = this.windResponse.leaf;
+    const gustResponse = this.windResponse.gust;
+    const cardResponse = branchResponse * 0.42 + leafResponse * 0.58;
+    const bendWeight = positionGeometry.y.add(0.5).clamp(0, 1).pow(1.7)
+      .mul(transform.w).mul(0.004).mul(cardResponse).mul(0.8 + gustResponse * 0.3);
     // Match hero geometry: one current/previous field sample at the tree root,
     // then apply the per-vertex height weight to the resulting displacement.
     const currentWind = this.environment.windAt(transform.xyz, this.environment.time);
     const previousWind = this.environment.windAt(transform.xyz, this.environment.previousTime);
-    const world = staticWorld.add(vec3(currentWind.x, 0, currentWind.z).mul(bendWeight));
-    const previousWorld = staticWorld.add(vec3(previousWind.x, 0, previousWind.z).mul(bendWeight));
+    const cardWindMotion = (sample) => {
+      const horizontal = vec2(sample.x, sample.z).mul(bendWeight);
+      const arcDrop = horizontal.length().pow(2).div(transform.w.max(1)).mul(-0.18);
+      return vec3(horizontal.x, arcDrop, horizontal.y);
+    };
+    const world = staticWorld.add(cardWindMotion(currentWind));
+    const previousWorld = staticWorld.add(cardWindMotion(previousWind));
 
     const tau = Math.PI * 2;
     // Keep frame selection stable for a fixed camera/placement, while applying a
@@ -1178,19 +1252,16 @@ export class TreeBeautyLod {
     const frame = framePhase.add(0.5).floor().mod(this.impostor.azimuthFrames);
     // Logical frame zero is stored in the PNG's top row. Three's conventional UV
     // orientation therefore selects rows from the top by reversing atlas Y.
-    // The neutral bake fits the source bounds inside each square frame: across
-    // all eight views alpha occupies x=177..331 and y=27..471. Sample that
-    // verified content rectangle, not the whole 512px square. Otherwise 70% of
-    // card width and the bottom 8% are transparent, producing needle-thin firs
-    // whose first visible trunk pixel appears metres above the grounded plane.
-    // Values are expressed in bottom-origin texture UV after TextureLoader's
-    // image flip; keep a small antialias guard around the measured alpha bounds.
+    // Atlas baking owns silhouette framing. Sample the full frame, excluding
+    // only the invariant 8 px bleed gutter (8 / 512 = 0.015625). Prototype-
+    // specific content crops belong in atlas metadata; applying the old fir's
+    // narrow measured crop to every species discarded most of the Douglas crown.
+    const frameCrop = this.impostor.frameUv ?? {
+      offsetU: 0.015625, offsetV: 0.015625, scaleU: 0.96875, scaleV: 0.96875,
+    };
     const frameUv = vec2(
-      uv().x.mul(0.34).add(0.33),
-      // The source alpha reaches the bottom at roughly 0.05 in frame-local UV.
-      // Sampling from 0.04 retains the anti-aliased foot instead of cutting the
-      // last 10 px and making the grounded card appear to hover above terrain.
-      uv().y.mul(0.92).add(0.04),
+      uv().x.mul(frameCrop.scaleU).add(frameCrop.offsetU),
+      uv().y.mul(frameCrop.scaleV).add(frameCrop.offsetV),
     );
     const atlasUvForFrame = (sampleFrame) => {
       const column = sampleFrame.mod(this.impostor.columns);
@@ -1233,12 +1304,12 @@ export class TreeBeautyLod {
     // prior 6x normalization clipped the green channel under the clear-day key;
     // 4.4 keeps far crowns in the same exposure range as hero geometry while
     // preserving the shared daylight direction and chromaticity.
-    const runtimeDiffuse = upperSky.add(horizonSky).add(directSun).mul(2.85);
+    const runtimeDiffuse = upperSky.add(horizonSky).add(directSun).mul(2.65);
     const material = new MeshBasicNodeMaterial();
     // Pine needles in the source scan are warm desaturated brown-green under the
     // neutral bake. A restrained species response restores alpine green while
     // preserving authored bark/branch separation and seeded variation.
-    const pineAlbedo = baked.rgb.mul(vec3(0.62, 0.74, 0.48));
+    const pineAlbedo = baked.rgb.mul(vec3(0.50, 0.60, 0.46));
     material.colorNode = pineAlbedo.mul(mix(vec3(1), tint, 0.22)).mul(runtimeDiffuse);
     material.opacityNode = baked.a;
     material.alphaTest = TREE_IMPOSTOR_ALPHA_CUTOFF;
@@ -1338,7 +1409,7 @@ export class TreeBeautyLod {
       const projectedHeight = h * projectionScale / Math.max(distance, 1);
       const projectedStructure = projectedHeight * thresholds.projectedStructureRatio;
       projectedHeights.push(Number(projectedHeight.toFixed(6)));
-      if (distance < this.uLodNear.value || projectedHeight > thresholds.lod0) counts.lod0++;
+      if (this.forceFullLod || distance < this.uLodNear.value || projectedHeight > thresholds.lod0) counts.lod0++;
       else if (distance >= this.uLodNear.value
         && projectedStructure <= thresholds.impostorStructure) counts.impostor++;
       else counts.lod1++;
@@ -1348,6 +1419,7 @@ export class TreeBeautyLod {
       counts,
       projectedHeights,
       thresholds: { ...thresholds },
+      forcedFullLod: this.forceFullLod,
       classificationComplete: counts.lod0 + counts.lod1 + counts.impostor + counts.rejected === this.sourceCount,
     };
   }
@@ -1418,7 +1490,7 @@ export class TreeShadowProxy {
     this._compactCompute = this._buildCompactCompute();
     this._clearCompute.name = 'Tree shadow GPU reset';
     this._compactCompute.name = 'Tree shadow light-frustum compact';
-    this.mesh = new Mesh(this._geometry(), this._material(impostorTexture));
+    this.mesh = new Mesh(this._geometry(), this._material(impostorTexture, impostor));
     this.mesh.name = 'tree-shadow-gpu-indirect';
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = false;
@@ -1490,22 +1562,26 @@ export class TreeShadowProxy {
     return geo;
   }
 
-  _material(impostorTexture) {
+  _material(impostorTexture, impostor) {
     // The shadow caster uses a real source render of this exact catalog tree. A
     // private texture view selects frame zero from the 4x2 atlas, preserving the
     // fir's narrow crown, branch gaps, and trunk instead of projecting the former
     // oversized procedural broadleaf stamp beneath every species.
     const map = impostorTexture.clone();
     map.name = 'tree-shadow-source-impostor-frame';
-    map.repeat.set(0.25, 0.5);
-    map.offset.set(0, 0.5);
+    const frameCrop = impostor.frameUv ?? {
+      offsetU: 0.015625, offsetV: 0.015625, scaleU: 0.96875, scaleV: 0.96875,
+    };
+    map.repeat.set(frameCrop.scaleU / impostor.columns, frameCrop.scaleV / impostor.rows);
+    map.offset.set(frameCrop.offsetU / impostor.columns,
+      (impostor.rows - 1 + frameCrop.offsetV) / impostor.rows);
     map.needsUpdate = true;
     const mat = new MeshBasicMaterial({ map, alphaTest: TREE_ALPHA_CUTOFF, transparent: false, side: DoubleSide });
     const record = this._visible.toAttribute();
     const local = positionLocal;
-    // Match the beauty card's source framing. Transparent atlas gutter keeps the
-    // actual crown narrow while the plane retains every lateral branch tip.
-    const cardSize = record.w.mul(1.12);
+    // Match the beauty card's catalog-owned source framing so the cached shadow
+    // cannot retain a different species' crop or crown width.
+    const cardSize = record.w.mul(impostor.cardAspect ?? 1);
     mat.positionNode = vec3(local.x.mul(cardSize).add(record.x), local.y.mul(record.w).add(record.y), local.z.mul(cardSize).add(record.z));
     return mat;
   }

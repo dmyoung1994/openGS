@@ -29,6 +29,7 @@ import { createRng } from './util/random.js';
 import {
   loadEnvironmentCatalog, verifyEnvironmentCatalogAssets, collectEnvironmentAssetIds,
 } from './environment/EnvironmentCatalog.js';
+import { createLocalFoliagePackRegistry } from './foliage/FoliagePackResolver.js';
 
 // Clear alpine late-morning key from the left/downrange: a 37° elevation keeps
 // the source plausible while its lateral component gives terrain relief and
@@ -72,6 +73,7 @@ window.golfBootstrap = Object.freeze({
   get elapsedMs() { return Math.round(performance.now() - bootstrapStartedAt); },
 });
 let lighting;
+let localFoliagePackRegistry;
 
 function showFatalEnvironmentError(error) {
   console.error('Required environment initialization failed.', error);
@@ -134,7 +136,7 @@ let env = null;
 // crowns at the top of frame or a uniform overcast.
 // The Conditions panel drives `cloudCoverage`; 0 is a real setting and costs nothing,
 // because WeatherSky then compiles the clear analytic sky with no cloud grade at all.
-const DEFAULT_CLOUD_COVERAGE = 0.40;
+const DEFAULT_CLOUD_COVERAGE = 0.26;
 
 function makeEnvironmentState(seed, {
   windSpeedMph = 0, windDirectionDegrees = 0, cloudCoverage = DEFAULT_CLOUD_COVERAGE,
@@ -155,11 +157,9 @@ function makeEnvironmentState(seed, {
       color: { r: 1.0, g: 0.955, b: 0.87 },
     },
     atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.0 },
-    // A broken alpine cumulus deck: 0.9 km base and 1.5 km depth keep the full
-    // GPU crowns inside the golfer-height sky while retaining believable valley
-    // clearance. Coverage stays sparse so three billows frame the golfer without
-    // flattening the mountain silhouette.
-    clouds: { coverage: cloudCoverage, density: 0.52, baseHeight: 900, thickness: 1500, advectionScale: 1.0 },
+    // Higher, lighter broken alpine cumulus. Smaller parcels leave blue channels
+    // between crowns and keep the mountain silhouette readable from address.
+    clouds: { coverage: cloudCoverage, density: 0.44, baseHeight: 1100, thickness: 1200, advectionScale: 1.0 },
     wind: {
       speed: windSpeedMph * MPH_TO_MS,
       directionRadians: windDirectionDegrees * DEG_TO_RAD,
@@ -287,7 +287,6 @@ function toAddress({ smooth = false } = {}) {
   lighting.follow(ball.position.x, ball.position.z);
   if (smooth) director.returnToAddress(ball.position, new Vector3(0, 0, -1));
   else director.setAddress(ball.position, new Vector3(0, 0, -1));
-  tracer.reset();
   panel.setLive('');
   // Only explicit/initial address changes are cuts. The automatic result return keeps
   // temporal history because CameraDirector continuously damps the whole move.
@@ -326,13 +325,21 @@ function buildCourse(course) {
   range = new Range(sm.scene, sm.camera, course, {
     renderer: sm.renderer, motionHistory: sm.motionHistory, lighting,
     environmentTier: sm.environmentTier, environment: environmentBindings,
-    environmentCatalog,
+    environmentCatalog, localFoliagePackRegistry,
+    foliageCandidateAlias: new URL(window.location.href).searchParams.get('foliageCandidate') === 'generated'
+      ? [
+        'builtin.valley-oak.california.v1',
+        'builtin.sugar-maple.northeastern.v1',
+        'builtin.monterey-cypress.coastal.v1',
+      ] : null,
   });
   ball = new Ball(range.terrain, env);
   wireBall(ball);
   // Free-fly cam persists across rebuilds (keeps its listeners); just re-point its
   // terrain reference at the new course. Created lazily on the first build.
-  if (!freeCam) freeCam = new FreeCamera(sm.camera, sm.renderer.domElement, range.terrain);
+  if (!freeCam) freeCam = new FreeCamera(sm.camera, sm.renderer.domElement, range.terrain, {
+    onDragEnd: () => sm.invalidateTemporalHistory('free-camera drag settled'),
+  });
   else freeCam.terrain = range.terrain;
   turfPanel.attach(range.terrain);   // live turf sliders (G) follow the rebuilt terrain
   minimap.attach(range.terrain);     // re-rasterise the hole for the new course
@@ -357,6 +364,12 @@ let divotPrepopDone = false;
 
 try {
   environmentCatalog = await environmentCatalogReady;
+  // A local authoring host may inject an alias-keyed descriptor object before this
+  // module loads. The registry accepts same-origin pack roots only and is immutable
+  // after bootstrap; the course itself still contains aliases, never local paths.
+  localFoliagePackRegistry = createLocalFoliagePackRegistry(
+    globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__ ?? [],
+  );
   // BACKDROP_PLAN Phase 1: the CC0 Alps HDR is no longer a render source. It is
   // composition inspiration for the procedural valley (Phase 2) and the A/B
   // skybox variant; the analytic clear-sky owns the visible background while
@@ -632,8 +645,6 @@ sm.onUpdate((dt, t) => {
     panel.setLive(`${dist.toFixed(0)} yds   ·   ${height.toFixed(0)} ft   ·   ${toMph(speed).toFixed(0)} mph`);
 
     lighting.follow(ball.position.x, ball.position.z);
-  } else {
-    tracer.fade(dt);
   }
 
   // Menu view: slow cinematic orbit behind the overlay. The thumbnail countdown does

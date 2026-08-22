@@ -12,6 +12,7 @@ import { CloudTemporalNode } from './CloudTemporalNode.js';
 import { resettableTraa } from './ResettableTRAANode.js';
 import { StrictWebGPUBackend } from './StrictWebGPUBackend.js';
 import { WeatherSky, WEATHER_SKY_WORKLOADS, cloudsAreEnabled } from './WeatherSky.js';
+import { disposeWebGPUSceneBackground } from './WebGPUResourceDisposal.js';
 
 // Owns the WebGPU renderer, scene, camera, HDRI environment, and the frame loop.
 // Migrated from WebGLRenderer + EffectComposer to WebGPURenderer so the grass can
@@ -342,6 +343,10 @@ export class SceneManager {
     // PMREM and visible background have identical world orientation.
     captureScene.backgroundNode = this.weatherSky.iblBackgroundNode;
     const next = this._pmremGenerator.fromScene(captureScene, 0.035, 0.1, 10, { size: 64 });
+    // PMREM's capture Scene is intentionally ephemeral, but WebGPURenderer stores
+    // its generated sky sphere outside the scene graph. End that hidden geometry's
+    // GPU lifetime immediately after the synchronous cube capture.
+    disposeWebGPUSceneBackground(this.renderer, captureScene);
     this.scene.environmentRotation.set(0, 0, 0);
     next.texture.name = this.skyManifest ? 'polyhaven-kloofendal-daylight-pmrem' : 'analytic-daylight-pmrem';
     const previous = this._daylightPmremTarget;
@@ -363,6 +368,11 @@ export class SceneManager {
     this.motionHistory.valid = false;
     this._cameraCutState.valid = false;
     this._cameraStillFrames = 0;
+    // Volumetric clouds own a separate quarter-resolution reprojection history.
+    // Leaving it valid across the same cut/drag boundary preserves old opaque
+    // depth silhouettes and paints canopy-shaped streaks over sky and trunks even
+    // after the full-resolution TRAA target has been cleared.
+    this._cloudTemporal?.reset();
     this._traa.reset();
     this._lastTemporalInvalidation = { reason, frame: this.renderer.info.frame };
   }

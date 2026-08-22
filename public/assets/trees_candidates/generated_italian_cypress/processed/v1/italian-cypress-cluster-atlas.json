@@ -1,0 +1,790 @@
+{
+  "schemaVersion": 2,
+  "candidateOnly": true,
+  "foliageAlias": "builtin.italian-cypress.mediterranean.v1",
+  "species": "italian-cypress",
+  "coordinateSystem": {
+    "up": "+Y",
+    "branchBaseDirection": "card-local edge declared per cluster baseEdge",
+    "units": "meters"
+  },
+  "source": {
+    "file": "italian-cypress-source-sheet-v1.png",
+    "sha256": "0cc71dc46de6c732afc50b1eaa39c9613c895896e182a6e24c690dd37a10ed54",
+    "generatedAt": "2026-08-20",
+    "provider": "OpenAI ImageGen built-in tool",
+    "mode": "botanical-asset",
+    "promptRecord": "config-relative:../../../public/assets/trees_candidates/generated_italian_cypress/README.md"
+  },
+  "sourceLayout": {
+    "mode": "components-2x4",
+    "columns": 2,
+    "rows": 4
+  },
+  "atlas": {
+    "width": 2048,
+    "height": 2048,
+    "padding": 24,
+    "alphaCleanupThreshold": 18,
+    "alphaCoverageThreshold": 51,
+    "rgbDilationRadius": 18,
+    "png": "italian-cypress-cluster-atlas.png",
+    "ktx2": "italian-cypress-cluster-atlas.ktx2",
+    "materialMaskPng": "italian-cypress-material-mask.png",
+    "materialMaskKtx2": "italian-cypress-material-mask.ktx2"
+  },
+  "metrics": {
+    "alphaCoverage": 0.054811954498291016,
+    "meanAlpha": 0.04751799433839087,
+    "occupiedArea": 767173,
+    "atlasUtilization": 0.182908296585083,
+    "transparentOverdrawEstimate": 0.7003309553386263,
+    "maximumMeasuredMipDrift": 0.0007910728454589844,
+    "mipCoverage": [
+      {
+        "level": 0,
+        "width": 2048,
+        "height": 2048,
+        "thresholdCoverage": 0.054811954498291016,
+        "meanAlpha": 0.04751799433839087,
+        "coverageDrift": 0,
+        "alphaScale": 1
+      },
+      {
+        "level": 1,
+        "width": 1024,
+        "height": 1024,
+        "thresholdCoverage": 0.05478191375732422,
+        "meanAlpha": 0.037881997052360984,
+        "coverageDrift": -0.000030040740966796875,
+        "alphaScale": 0.796875
+      },
+      {
+        "level": 2,
+        "width": 512,
+        "height": 512,
+        "thresholdCoverage": 0.05478668212890625,
+        "meanAlpha": 0.030204039928959866,
+        "coverageDrift": -0.000025272369384765625,
+        "alphaScale": 0.796875
+      },
+      {
+        "level": 3,
+        "width": 256,
+        "height": 256,
+        "thresholdCoverage": 0.0551300048828125,
+        "meanAlpha": 0.025992000804227942,
+        "coverageDrift": 0.0003180503845214844,
+        "alphaScale": 0.859375
+      },
+      {
+        "level": 4,
+        "width": 128,
+        "height": 128,
+        "thresholdCoverage": 0.05560302734375,
+        "meanAlpha": 0.023588053385416665,
+        "coverageDrift": 0.0007910728454589844,
+        "alphaScale": 0.90625
+      },
+      {
+        "level": 5,
+        "width": 64,
+        "height": 64,
+        "thresholdCoverage": 0.05517578125,
+        "meanAlpha": 0.023626110600490195,
+        "coverageDrift": 0.0003638267517089844,
+        "alphaScale": 1
+      },
+      {
+        "level": 6,
+        "width": 32,
+        "height": 32,
+        "thresholdCoverage": 0.0546875,
+        "meanAlpha": 0.023341758578431373,
+        "coverageDrift": -0.00012445449829101562,
+        "alphaScale": 0.984375
+      },
+      {
+        "level": 7,
+        "width": 16,
+        "height": 16,
+        "thresholdCoverage": 0.0546875,
+        "meanAlpha": 0.02852328431372549,
+        "coverageDrift": -0.00012445449829101562,
+        "alphaScale": 1.21875
+      },
+      {
+        "level": 8,
+        "width": 8,
+        "height": 8,
+        "thresholdCoverage": 0.0625,
+        "meanAlpha": 0.03958333333333333,
+        "coverageDrift": 0.007688045501708984,
+        "alphaScale": 1.390625
+      },
+      {
+        "level": 9,
+        "width": 4,
+        "height": 4,
+        "thresholdCoverage": 0.0625,
+        "meanAlpha": 0.045098039215686274,
+        "coverageDrift": 0.007688045501708984,
+        "alphaScale": 1.140625
+      },
+      {
+        "level": 10,
+        "width": 2,
+        "height": 2,
+        "thresholdCoverage": 0,
+        "meanAlpha": 0.000980392156862745,
+        "coverageDrift": -0.054811954498291016,
+        "alphaScale": 0.015625
+      },
+      {
+        "level": 11,
+        "width": 1,
+        "height": 1,
+        "thresholdCoverage": 0,
+        "meanAlpha": 0,
+        "coverageDrift": -0.054811954498291016,
+        "alphaScale": 0.015625
+      }
+    ],
+    "compression": {
+      "mode": "UASTC",
+      "atlasPngBytes": 1040004,
+      "atlasKtx2Bytes": 545277,
+      "maskPngBytes": 753628,
+      "maskKtx2Bytes": 371281,
+      "atlasRatio": 0.524302791143111,
+      "maskRatio": 0.492658181490072
+    }
+  },
+  "clusters": [
+    {
+      "name": "sparse-terminal",
+      "species": "italian-cypress",
+      "density": "sparse",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 1.8,
+      "pixelBounds": {
+        "x": 1328,
+        "y": 48,
+        "width": 169,
+        "height": 379
+      },
+      "sourceBounds": {
+        "x": 191,
+        "y": 11,
+        "width": 169,
+        "height": 379
+      },
+      "aspect": 0.44591029023746703,
+      "alphaCoverage": 0.22318152722049617,
+      "supportHullUv": [
+        [
+          0.059524,
+          0.563492
+        ],
+        [
+          0.125,
+          0.420635
+        ],
+        [
+          0.732143,
+          0.026455
+        ],
+        [
+          0.755952,
+          0.031746
+        ],
+        [
+          0.940476,
+          0.391534
+        ],
+        [
+          0.863095,
+          0.973545
+        ],
+        [
+          0.857143,
+          0.973545
+        ]
+      ],
+      "supportHullArea": 0.4639074415155,
+      "attachmentFrame": {
+        "baseUv": [
+          0.53,
+          0.03
+        ],
+        "axisUv": [
+          -0.074262,
+          0.997239
+        ],
+        "growthExtent": 0.916645,
+        "lateralHalfExtent": 0.436191
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7768184727795038,
+      "transparentOverdrawEstimate": 0.5189093615497882,
+      "uv": {
+        "u0": 0.6484375,
+        "v0": 0.79150390625,
+        "u1": 0.73095703125,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "narrow-young",
+      "species": "italian-cypress",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 1.7,
+      "pixelBounds": {
+        "x": 540,
+        "y": 48,
+        "width": 110,
+        "height": 382
+      },
+      "sourceBounds": {
+        "x": 711,
+        "y": 5,
+        "width": 110,
+        "height": 382
+      },
+      "aspect": 0.2879581151832461,
+      "alphaCoverage": 0.33127082341742026,
+      "supportHullUv": [
+        [
+          0.091743,
+          0.692913
+        ],
+        [
+          0.238532,
+          0.141732
+        ],
+        [
+          0.431193,
+          0.026247
+        ],
+        [
+          0.779817,
+          0.178478
+        ],
+        [
+          0.908257,
+          0.548556
+        ],
+        [
+          0.669725,
+          0.863517
+        ],
+        [
+          0.40367,
+          0.973753
+        ],
+        [
+          0.211009,
+          0.887139
+        ]
+      ],
+      "supportHullArea": 0.5264876298729999,
+      "attachmentFrame": {
+        "baseUv": [
+          0.45,
+          0.03
+        ],
+        "axisUv": [
+          0.074262,
+          0.997239
+        ],
+        "growthExtent": 0.937706,
+        "lateralHalfExtent": 0.418482
+      },
+      "rectangularTransparentOverdrawEstimate": 0.6687291765825798,
+      "transparentOverdrawEstimate": 0.3707908702483098,
+      "uv": {
+        "u0": 0.263671875,
+        "v0": 0.7900390625,
+        "u1": 0.3173828125,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "medium-ascending",
+      "species": "italian-cypress",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.2,
+      "pixelBounds": {
+        "x": 1545,
+        "y": 48,
+        "width": 277,
+        "height": 373
+      },
+      "sourceBounds": {
+        "x": 145,
+        "y": 387,
+        "width": 277,
+        "height": 373
+      },
+      "aspect": 0.7426273458445041,
+      "alphaCoverage": 0.2870955565664289,
+      "supportHullUv": [
+        [
+          0.036232,
+          0.513441
+        ],
+        [
+          0.34058,
+          0.034946
+        ],
+        [
+          0.355072,
+          0.026882
+        ],
+        [
+          0.804348,
+          0.301075
+        ],
+        [
+          0.963768,
+          0.948925
+        ],
+        [
+          0.923913,
+          0.973118
+        ],
+        [
+          0.094203,
+          0.709677
+        ]
+      ],
+      "supportHullArea": 0.5146627648045,
+      "attachmentFrame": {
+        "baseUv": [
+          0.31,
+          0.03
+        ],
+        "axisUv": [
+          0.369667,
+          0.929164
+        ],
+        "growthExtent": 1.103255,
+        "lateralHalfExtent": 0.451765
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7129044434335712,
+      "transparentOverdrawEstimate": 0.4421676169336146,
+      "uv": {
+        "u0": 0.75439453125,
+        "v0": 0.79443359375,
+        "u1": 0.8896484375,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "dense-interior",
+      "species": "italian-cypress",
+      "density": "dense",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.3,
+      "pixelBounds": {
+        "x": 698,
+        "y": 48,
+        "width": 294,
+        "height": 382
+      },
+      "sourceBounds": {
+        "x": 612,
+        "y": 374,
+        "width": 294,
+        "height": 382
+      },
+      "aspect": 0.7696335078534031,
+      "alphaCoverage": 0.422970758984222,
+      "supportHullUv": [
+        [
+          0.03413,
+          0.519685
+        ],
+        [
+          0.320819,
+          0.031496
+        ],
+        [
+          0.334471,
+          0.026247
+        ],
+        [
+          0.928328,
+          0.404199
+        ],
+        [
+          0.96587,
+          0.551181
+        ],
+        [
+          0.87372,
+          0.7979
+        ],
+        [
+          0.382253,
+          0.973753
+        ],
+        [
+          0.245734,
+          0.889764
+        ]
+      ],
+      "supportHullArea": 0.5486906196465,
+      "attachmentFrame": {
+        "baseUv": [
+          0.37,
+          0.03
+        ],
+        "axisUv": [
+          0.190022,
+          0.98178
+        ],
+        "growthExtent": 0.928886,
+        "lateralHalfExtent": 0.485977
+      },
+      "rectangularTransparentOverdrawEstimate": 0.577029241015778,
+      "transparentOverdrawEstimate": 0.22912704566240705,
+      "uv": {
+        "u0": 0.3408203125,
+        "v0": 0.7900390625,
+        "u1": 0.484375,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "forked-vertical",
+      "species": "italian-cypress",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.4,
+      "pixelBounds": {
+        "x": 293,
+        "y": 499,
+        "width": 274,
+        "height": 370
+      },
+      "sourceBounds": {
+        "x": 146,
+        "y": 743,
+        "width": 274,
+        "height": 370
+      },
+      "aspect": 0.7405405405405405,
+      "alphaCoverage": 0.29662655356086015,
+      "supportHullUv": [
+        [
+          0.03663,
+          0.615176
+        ],
+        [
+          0.468864,
+          0.03523
+        ],
+        [
+          0.487179,
+          0.0271
+        ],
+        [
+          0.498168,
+          0.02981
+        ],
+        [
+          0.96337,
+          0.577236
+        ],
+        [
+          0.871795,
+          0.891599
+        ],
+        [
+          0.168498,
+          0.9729
+        ]
+      ],
+      "supportHullArea": 0.5449639830299999,
+      "attachmentFrame": {
+        "baseUv": [
+          0.49,
+          0.03
+        ],
+        "axisUv": [
+          0.032241,
+          0.99948
+        ],
+        "growthExtent": 0.932044,
+        "lateralHalfExtent": 0.472001
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7033734464391399,
+      "transparentOverdrawEstimate": 0.4556951233517922,
+      "uv": {
+        "u0": 0.14306640625,
+        "v0": 0.57568359375,
+        "u1": 0.27685546875,
+        "v1": 0.75634765625
+      }
+    },
+    {
+      "name": "dark-mature",
+      "species": "italian-cypress",
+      "density": "dense",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.1,
+      "pixelBounds": {
+        "x": 48,
+        "y": 499,
+        "width": 197,
+        "height": 373
+      },
+      "sourceBounds": {
+        "x": 644,
+        "y": 744,
+        "width": 197,
+        "height": 373
+      },
+      "aspect": 0.5281501340482574,
+      "alphaCoverage": 0.3957349518923259,
+      "supportHullUv": [
+        [
+          0.05102,
+          0.508065
+        ],
+        [
+          0.091837,
+          0.27957
+        ],
+        [
+          0.469388,
+          0.026882
+        ],
+        [
+          0.94898,
+          0.354839
+        ],
+        [
+          0.94898,
+          0.591398
+        ],
+        [
+          0.877551,
+          0.744624
+        ],
+        [
+          0.484694,
+          0.973118
+        ],
+        [
+          0.153061,
+          0.752688
+        ]
+      ],
+      "supportHullArea": 0.570159953862,
+      "attachmentFrame": {
+        "baseUv": [
+          0.54,
+          0.03
+        ],
+        "axisUv": [
+          -0.064382,
+          0.997925
+        ],
+        "growthExtent": 0.944722,
+        "lateralHalfExtent": 0.457187
+      },
+      "rectangularTransparentOverdrawEstimate": 0.6042650481076741,
+      "transparentOverdrawEstimate": 0.30592292704564705,
+      "uv": {
+        "u0": 0.0234375,
+        "v0": 0.57421875,
+        "u1": 0.11962890625,
+        "v1": 0.75634765625
+      }
+    },
+    {
+      "name": "dry-variation",
+      "species": "italian-cypress",
+      "density": "medium",
+      "lodUse": [
+        0,
+        1
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 1.9,
+      "pixelBounds": {
+        "x": 1040,
+        "y": 48,
+        "width": 240,
+        "height": 382
+      },
+      "sourceBounds": {
+        "x": 154,
+        "y": 1115,
+        "width": 240,
+        "height": 382
+      },
+      "aspect": 0.6282722513089005,
+      "alphaCoverage": 0.27234947643979057,
+      "supportHullUv": [
+        [
+          0.041841,
+          0.64042
+        ],
+        [
+          0.514644,
+          0.031496
+        ],
+        [
+          0.531381,
+          0.026247
+        ],
+        [
+          0.90795,
+          0.288714
+        ],
+        [
+          0.958159,
+          0.485564
+        ],
+        [
+          0.8159,
+          0.666667
+        ],
+        [
+          0.34728,
+          0.973753
+        ]
+      ],
+      "supportHullArea": 0.474774809563,
+      "attachmentFrame": {
+        "baseUv": [
+          0.53,
+          0.03
+        ],
+        "axisUv": [
+          -0.117461,
+          0.993078
+        ],
+        "growthExtent": 0.958682,
+        "lateralHalfExtent": 0.478706
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7276505235602094,
+      "transparentOverdrawEstimate": 0.42636072732992947,
+      "uv": {
+        "u0": 0.5078125,
+        "v0": 0.7900390625,
+        "u1": 0.625,
+        "v1": 0.9765625
+      }
+    },
+    {
+      "name": "silhouette-breaker",
+      "species": "italian-cypress",
+      "density": "sparse",
+      "lodUse": [
+        0,
+        1,
+        2
+      ],
+      "baseEdge": "bottom",
+      "recommendedScaleMeters": 2.5,
+      "pixelBounds": {
+        "x": 48,
+        "y": 48,
+        "width": 444,
+        "height": 403
+      },
+      "sourceBounds": {
+        "x": 489,
+        "y": 1109,
+        "width": 444,
+        "height": 403
+      },
+      "aspect": 1.1017369727047146,
+      "alphaCoverage": 0.2257673306060403,
+      "supportHullUv": [
+        [
+          0.022573,
+          0.328358
+        ],
+        [
+          0.693002,
+          0.024876
+        ],
+        [
+          0.704289,
+          0.024876
+        ],
+        [
+          0.977427,
+          0.58209
+        ],
+        [
+          0.674944,
+          0.970149
+        ],
+        [
+          0.586907,
+          0.975124
+        ],
+        [
+          0.022573,
+          0.330846
+        ]
+      ],
+      "supportHullArea": 0.48730991750000013,
+      "attachmentFrame": {
+        "baseUv": [
+          0.68,
+          0.03
+        ],
+        "axisUv": [
+          -0.271957,
+          0.962309
+        ],
+        "growthExtent": 0.934819,
+        "lateralHalfExtent": 0.551508
+      },
+      "rectangularTransparentOverdrawEstimate": 0.7742326693939597,
+      "transparentOverdrawEstimate": 0.5367068830360091,
+      "uv": {
+        "u0": 0.0234375,
+        "v0": 0.77978515625,
+        "u1": 0.240234375,
+        "v1": 0.9765625
+      }
+    }
+  ]
+}

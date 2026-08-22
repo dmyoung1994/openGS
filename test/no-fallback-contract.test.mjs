@@ -16,13 +16,14 @@ test('production renderer has one strict hardware-WebGPU backend', async () => {
 });
 
 test('required environment assets fail closed before rendering', async () => {
-  const [main, range, terrain, bunkers, course, ball] = await Promise.all([
+  const [main, range, terrain, bunkers, course, ball, backdrop] = await Promise.all([
     source('src/main.js'),
     source('src/scene/Range.js'),
     source('src/terrain/Terrain.js'),
     source('src/scene/Bunkers.js'),
     source('src/course/course.js'),
     source('src/scene/GolfBall.js'),
+    source('src/scene/BackdropTerrain.js'),
   ]);
   assert.match(main, /environmentCatalog = await environmentCatalogReady/);
   assert.match(main, /verifyEnvironmentCatalogAssets\(environmentCatalog/);
@@ -35,6 +36,13 @@ test('required environment assets fail closed before rendering', async () => {
   assert.doesNotMatch(main, /e\.code === 'Digit[12]'/);
   assert.match(range, /Promise\.all\(\[\s*this\.terrain\.assetsReady,\s*this\.backdrop\.assetsReady,\s*treesReady, environmentPropsReady, ballReady,\s*\]\)/,
     'terrain, backdrop, trees, props, and ball must all gate the ready state');
+  assert.match(range, /this\.backdrop\?\.dispose\(\)/,
+    'range rebuilds must explicitly release backdrop node textures and geometry');
+  assert.match(range, /backdropOwned\.has\(o\)/,
+    'generic disposal must not double-release explicitly owned backdrop resources');
+  assert.match(range, /new BackdropTerrain\([\s\S]*?renderer,/);
+  assert.match(backdrop, /disposeWebGPUGeometries\(this\.renderer, \[\.\.\.geometries\]\)/,
+    'backdrop attributes must leave the WebGPU backend during range rebuilds');
   assert.doesNotMatch(range, /\bbuildBunkers\b/);
   assert.match(terrain, /Bunker sand belongs to the terrain itself/);
   assert.match(terrain, /renderedZoneAt\(x, z\)/);
@@ -131,6 +139,10 @@ test('strict benchmark cannot alter the renderer workload', async () => {
   assert.match(benchmark, /does not permit renderer-altering diagnostic flags/);
   assert.doesNotMatch(benchmark, /grass\.update\s*=|range\.trees\.visible\s*=|range\.grass\.mesh\.visible\s*=/);
   assert.match(benchmark, /expected-device-tier/);
+  assert.match(benchmark, /execFileSync\('\/usr\/bin\/pmset', args/);
+  assert.match(benchmark, /canonicalTimingContract/);
+  assert.match(benchmark, /Strict Metal performance evidence requires AC power/);
+  assert.match(benchmark, /goalEligibility/);
   assert.match(benchmark, /Environment device tier mismatch/);
   assert.match(benchmark, /evaluatorCamera\.setPose/);
   assert.match(benchmark, /evaluatorCamera\.freeze\(\)/);
@@ -164,6 +176,18 @@ test('environment benchmark distinguishes clear-weather zero work from cloud dis
   assert.match(benchmark, /fused raymarch/);
   assert.match(benchmark, /temporal resolve/);
   assert.doesNotMatch(benchmark, /skyScene|_skyPass|Dynamic atmosphere and volumetric clouds/);
+});
+
+test('robustness memory accounting deduplicates shared interleaved GPU buffers', async () => {
+  const source = await readFile(new URL('../scripts/benchmark-environment-robustness.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const seenInterleavedBuffers = new WeakSet\(\)/,
+    'shared foliage attribute views need backing-allocation identity accounting');
+  assert.match(source, /resource\?\.isInterleavedBufferAttribute \? resource\.data : null/,
+    'interleaved attributes must normalize to their one GPU backing buffer');
+  assert.match(source, /if \(seenInterleavedBuffers\.has\(interleavedBuffer\)\) continue/,
+    'the memory cap must not charge a shared allocation once per semantic view');
+  assert.match(source, /return \{ frame: renderer\.info\.frame, memory, rawMemory, multiset \}/,
+    'reports must preserve raw Three diagnostics alongside corrected allocation totals');
 });
 
 test('local evaluation uses one observable canonical range endpoint', async () => {

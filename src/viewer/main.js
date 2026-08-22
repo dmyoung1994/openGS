@@ -10,6 +10,7 @@ import {
   EnvironmentFrameState,
 } from '../environment/EnvironmentFrameState.js';
 import { EnvironmentGpuBindings } from '../environment/EnvironmentGpuBindings.js';
+import { color as colorNode } from 'three/tsl';
 import { disposeWebGPUGeometries, disposeMaterialTextures } from '../scene/WebGPUResourceDisposal.js';
 
 // Viewer asset ownership is intentionally explicit here because viewer builders are
@@ -157,6 +158,8 @@ const SUN = new Vector3(-0.62, 0.74, -0.22).normalize();
 
 const app = document.getElementById('app');
 const errEl = document.getElementById('err');
+const foliageLabEl = document.getElementById('foliageLab');
+const foliageDiagnosticsEl = document.getElementById('foliageDiagnostics');
 const sm = new SceneManager(app);
 await sm.initialize();
 const lighting = new Lighting(sm.scene, SUN, sm.environmentTier);
@@ -173,7 +176,7 @@ const environmentState = new EnvironmentFrameState({
       color: { r: 1.0, g: 0.965, b: 0.90 },
   },
   atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.0 },
-  clouds: { coverage: 0.40, density: 0.52, baseHeight: 900, thickness: 1500, advectionScale: 1.0 },
+  clouds: { coverage: 0.26, density: 0.44, baseHeight: 1100, thickness: 1200, advectionScale: 1.0 },
   wind: {
     speed: 2.2,
     directionRadians: 0.4,
@@ -192,6 +195,103 @@ const turfPanel = new TurfPanel();
 let current = null;      // { terrain, objects[], grass, focus }
 let freeCam = null;
 const evaluatorCamera = new EvaluatorCamera({ camera: sm.camera, sceneManager: sm });
+const foliageDistances = [5, 20, 50, 100, 200];
+const foliageAzimuths = [0, 120, 240];
+const foliageDebugModes = ['beauty', 'alpha', 'material', 'normal', 'lod', 'hull', 'overdraw'];
+let frameDurations = [];
+
+function percentile(values, fraction) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
+}
+
+function setFoliageLabCamera(distance, azimuthDegrees) {
+  const angle = azimuthDegrees * Math.PI / 180;
+  // Distance presets are measured from the nearest crown support, not the trunk
+  // axis. The old 5 m preset placed the camera inside the 10.5 m-wide crown and
+  // turned intersected cards into misleading full-screen slivers.
+  const cameraDistance = distance + (current?.foliageStandoff ?? 0);
+  setCamera([Math.sin(angle) * cameraDistance, 10, Math.cos(angle) * cameraDistance], [0, 9.5, 0]);
+  const url = new URL(window.location);
+  url.searchParams.delete('cam');
+  url.searchParams.delete('look');
+  url.searchParams.set('dist', String(distance));
+  url.searchParams.set('az', String(azimuthDegrees));
+  history.replaceState(null, '', url);
+  updateFoliageLabPressedState();
+}
+
+function updateFoliageLabPressedState() {
+  const query = new URL(window.location).searchParams;
+  const queryDefaults = { alphaTest: '0.20', roughness: '1', normalShape: '0', transmission: '1', mip: '4' };
+  for (const button of foliageLabEl.querySelectorAll('button')) {
+    const selected = (button.dataset.distance && button.dataset.distance === query.get('dist'))
+      || (button.dataset.azimuth && button.dataset.azimuth === query.get('az'))
+      || (button.dataset.texture && button.dataset.texture === (query.get('texture') ?? 'ktx2'))
+      || (button.dataset.subject && button.dataset.subject === (query.get('subject') ?? 'tree'))
+      || (button.dataset.debug && button.dataset.debug === (query.get('debug') ?? 'beauty'))
+      || (button.dataset.background && button.dataset.background === (query.get('bg') ?? 'sky'))
+      || (button.dataset.sun && button.dataset.sun === (query.get('sun') ?? 'fixed'))
+      || (button.dataset.query && Number(button.dataset.value)
+        === Number(query.get(button.dataset.query) ?? queryDefaults[button.dataset.query]));
+    button.setAttribute('aria-pressed', String(Boolean(selected)));
+  }
+}
+
+for (const distance of foliageDistances) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.dataset.distance = String(distance); button.textContent = `${distance}m`;
+  button.addEventListener('click', () => setFoliageLabCamera(distance,
+    Number(new URL(window.location).searchParams.get('az') ?? 0)));
+  document.getElementById('foliageDistances').append(button);
+}
+for (const azimuth of foliageAzimuths) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.dataset.azimuth = String(azimuth); button.textContent = `${azimuth}°`;
+  button.addEventListener('click', () => setFoliageLabCamera(
+    Number(new URL(window.location).searchParams.get('dist') ?? 20), azimuth));
+  document.getElementById('foliageAzimuths').append(button);
+}
+for (const button of foliageLabEl.querySelectorAll('[data-texture]')) {
+  button.addEventListener('click', () => {
+    const url = new URL(window.location); url.searchParams.set('texture', button.dataset.texture); window.location.assign(url);
+  });
+}
+for (const button of foliageLabEl.querySelectorAll('[data-subject]')) {
+  button.addEventListener('click', () => {
+    const url = new URL(window.location); url.searchParams.set('subject', button.dataset.subject); window.location.assign(url);
+  });
+}
+for (const debugMode of foliageDebugModes) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.dataset.debug = debugMode; button.textContent = debugMode.toUpperCase();
+  button.addEventListener('click', () => {
+    const url = new URL(window.location); url.searchParams.set('debug', debugMode); window.location.assign(url);
+  });
+  document.getElementById('foliageDebugModes').append(button);
+}
+for (const button of foliageLabEl.querySelectorAll('[data-background]')) {
+  button.addEventListener('click', () => {
+    const url = new URL(window.location); url.searchParams.set('bg', button.dataset.background); window.location.assign(url);
+  });
+}
+for (const button of foliageLabEl.querySelectorAll('[data-query]')) {
+  button.addEventListener('click', () => {
+    const url = new URL(window.location); url.searchParams.set(button.dataset.query, button.dataset.value); window.location.assign(url);
+  });
+}
+for (const button of foliageLabEl.querySelectorAll('[data-sun]')) {
+  button.addEventListener('click', () => {
+    const url = new URL(window.location); url.searchParams.set('sun', button.dataset.sun); window.location.assign(url);
+  });
+}
+
+function applyFoliageBackground(mode) {
+  if (mode === 'dark') sm.scene.backgroundNode = colorNode(0x070b08);
+  else if (mode === 'light') sm.scene.backgroundNode = colorNode(0xd7dcd3);
+  else sm.scene.backgroundNode = sm.weatherSky?.backgroundNode ?? null;
+}
 
 function showError(msg) {
   errEl.textContent = msg;
@@ -309,7 +409,9 @@ const assetSwitcher = createViewerAssetSwitcher({
 
       // FreeCamera holds a terrain reference for its ground clamp; re-point it at the
       // patch we just built (each asset gets its own terrain).
-      if (!freeCam) freeCam = new FreeCamera(sm.camera, sm.renderer.domElement, built.terrain);
+      if (!freeCam) freeCam = new FreeCamera(sm.camera, sm.renderer.domElement, built.terrain, {
+        onDragEnd: () => sm.invalidateTemporalHistory('viewer free-camera drag settled'),
+      });
       else freeCam.terrain = built.terrain;
       if (!freeCam.active) freeCam.toggle();
 
@@ -327,9 +429,12 @@ const assetSwitcher = createViewerAssetSwitcher({
       lighting.follow(built.focus.x, built.focus.z);
       // ?cam=dx,dy,dz[&look=dx,dy,dz] overrides the automatic framing — see setCamera.
       const q = new URL(window.location).searchParams;
+      applyFoliageBackground(q.get('bg') ?? 'sky');
       const nums = (s) => s?.split(',').map(Number).filter((n) => Number.isFinite(n));
       const cam = nums(q.get('cam'));
       if (cam?.length === 3) setCamera(cam, nums(q.get('look'))?.length === 3 ? nums(q.get('look')) : undefined);
+      else if (Number.isFinite(Number(q.get('dist')))) setFoliageLabCamera(
+        Math.max(1, Number(q.get('dist'))), Number(q.get('az') ?? 0));
       else frame();
       if (built.note) showError(built.note);
       // Keep the dropdown, the URL and the scene in agreement — load() is callable from
@@ -338,6 +443,8 @@ const assetSwitcher = createViewerAssetSwitcher({
       url.searchParams.set('asset', name);
       history.replaceState(null, '', url);
       if (select.value !== name) select.value = name;
+      foliageLabEl.style.display = built.treeBeauty?.readDiagnostics ? 'block' : 'none';
+      updateFoliageLabPressedState();
     } catch (error) {
       current = oldCurrent;
       throw error;
@@ -381,7 +488,13 @@ window.addEventListener('keydown', (e) => {
 
 let frames = 0;
 let environmentTickRemainder = 0;
+const movingSun = new URL(window.location).searchParams.get('sun') === 'moving';
+const labSunDirection = SUN.clone();
 sm.onUpdate((dt, t) => {
+  if (dt > 0) {
+    frameDurations.push(dt * 1000);
+    if (frameDurations.length > 240) frameDurations = frameDurations.slice(-240);
+  }
   environmentTickRemainder += Math.min(dt, 0.25);
   const tickSeconds = environmentState.config.tickSeconds;
   const ticks = Math.floor(environmentTickRemainder / tickSeconds);
@@ -390,12 +503,48 @@ sm.onUpdate((dt, t) => {
     environment.update(environmentState);
     environmentTickRemainder -= ticks * tickSeconds;
   }
+  // Moving-sun inspection is deliberately viewer-only. It rotates the shared
+  // direct-light uniform, visible sun disc, terrain response, and actual shadow
+  // caster together; the expensive prefiltered sky remains the fixed reference
+  // bounce so this diagnostic does not rebuild a PMREM every animation frame.
+  if (movingSun) {
+    const azimuth = sunAzimuth + t * 0.16;
+    const horizontal = Math.cos(Math.asin(SUN.y));
+    labSunDirection.set(Math.sin(azimuth) * horizontal, SUN.y, Math.cos(azimuth) * horizontal).normalize();
+    environment.sunDirection.value.copy(labSunDirection);
+    const focus = current?.focus ?? { x: 0, z: 0 };
+    lighting.sun.position.set(focus.x + labSunDirection.x * 140, labSunDirection.y * 140,
+      focus.z + labSunDirection.z * 140);
+    lighting.sun.target.position.set(focus.x, 0, focus.z);
+    lighting.sun.target.updateMatrixWorld();
+    lighting.sun.shadow.needsUpdate = true;
+    current?.terrain?.uSunDir?.value?.copy(labSunDirection);
+  }
   frames++;
   if (evaluatorCamera.owned) evaluatorCamera.update();
   else if (freeCam?.active) freeCam.update(dt);
   current?.terrain?.update(sm.camera);
   current?.grass?.update(t, sm.camera);
   current?.treeBeauty?.update(sm.camera);
+  if (foliageLabEl.style.display !== 'none' && frames % 15 === 0) {
+    const diagnostics = current?.treeBeauty?.residencyEstimate(sm.camera);
+    if (diagnostics) foliageDiagnosticsEl.textContent = JSON.stringify({
+      distance: diagnostics.distance, texture: diagnostics.textureMode,
+      debug: diagnostics.debugMode,
+      subject: diagnostics.labSubject ?? 'tree', mipLevel: diagnostics.mipLevel,
+      clusterCount: diagnostics.clusterCount, clusterNames: diagnostics.clusterNames,
+      branches: diagnostics.branches, selectedBranches: diagnostics.selectedBranches,
+      selectedCards: diagnostics.selectedCards, selectedCardTotal: diagnostics.selectedCardTotal,
+      trianglesAllLods: diagnostics.foliageTrianglesAllLods,
+      drawCalls: diagnostics.drawCalls, atlasCoverage: diagnostics.atlasMetrics?.alphaCoverage,
+      atlasUtilization: diagnostics.atlasMetrics?.atlasUtilization,
+      labControls: diagnostics.labControls,
+      sunMode: movingSun ? 'moving-direct/reference-pmrem' : 'fixed',
+      alphaToCoverageSupported: false,
+      frameMsP50: Number(percentile(frameDurations, 0.50).toFixed(2)),
+      frameMsP95: Number(percentile(frameDurations, 0.95).toFixed(2)),
+    }, null, 2);
+  }
   evaluatorCamera.notifyFrame(sm.renderer.info.frame);
 });
 try {

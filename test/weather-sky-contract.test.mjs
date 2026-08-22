@@ -132,10 +132,10 @@ test('production state authors a bounded, non-zero cloud layer in both entry poi
     /clouds:\s*\{\s*coverage:\s*cloudCoverage,\s*density:\s*([\d.]+),\s*baseHeight:\s*(\d+),\s*thickness:\s*(\d+)/,
   );
   assert.ok(Number(gameDensity) > 0 && Number(gameDensity) <= 1);
-  assert.ok(Number(gameBase) >= 700 && Number(gameBase) <= 1100,
-    'the alpine cumulus base must stay in the authored 0.7–1.1 km band');
-  assert.ok(Number(gameThickness) >= 1200 && Number(gameThickness) <= 2200,
-    'the cloud volume needs 1.2–2.2 km depth for rounded billows');
+  assert.ok(Number(gameBase) >= 900 && Number(gameBase) <= 1500,
+    'the alpine cumulus base must clear the golfer-height mountain composition');
+  assert.ok(Number(gameThickness) >= 800 && Number(gameThickness) <= 1600,
+    'the cloud volume must retain enough depth for rounded broken billows');
   assert.ok(Number(gameBase) + Number(gameThickness) <= 3600,
     'the authored deck must leave the high massif readable');
 
@@ -374,6 +374,8 @@ test('HDR PMREM waits for decoded pixels and keeps the solar disc out of IBL', a
   assert.match(source, /if \(this\.skyManifest && !this\.weatherSky\.skyTextureLoaded\) return/);
   assert.match(source, /captureScene\.backgroundNode = this\.weatherSky\.iblBackgroundNode/);
   assert.match(source, /fromScene\(captureScene/);
+  assert.match(source, /disposeWebGPUSceneBackground\(this\.renderer, captureScene\)/,
+    'the ephemeral PMREM scene must release its renderer-owned sky sphere');
   assert.doesNotMatch(source, /fromEquirectangular\(this\.weatherSky\.skyTexture\)/);
   assert.match(weather, /includeSun = false/);
   assert.match(weather, /directMask/);
@@ -390,6 +392,12 @@ test('WeatherSky and SceneManager own rebuild/disposal boundaries', async () => 
   const weather = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
   const scene = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   assert.match(weather, /this\._disposed = true/);
+  assert.match(weather, /const backgroundRoots = new Set\(\[/,
+    'WeatherSky must release renderer-owned background meshes for every root node');
+  assert.match(weather, /for \(const root of backgroundRoots\) root\?\.dispose\?\.\(\)/);
+  assert.match(weather, /this\.clearBackgroundNode = null/);
+  assert.match(weather, /this\.iblBackgroundNode = null/);
+  assert.match(weather, /this\.backgroundNode = null/);
   assert.match(weather, /this\.skyTexture = null/);
   assert.match(scene, /this\._daylightPmremTarget\?\.dispose\(\)/);
   assert.match(scene, /this\.scene\.environment = null/);

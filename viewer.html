@@ -8,6 +8,10 @@
     <style>
       html, body { margin: 0; height: 100%; background: #0d0f0d; overflow: hidden; }
       #app { position: fixed; inset: 0; }
+      /* WebGPU renders at device-pixel resolution. Keep those backing pixels
+         inside one viewport-sized CSS box or high-DPI displays reveal only the
+         left/top fraction of the scene and make asset framing appear broken. */
+      #app canvas { display: block; width: 100%; height: 100%; }
       #picker {
         position: fixed; top: 12px; left: 12px; z-index: 60; display: flex; gap: 8px;
         align-items: center; background: rgba(18,20,18,.88); color: #e8eee6;
@@ -25,6 +29,15 @@
       #err { position: fixed; top: 70px; left: 12px; z-index: 60; max-width: 460px;
         color: #ffb4a8; background: rgba(40,16,12,.9); border-radius: 8px; padding: 10px 12px;
         font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; display: none; }
+      #foliageLab { position: fixed; top: 70px; right: 12px; z-index: 60; width: 310px;
+        color: #d9e6d3; background: rgba(14,18,14,.88); border: 1px solid rgba(124,151,112,.35);
+        border-radius: 10px; padding: 10px 12px; backdrop-filter: blur(8px);
+        font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; display: none; }
+      #foliageLab .row { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; }
+      #foliageLab button { color: #d9e6d3; background: #242d22; border: 1px solid #44533f;
+        border-radius: 4px; padding: 3px 6px; font: inherit; cursor: pointer; }
+      #foliageLab button[aria-pressed="true"] { background: #637a57; color: #fff; }
+      #foliageDiagnostics { white-space: pre-wrap; overflow-wrap: anywhere; opacity: .88; }
     </style>
   </head>
   <body>
@@ -35,6 +48,21 @@
     </div>
     <div id="hint">WASD move &middot; Space up &middot; Ctrl down &middot; Shift boost &middot; drag to look &middot; G turf panel &middot; F frame asset</div>
     <div id="err"></div>
+    <aside id="foliageLab" aria-label="Foliage laboratory">
+      <div class="row"><span>DIST</span><span id="foliageDistances"></span></div>
+      <div class="row"><span>AZ</span><span id="foliageAzimuths"></span></div>
+      <div class="row"><span>TEXTURE</span><button type="button" data-texture="ktx2">KTX2</button><button type="button" data-texture="png">PNG</button></div>
+      <div class="row"><span>SUBJECT</span><button type="button" data-subject="tree">TREE</button><button type="button" data-subject="atlas">ATLAS</button><button type="button" data-subject="cards">CARDS</button><button type="button" data-subject="mip">MIP</button></div>
+      <div class="row"><span>MIP</span><button type="button" data-query="mip" data-value="0">0</button><button type="button" data-query="mip" data-value="4">4</button><button type="button" data-query="mip" data-value="8">8</button></div>
+      <div class="row"><span>DEBUG</span><span id="foliageDebugModes"></span></div>
+      <div class="row"><span>BG</span><button type="button" data-background="sky">SKY</button><button type="button" data-background="light">LIGHT</button><button type="button" data-background="dark">DARK</button></div>
+      <div class="row"><span>ALPHA</span><button type="button" data-query="alphaTest" data-value="0.12">.12</button><button type="button" data-query="alphaTest" data-value="0.20">.20</button><button type="button" data-query="alphaTest" data-value="0.32">.32</button><button type="button" disabled title="Alpha-to-coverage requires MSAA; production TRAA uses a non-MSAA WebGPU target">A2C N/A</button></div>
+      <div class="row"><span>ROUGH</span><button type="button" data-query="roughness" data-value="0">0</button><button type="button" data-query="roughness" data-value="0.5">.5</button><button type="button" data-query="roughness" data-value="1">1</button></div>
+      <div class="row"><span>NORMAL</span><button type="button" data-query="normalShape" data-value="0">0</button><button type="button" data-query="normalShape" data-value="0.5">.5</button><button type="button" data-query="normalShape" data-value="1">1</button></div>
+      <div class="row"><span>TRANS</span><button type="button" data-query="transmission" data-value="0">0</button><button type="button" data-query="transmission" data-value="1">1</button><button type="button" data-query="transmission" data-value="2">2</button></div>
+      <div class="row"><span>SUN</span><button type="button" data-sun="fixed">FIXED</button><button type="button" data-sun="moving">MOVING</button></div>
+      <div id="foliageDiagnostics" data-testid="foliage-diagnostics">waiting for foliage diagnostics…</div>
+    </aside>
     <script type="module" src="/src/viewer/main.js"></script>
   </body>
 </html>

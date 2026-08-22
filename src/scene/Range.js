@@ -2,7 +2,7 @@ import {
   Group, Mesh, CylinderGeometry, BoxGeometry,
   MeshStandardMaterial, InstancedMesh,
   Object3D, Color, Vector3, DoubleSide, CanvasTexture,
-  TextureLoader, RepeatWrapping, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter,
+  TextureLoader, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter,
 } from 'three';
 import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
@@ -16,6 +16,9 @@ import { getCatalogAsset } from '../environment/EnvironmentCatalog.js';
 import { WaterSurface } from './WaterSurface.js';
 import { buildEnvironmentProps } from './EnvironmentProps.js';
 import { BackdropTerrain } from './BackdropTerrain.js';
+import { GeneratedFoliageForest } from './GeneratedFoliageTree.js';
+import { loadFoliageAlias } from '../foliage/FoliagePackResolver.js';
+import { buildRangePerimeterFoliage } from '../foliage/RangePerimeterFoliage.js';
 import {
   bunkerGradeAt, roundedHazardFeature, signedDistanceToFeature,
 } from '../course/featureGeometry.js';
@@ -31,7 +34,8 @@ export class Range {
   // terrain from these (heightFn/surfaceFn below); nothing here edits raw heights.
   // That is what lets the whole course be (re)built from a prompt-driven course.json
   // with no terrain-editing surface exposed to the user.
-  constructor(scene, camera, course, { renderer, motionHistory, lighting, environmentTier, environment, environmentCatalog } = {}) {
+  constructor(scene, camera, course, { renderer, motionHistory, lighting, environmentTier, environment, environmentCatalog,
+    foliageCandidateAlias = null, localFoliagePackRegistry = null } = {}) {
     if (!environmentTier?.grassRadius || !environmentTier?.trees) {
       throw new Error('Range requires the resolved environment device tier.');
     }
@@ -47,6 +51,13 @@ export class Range {
     if (!environmentCatalog?.byId) throw new Error('Range requires the verified environment catalog.');
     this.environment = environment;
     this.environmentCatalog = environmentCatalog;
+    const requestedFoliage = foliageCandidateAlias ?? course.environment.foliageAliases
+      ?? course.environment.foliageAlias ?? null;
+    this.foliageAliases = Object.freeze(Array.isArray(requestedFoliage)
+      ? [...requestedFoliage] : requestedFoliage ? [requestedFoliage] : []);
+    this.foliageAlias = this.foliageAliases[0] ?? null;
+    this.allowCandidateFoliage = Boolean(foliageCandidateAlias);
+    this.localFoliagePackRegistry = localFoliagePackRegistry;
     this.group = new Group();
     scene.add(this.group);
 
@@ -136,6 +147,7 @@ export class Range {
       // The backdrop shares the scene's one atmosphere rather than blending in a
       // fixed haze colour of its own; see worldMaterial in BackdropTerrain.js.
       environment,
+      renderer,
     });
     this.group.add(this.backdrop.group);
     this.terrain.waterHeightAt = (x, z) => this.waterHeightAt(x, z);
@@ -143,7 +155,14 @@ export class Range {
     // Resolve one immutable tree record set for both the visible forest and the
     // grass bake. Canopy suppression therefore follows the exact authored roots
     // and scaled catalog crown bounds rather than a second procedural forest mask.
-    const treePlacements = this._treePlacements();
+    const allTreePlacements = this._treePlacements();
+    // A practice range has its own perimeter planting logic. Generated foliage
+    // must not inherit course-vibe coordinates or a thinned side-line curtain.
+    const treePlacements = this.foliageAliases.length
+      ? buildRangePerimeterFoliage({
+        bounds: course.bounds, seed: this.environmentSeed, foliageAliases: this.foliageAliases,
+      })
+      : allTreePlacements;
 
     // Camera-relative grass (WebGPU / TSL). A world-cell-anchored field of ~1M
     // blades follows the camera every frame, sampling terrain height + surface
@@ -237,7 +256,7 @@ export class Range {
   }
 
   _surface(x, z) {
-    // Tee mat.
+    // Closely mown natural teeing ground.
     if (Math.abs(x - this.tee.x) < this.tee.boxHalfX && z < this.tee.z1 && z > this.tee.z0) return 'tee';
 
     // Target greens with a fringe collar.
@@ -277,43 +296,9 @@ export class Range {
   // ---- Props --------------------------------------------------------------
 
   _buildTee() {
-    const y0 = this.terrain.heightAt(0, 2);
-
-    // A realistic artificial hitting mat: a tufted-turf top with a darker rubber
-    // frame, sitting flush on the tee. The canvas texture supplies the fine
-    // synthetic-turf grain so it doesn't read as flat paint.
-    const matTop = new Mesh(
-      new BoxGeometry(2.4, 0.05, 1.6),
-      new MeshStandardMaterial({ map: makeMatTexture(this.environmentSeed), roughness: 0.9, metalness: 0.0 }),
-    );
-    // Sit the turf top PROUD of the rubber frame (top at y0+0.075 vs the frame's
-    // y0+0.06). Previously both tops sat at y0+0.06 — coplanar faces that z-fought and
-    // flickered light-green/dark under the temporal AA jitter.
-    matTop.position.set(0, y0 + 0.05, 2);
-    matTop.receiveShadow = true;
-    matTop.castShadow = true;
-    this.group.add(matTop);
-
-    // Rubber mat surround — a lit dark-olive rubber, NOT a black void. Slight
-    // spec so it catches the low sun instead of reading as an unlit hole.
-    const frame = new Mesh(
-      new BoxGeometry(2.7, 0.06, 1.9),
-      new MeshStandardMaterial({ color: 0x3f463a, roughness: 0.7, metalness: 0.0 }),
-    );
-    frame.position.set(0, y0 + 0.03, 2);
-    frame.receiveShadow = true;
-    frame.castShadow = true;
-    this.group.add(frame);
-
-    // No tee peg. There used to be a 5 cm rubber peg here centred at y0+0.06, i.e.
-    // spanning y0+0.035 to y0+0.085 — but the ball is NOT teed up: physics rests it on
-    // the ground (centre = ground + radius) and the renderer sinks it ~3 mm into the
-    // canopy, putting its top at about y0+0.040. The peg therefore speared straight
-    // through the ball and stood 4.5 cm proud of it from every angle, which is very
-    // obvious in the macro address shot. Lowering it doesn't help either: a peg
-    // actually supporting a grounded ball would have to sit entirely below the turf.
-    // If a teed lie is ever wanted, raise the BALL (Ball.placeAt already accepts a
-    // teeHeight) and bring the peg back to meet it.
+    // The ball now rests directly on the rendered tee turf. Keeping this area free
+    // of raised prop geometry also guarantees that the physics lie and visible
+    // contact plane agree at address.
 
     // Two painted tee markers, set just behind the ball line. A low truncated
     // cylinder reads as a rubber/painted marker and has a real ground contact,
@@ -510,6 +495,47 @@ export class Range {
   // catalog asset rather than one merged batch.
   async _buildTreeLine(placements = this._treePlacements()) {
     if (!placements.length) return;
+    if (this.foliageAliases.length) {
+      const grouped = new Map(this.foliageAliases.map((alias) => [alias, []]));
+      for (const placement of placements) {
+        if (!grouped.has(placement.foliageAlias)) {
+          throw new Error(`Range perimeter foliage produced undeclared alias "${placement.foliageAlias}".`);
+        }
+        grouped.get(placement.foliageAlias).push(placement);
+      }
+      const activeGroups = [...grouped].filter(([, records]) => records.length);
+      const packs = await Promise.all(activeGroups.map(([alias]) => loadFoliageAlias(alias, {
+        renderer: this.renderer, textureMode: 'ktx2', allowCandidate: this.allowCandidateFoliage,
+        local: this.localFoliagePackRegistry,
+      })));
+      this.trees = new Group();
+      this.trees.name = `trees-generated:${activeGroups.map(([alias]) => alias).join('+')}`;
+      this.treeBeauties = activeGroups.map(([alias, records], index) => {
+        const pack = packs[index];
+        const nativeHeight = pack.manifest.species?.nativeHeightMeters ?? 19.5;
+        const generatedPlacements = records.map((placement) => Object.freeze({
+          ...placement,
+          y: this.terrain.heightAt(placement.x, placement.z) - 0.04,
+          scale: placement.targetHeight / nativeHeight,
+          rotY: placement.rotationY,
+        }));
+        const forest = new GeneratedFoliageForest({
+          pack, placements: generatedPlacements, environment: this.environment,
+          camera: this.camera, motionHistory: this.motionHistory, renderer: this.renderer,
+          seed: deriveSeed(this.environmentSeed, `generated-foliage:${alias}`),
+          // Five independently seeded skeletons are the renderer's bounded maximum.
+          // Two identities still formed obvious A/B repeats in perimeter groves;
+          // yaw and scale cannot disguise identical leader and scaffold topology.
+          identityCount: 5,
+        });
+        this.trees.add(forest.group);
+        return forest;
+      });
+      this.treeShadows = [];
+      this.group.add(this.trees);
+      this.lighting?.invalidateShadow();
+      return;
+    }
     const byAsset = new Map();
     for (const placement of placements) {
       if (!byAsset.has(placement.assetId)) byAsset.set(placement.assetId, []);
@@ -549,6 +575,7 @@ export class Range {
         camera: this.camera,
         motionHistory: this.motionHistory,
         environment: this.environment,
+        wind: asset.wind,
         lodNear: this.environmentTier.trees.lodNear,
         lodFar: this.environmentTier.trees.lodFar,
       });
@@ -618,8 +645,10 @@ export class Range {
     const treeOwned = new Set();
     for (const shadow of this.treeShadows || []) treeOwned.add(shadow.mesh);
     const beautyGroups = new Set((this.treeBeauties || []).map((beauty) => beauty.group));
+    const backdropOwned = new Set();
+    this.backdrop?.group?.traverse((object) => backdropOwned.add(object));
     this.group.traverse((o) => {
-      if (o === this.grass?.mesh || treeOwned.has(o) || beautyGroups.has(o.parent)) return;
+      if (o === this.grass?.mesh || treeOwned.has(o) || beautyGroups.has(o.parent) || backdropOwned.has(o)) return;
       if (o.geometry) geometries.push(o.geometry);
       const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
       materials.push(...mats);
@@ -645,6 +674,7 @@ export class Range {
     for (const shadow of this.treeShadows || []) shadow.dispose();
     for (const beauty of this.treeBeauties || []) beauty.dispose();
     for (const surface of this._water || []) surface.dispose();
+    this.backdrop?.dispose();
     this.terrain?.dispose();
     this.grass = null;
     this.treeShadows = null;
@@ -833,27 +863,4 @@ function makeTargetFlagGeometry() {
   geometry.computeVertexNormals();
   geometry.name = 'target-flag-cloth-shared';
   return geometry;
-}
-
-// Synthetic-turf texture for the hitting mat: a fine green tuft grain, so the mat
-// reads as real matting rather than flat plastic. No mow banding — the mat is 2.4 x
-// 1.6 m, so bands at any believable spacing read as stripes painted on a prop.
-function makeMatTexture(seed = 0x43474f4c) {
-  const N = 256;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = N;
-  const ctx = cv.getContext('2d');
-  ctx.fillStyle = '#2f5228'; ctx.fillRect(0, 0, N, N);
-  const random = createRng(deriveSeed(seed, 'hitting-mat-texture'));
-  // Fine tuft speckle.
-  for (let i = 0; i < 9000; i++) {
-    const x = random() * N, y = random() * N;
-    const g = 60 + random() * 90;
-    ctx.fillStyle = `rgba(${Math.round(g * 0.5)},${Math.round(g)},${Math.round(g * 0.4)},0.5)`;
-    ctx.fillRect(x, y, 1, 2);
-  }
-  const tex = new CanvasTexture(cv);
-  tex.wrapS = tex.wrapT = RepeatWrapping;
-  tex.anisotropy = 8;
-  return tex;
 }

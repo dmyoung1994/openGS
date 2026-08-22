@@ -43,6 +43,7 @@ automatically — you do not set it.
   "bunkers": [ { "x": 20, "z": -86, "r": 5.0, "depth": 1.0, "pot": false } ],
   "ponds":   [ { "x": 55, "z": -122, "r": 15, "depth": 1.6 } ],
   "environment": {
+    "foliageAliases": ["builtin.douglas-fir.pnw.v1", "builtin.monterey-cypress.coastal.v1"],
     "objectBudget": 700,
     "placements": [ { "id": "hero-tree", "assetId": "polyhaven-island-tree-01", "x": -72, "z": -70, "rotationY": 1.15, "scale": 1.55 } ],
     "scatter": [],
@@ -77,6 +78,12 @@ exist in `public/assets/environment/catalog.json`; placement is deterministic fr
 the course and record seeds, constrained by catalog spacing/slope data, protected
 playing surfaces, exclusions, and the hard object budget. Raw terrain elevation and
 materials remain intentionally non-authorable.
+
+Generated foliage is selected by a versioned `environment.foliageAlias` string or
+an ordered, unique `environment.foliageAliases` array; the forms are mutually
+exclusive. Aliases resolve through the immutable built-in/local pack registry, never
+through raw course paths. Practice-range planting derives its perimeter mix only from
+the declared aliases and fails closed on an undeclared species.
 
 ## Two authoring paths (same course.json)
 

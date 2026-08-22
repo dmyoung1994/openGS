@@ -36,6 +36,27 @@ export function disposeWebGPUGeometries(renderer, geometries) {
   }
 }
 
+// WebGPURenderer synthesizes a sky-sphere mesh inside its private Background
+// registry rather than attaching it to the rendered Scene. Short-lived scenes
+// (notably PMREM captures) therefore cannot release that geometry by traversal.
+// Keep this Three-version-specific boundary beside the other explicit WebGPU
+// ownership helpers and fail closed if the renderer contract changes.
+export function disposeWebGPUSceneBackground(renderer, scene) {
+  const backgrounds = renderer?._background;
+  if (!renderer?.isWebGPURenderer || typeof backgrounds?.has !== 'function'
+    || typeof backgrounds?.get !== 'function' || typeof backgrounds?.delete !== 'function') {
+    throw new Error('WebGPU scene-background disposal contract is unavailable.');
+  }
+  if (!backgrounds.has(scene)) return;
+  const backgroundMesh = backgrounds.get(scene)?.backgroundMesh;
+  if (backgroundMesh) {
+    disposeWebGPUGeometries(renderer, [backgroundMesh.geometry]);
+    backgroundMesh.material?.dispose?.();
+  }
+  backgrounds.delete(scene);
+  renderer._nodes?.delete?.(scene);
+}
+
 export function disposeMaterialTextures(materials) {
   const textures = new Set();
   for (const material of new Set(materials.filter(Boolean))) {

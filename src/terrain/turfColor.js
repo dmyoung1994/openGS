@@ -40,6 +40,11 @@ const ALBEDO_OF = { deepRough: 'rough' };
 // photograph puts it.
 const LIFT = { rough: 1.43 };
 
+// One shared pigment transform for the geometric rough blades and the terrain
+// directly beneath them. Keeping this here prevents a dense green canopy from
+// revealing a greyer substrate through normal inter-blade gaps.
+export const TURF_BLADE_SATURATION = 1.28;
+
 // Current fairway reels cut about 100 in / 2.54 m per pass. Alternating light/dark
 // lays therefore repeat every two passes (5.08 m), not at the former stylized 14 m
 // cycle. The range runs down -Z; this fixed linear axis makes every pass perfectly
@@ -76,5 +81,12 @@ export function turfBase(name, out = new Color()) {
   // transform and comes primarily from registered leaf-lay normals/roughness.
   out.setHSL(_hsl.h + (0.225 - _hsl.h) * 0.55, _hsl.s * 0.66, _hsl.l * 0.89, SRGBColorSpace);
   if (LIFT[key]) out.multiplyScalar(LIFT[key]);
+  return out;
+}
+
+export function turfBladeBase(name, out = new Color()) {
+  turfBase(name, out);
+  out.getHSL(_hsl, SRGBColorSpace);
+  out.setHSL(_hsl.h, Math.min(_hsl.s * TURF_BLADE_SATURATION, 1), _hsl.l, SRGBColorSpace);
   return out;
 }

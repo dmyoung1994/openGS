@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "processorVersion": "foliage-pipeline-v3",
+  "foliageAlias": "builtin.monterey-cypress.coastal.v1",
+  "species": {
+    "id": "monterey-cypress",
+    "commonName": "Monterey cypress",
+    "botanicalName": "Hesperocyparis macrocarpa",
+    "nativeHeightMeters": 18,
+    "clusterScaleMeters": [0.45, 4.2]
+  },
+  "source": {
+    "file": "../../../public/assets/trees_candidates/generated_monterey_cypress/source/monterey-cypress-source-sheet-v1.png",
+    "sha256": "b6c8c8d17a190ffa3ec606ad79fdc59f1d140570594106287c3b9dcaccef5606",
+    "generatedAt": "2026-08-20",
+    "provider": "OpenAI ImageGen built-in tool",
+    "mode": "botanical-asset",
+    "promptRecord": "../../../public/assets/trees_candidates/generated_monterey_cypress/README.md",
+    "layout": { "mode": "components-2x4", "columns": 2, "rows": 4 },
+    "roles": [
+      { "name": "sparse-windward", "density": "sparse", "lodUse": [0, 1, 2], "baseEdge": "left", "attachmentUv": [0.03, 0.06], "tipUv": [0.91, 0.95], "recommendedScaleMeters": 3.0 },
+      { "name": "small-rounded", "density": "medium", "lodUse": [0, 1], "baseEdge": "bottom", "attachmentUv": [0.49, 0.04], "tipUv": [0.52, 0.94], "recommendedScaleMeters": 2.2 },
+      { "name": "medium-lateral", "density": "medium", "lodUse": [0, 1, 2], "baseEdge": "left", "attachmentUv": [0.02, 0.18], "tipUv": [0.93, 0.91], "recommendedScaleMeters": 3.4 },
+      { "name": "dense-interior", "density": "dense", "lodUse": [0, 1, 2], "baseEdge": "bottom", "attachmentUv": [0.38, 0.04], "tipUv": [0.55, 0.94], "recommendedScaleMeters": 3.2 },
+      { "name": "forked-edge", "density": "medium", "lodUse": [0, 1], "baseEdge": "bottom", "attachmentUv": [0.50, 0.03], "tipUv": [0.50, 0.95], "recommendedScaleMeters": 2.8 },
+      { "name": "dark-mature", "density": "dense", "lodUse": [0, 1, 2], "baseEdge": "left", "attachmentUv": [0.25, 0.10], "tipUv": [0.60, 0.94], "recommendedScaleMeters": 3.5 },
+      { "name": "weathered-dry", "density": "medium", "lodUse": [0, 1], "baseEdge": "right", "attachmentUv": [0.93, 0.06], "tipUv": [0.07, 0.90], "recommendedScaleMeters": 3.1 },
+      { "name": "silhouette-breaker", "density": "sparse", "lodUse": [0, 1, 2], "baseEdge": "left", "attachmentUv": [0.03, 0.20], "tipUv": [0.93, 0.94], "recommendedScaleMeters": 3.8 }
+    ]
+  },
+  "structuralMaterial": {
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/pine_tree_01",
+    "provenance": "../../../docs/conifer-v3-provenance.md",
+    "textures": [
+      { "role": "albedo", "file": "../../../public/assets/trees_src/pine_tree_01/textures/pine_tree_01_bark_diff_1k.jpg", "output": "monterey-cypress-bark-albedo.jpg", "sha256": "5c76836b01c3536fa0e24207b67bf4f3315b53ebe2b4ecc6f08dfcf3f8d74929" },
+      { "role": "normal", "file": "../../../public/assets/trees_src/pine_tree_01/textures/pine_tree_01_bark_nor_gl_1k.jpg", "output": "monterey-cypress-bark-normal.jpg", "sha256": "05c46455531781b6cf18cae0648cf627f60ee942adaa8bcbfd1592fc2506a9e0" },
+      { "role": "arm", "file": "../../../public/assets/trees_src/pine_tree_01/textures/pine_tree_01_bark_arm_1k.jpg", "output": "monterey-cypress-bark-arm.jpg", "sha256": "336a4680cd571b6076b67afee2310b290b8900d9d126eb39ec1ae92e95be2ea9" }
+    ]
+  },
+  "processing": {
+    "atlasSize": 2048, "atlasPadding": 24, "supportHullSectors": 8,
+    "alphaCleanupThreshold": 18, "coverageThreshold": 51, "rgbDilationRadius": 18,
+    "trimPadding": 10, "minimumCellSeparationPixels": 8,
+    "maximumMipCoverageDrift": 0.025, "maximumTransparentOverdraw": 0.72,
+    "ktx2": { "mode": "UASTC", "qualityLevel": 3, "rdoQualityLevel": 1.25, "zstdSupercompression": true, "flipYForThreeTextureConvention": true }
+  }
+}

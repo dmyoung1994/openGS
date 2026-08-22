@@ -20,7 +20,7 @@ test('v7/v8 candidate foliage uses shared-environment Phong with authored alpha 
   assert.match(trees, /const candidatePhongAtlas = \(coniferV7 && part\.material\.map\) \|\| v8ProductionPhongAtlas/);
   assert.match(trees, /const barkRole = atlasUv\.x\.lessThan\(0\.25\)\.and\(atlasUv\.y\.lessThan\(0\.25\)\)/);
   assert.match(trees, /const boundedTransmission = needleTransmission\(/);
-  assert.match(trees, /material\.maskNode = texel\.a\.greaterThan\(TREE_ALPHA_CUTOFF\)/);
+  assert.match(trees, /useStableFoliageCoverage\(material, texel\.a\)/);
   assert.match(trees, /material\.colorNode = candidateAlbedo/);
   assert.match(trees, /material\.normalNode = shadingViewNormal/);
   assert.doesNotMatch(trees, /candidatePhongAtlas[\s\S]{0,300}emissive/);
@@ -30,16 +30,18 @@ test('candidate atlas grade is bounded by measured linear source/target ranges',
   assert.match(trees, /CONIFER_CANDIDATE_BARK_SOURCE_LINEAR = Object\.freeze\(\[0\.0662, 0\.0551, 0\.0402\]\)/);
   assert.match(trees, /CONIFER_CANDIDATE_BARK_TARGET_LINEAR = Object\.freeze\(\[0\.080, 0\.065, 0\.048\]\)/);
   assert.match(trees, /CONIFER_CANDIDATE_NEEDLE_SOURCE_MEDIAN_LINEAR = Object\.freeze\(\[0\.0561, 0\.0762, 0\.0194\]\)/);
-  assert.match(trees, /CONIFER_CANDIDATE_NEEDLE_TARGET_MEDIAN_LINEAR = Object\.freeze\(\[0\.124, 0\.168, 0\.042\]\)/);
+  assert.match(trees, /CONIFER_CANDIDATE_NEEDLE_TARGET_MEDIAN_LINEAR = Object\.freeze\(\[0\.080, 0\.115, 0\.030\]\)/);
   assert.match(trees, /CONIFER_CANDIDATE_BARK_LINEAR_NORMALIZATION = vec3\(1\.21, 1\.18, 1\.19\)/);
-  assert.match(trees, /CONIFER_CANDIDATE_NEEDLE_LINEAR_NORMALIZATION = vec3\(2\.21, 2\.21, 2\.16\)/);
+  assert.match(trees, /CONIFER_CANDIDATE_NEEDLE_LINEAR_NORMALIZATION = vec3\(1\.43, 1\.51, 1\.55\)/);
   assert.match(trees, /CONIFER_CANDIDATE_NEEDLE_CONTRAST = 0\.72/);
   assert.match(trees, /CONIFER_CANDIDATE_NEEDLE_SATURATION = 0\.82/);
-  assert.match(trees, /mix\(\s*vec3\(0\.124, 0\.168, 0\.042\)/);
+  assert.match(trees, /mix\(\s*vec3\(0\.080, 0\.115, 0\.030\)/);
   assert.match(trees, /saturation\(\n\s*mix\(/);
   assert.match(trees, /sunToEye = viewDirectionWorld\.dot\(environment\.sunDirection\)/);
   assert.match(trees, /shininess: 2\.0/);
   assert.match(trees, /reflectivity: 0\.03/);
+  assert.match(trees, /normalLocal\.mul\(0\.46\)\.add\(v4ParentOutward\.mul\(0\.54\)\)/,
+    'macro foliage cards should shade as crown volume instead of flat planes');
   assert.match(trees, /texel\.rgb\.mul\(CONIFER_CANDIDATE_BARK_LINEAR_NORMALIZATION\)/);
   assert.match(trees, /texel\.rgb\.mul\(CONIFER_CANDIDATE_NEEDLE_LINEAR_NORMALIZATION\)/);
 });

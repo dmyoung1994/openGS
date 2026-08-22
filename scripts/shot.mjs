@@ -70,6 +70,7 @@ const chrome = process.env.CHROME || '/Applications/Google Chrome.app/Contents/M
 const game = has('game');
 const waitRest = game && has('wait-rest');
 const shotTransitionSequence = game && has('shot-transition-seq');
+const shotFlightSequence = game && has('shot-flight-seq');
 const parseTriple = (value, name) => {
   if (value === undefined) return null;
   const parsed = String(value).split(',').map(Number);
@@ -82,14 +83,15 @@ const cameraPose = parseTriple(arg('cam'), 'cam');
 const cameraLook = parseTriple(arg('look'), 'look');
 const cameraSweepPose = parseTriple(arg('cam-to'), 'cam-to');
 const cameraSweepLook = parseTriple(arg('look-to'), 'look-to');
-if ((cameraSweepPose || cameraSweepLook) && !game) {
-  throw new Error('--cam-to/--look-to are available only with --game.');
-}
 if ((cameraSweepPose || cameraSweepLook) && (!cameraPose || !cameraLook || !cameraSweepPose || !cameraSweepLook)) {
   throw new Error('A camera sweep requires --cam, --look, --cam-to, and --look-to together.');
 }
 const url = new URL(game ? '/index.html' : '/viewer.html', base);
-if (game) url.searchParams.set('view', arg('view', 'practice'));   // skip the landing menu
+if (game) {
+  url.searchParams.set('view', arg('view', 'practice'));   // skip the landing menu
+  const foliageCandidate = arg('foliage-candidate');
+  if (foliageCandidate) url.searchParams.set('foliageCandidate', String(foliageCandidate));
+}
 else url.searchParams.set('asset', asset);
 if (!game && cameraPose) url.searchParams.set('cam', cameraPose.join(','));
 if (!game && cameraLook) url.searchParams.set('look', cameraLook.join(','));
@@ -173,7 +175,7 @@ try {
   // ball reports rest, then spans the app's real hold timer and damped return. It
   // catches camera cuts, repeated temporal resets, and viewport churn that a frozen
   // evaluator-camera probe cannot exercise.
-  if (shotTransitionSequence) {
+  if (shotTransitionSequence || shotFlightSequence) {
     // The engine API owns camera/live scene state, but the existing narrow public
     // shot boundary is the launch-monitor control. Dispatch it in-page so an
     // off-screen browser never depends on hit-testing an overlaid element.
@@ -182,13 +184,21 @@ try {
       () => window.golf?.ball?.state === 'airborne' || window.golf?.ball?.state === 'rolling',
       { timeout: 5000, polling: 10 },
     );
-    await page.waitForFunction(
-      () => window.golf?.ball?.state === 'rest',
-      { timeout: 45000, polling: 25 },
-    );
-    const dir = out.replace(/\.png$/, '-transition-seq');
+    if (!shotFlightSequence) {
+      await page.waitForFunction(
+        () => window.golf?.ball?.state === 'rest',
+        { timeout: 45000, polling: 25 },
+      );
+    }
+    const sequenceName = shotFlightSequence ? 'flight' : 'transition';
+    const sequenceArg = shotFlightSequence ? 'shot-flight-seq' : 'shot-transition-seq';
+    const dir = out.replace(/\.png$/, `-${sequenceName}-seq`);
     await mkdir(dir, { recursive: true });
-    const n = Number(arg('shot-transition-seq', 180));
+    const requestedSequenceFrames = arg(sequenceArg, 180);
+    // A bare sequence flag is the documented/common form. `arg()` returns true
+    // when the next token is another option, so preserve the 180-frame default
+    // instead of coercing true to a one-frame sequence.
+    const n = requestedSequenceFrames === true ? 180 : Number(requestedSequenceFrames);
     const stride = Math.max(1, Number(arg('transition-stride', 2)));
     const states = [];
     for (let i = 0; i < n; i++) {
@@ -200,6 +210,9 @@ try {
       const [state, buffer] = await Promise.all([
         page.evaluate(() => ({
           phase: window.golf.director.phase,
+          ballState: window.golf.ball.state,
+          cameraPosition: window.golf.sm.camera.position.toArray(),
+          ballPosition: window.golf.ball.position.toArray(),
           viewport: window.golf.sm.readViewportDiagnostics(),
           invalidation: window.golf.sm._lastTemporalInvalidation || null,
           temporal: {
@@ -213,7 +226,7 @@ try {
       ]);
       states.push(state);
       await writeFile(`${dir}/f${String(i).padStart(3, '0')}.png`, buffer);
-      if (state.phase === 'address' && i > 8) break;
+      if (shotFlightSequence ? state.phase === 'result' && i > 8 : state.phase === 'address' && i > 8) break;
     }
     const signatures = new Set(states.map((state) => JSON.stringify({
       revision: state.viewport.revision,
@@ -228,7 +241,7 @@ try {
         ? [{ frame: index, from: states[index - 1].phase, to: state.phase }]
         : []
     ));
-    console.log(`shot-transition frames=${states.length} phases=${phases.join(',')} viewportSignatures=${signatures.size} changes=${JSON.stringify(phaseChanges)}`);
+    console.log(`shot-${sequenceName} frames=${states.length} phases=${phases.join(',')} viewportSignatures=${signatures.size} changes=${JSON.stringify(phaseChanges)}`);
     if (signatures.size !== 1) throw new Error('Shot transition changed viewport/backing-store dimensions.');
     const jitteredMotionFrames = states.filter((state) => state.temporal.cameraMoving
       && state.temporal.cameraJitterEnabled !== false);
@@ -402,16 +415,16 @@ try {
     const dir = out.replace(/\.png$/, '-seq');
     await mkdir(dir, { recursive: true });
     const frames = [];
+    const sequenceStates = [];
     for (let i = 0; i < n; i++) {
       if (cameraSweepPose) {
         const t = n <= 1 ? 1 : i / (n - 1);
-        await page.evaluate(({ fromPosition, toPosition, fromLookAt, toLookAt, alpha, fov }) => {
+        await page.evaluate(({ fromPosition, toPosition, fromLookAt, toLookAt, alpha, fov, gameView }) => {
           const lerp = (a, b) => a.map((value, index) => value + (b[index] - value) * alpha);
-          window.golf.evaluatorCamera.setPose({
-            position: lerp(fromPosition, toPosition),
-            lookAt: lerp(fromLookAt, toLookAt),
-            fov,
-          });
+          const position = lerp(fromPosition, toPosition);
+          const lookAt = lerp(fromLookAt, toLookAt);
+          if (gameView) window.golf.evaluatorCamera.setPose({ position, lookAt, fov });
+          else window.viewer.setCamera(position, lookAt);
         }, {
           fromPosition: cameraPose,
           toPosition: cameraSweepPose,
@@ -419,15 +432,26 @@ try {
           toLookAt: cameraSweepLook,
           alpha: t,
           fov: Number(arg('fov', 40)),
+          gameView: game,
         });
       }
       await page.evaluate(() => new Promise((r) => {
         let k = 0; const t = () => (++k >= 3 ? r() : requestAnimationFrame(t)); requestAnimationFrame(t);
       }));
-      const b = await canvas.screenshot();
+      const [b, state] = await Promise.all([
+        canvas.screenshot(),
+        page.evaluate((gameView) => gameView ? {
+          cameraPosition: window.golf.sm.camera.position.toArray(),
+          diagnostics: null,
+        } : {
+          cameraPosition: window.viewer.sm.camera.position.toArray(),
+          diagnostics: window.viewer.treeDiagnostics(),
+        }, game),
+      ]);
       await writeFile(`${dir}/f${String(i).padStart(3, '0')}.png`, b);
       const decoded = decodePNG(b);
       frames.push({ W: decoded.width, H: decoded.height, ch: decoded.channels, px: decoded.pixels });
+      sequenceStates.push({ frame: i, ...state });
     }
     const { W, H, ch } = frames[0];
     const maxD = new Uint8Array(W * H);
@@ -452,6 +476,13 @@ try {
       heat[p * 3] = v; heat[p * 3 + 1] = Math.max(0, v - 128) * 2; heat[p * 3 + 2] = 0;
     }
     await writeFile(out.replace(/\.png$/, '-flicker.png'), encodePNG(W, H, heat));
+    await writeFile(`${dir}/report.json`, `${JSON.stringify({
+      asset: game ? 'production-range' : asset,
+      camera: { from: cameraPose, to: cameraSweepPose, lookFrom: cameraLook, lookTo: cameraSweepLook },
+      frames: sequenceStates,
+      meanDelta: Number(mean.toFixed(4)),
+      pctPixelsUnstable: Number((100 * hot / (W * H)).toFixed(4)),
+    }, null, 2)}\n`);
     console.log(`wrote ${dir}/ and -flicker.png`);
   }
 

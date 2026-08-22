@@ -54,21 +54,21 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'fairway pigment must support rather than paint the reel-pass response');
   assert.match(source, /const mowResolution\s*=\s*oneMinus\(smoothstep\(0\.28, 1\.10, duvM\)\)/,
     'mowing must recede by surface footprint without a camera or ball-centred cutoff');
-  assert.match(source, /green: grassCol\('fairway'\), fringe: grassCol\('fairway'\)/,
-    'target turf must share maintained pigment instead of becoming nested albedo decals');
-  assert.match(source, /zoneRoughness = mix\(zoneRoughness, float\(0\.66\), m\.green\)/,
+  assert.match(source, /green: grassCol\('green', 0\.92\), fringe: grassCol\('fringe', 0\.96\)/,
+    'green and fringe need restrained cut-specific pigment rather than fairway recoloring');
+  assert.match(source, /zoneRoughness = mix\(zoneRoughness, float\(0\.60\), m\.green\)/,
     'target turf must remain legible through its physical cut-height response');
   assert.match(source, /const rGrassV\s*=\s*rGrassD\.add\(graze\.mul\(0\.16\)\)\.add\(mowAnisotropy\)\.clamp\(0\.68, 0\.98\)/,
     'grazing response must be monotone matte roughening, not a camera-centred ring');
   assert.match(source, /mat\.specularIntensityNode\s*=\s*this\.uSpecular\.mul\(mowSpecular\)\.mul\(cutSpecular\)/,
     'mowing needs bounded real-light dielectric response registered to leaf lay');
-  assert.match(source, /cutSpecular = mix\(cutSpecular, float\(1\.14\), m\.green\)/,
+  assert.match(source, /cutSpecular = mix\(cutSpecular, float\(1\.20\), m\.green\)/,
     'maintained-cut identity must remain driven by the shared real-light specular path');
   assert.match(source, /const viewAlongLay\s*=\s*V\.x\.mul\(layDirection\.x\)/,
     'mowing response must include directional grazing interaction');
-  assert.match(source, /zoneRoughness = mix\(zoneRoughness, float\(0\.87\), m\.fringe\)[\s\S]*?zoneRoughness = mix\(zoneRoughness, float\(0\.66\), m\.green\)/,
+  assert.match(source, /zoneRoughness = mix\(zoneRoughness, float\(0\.87\), m\.fringe\)[\s\S]*?zoneRoughness = mix\(zoneRoughness, float\(0\.60\), m\.green\)/,
     'green cut height needs a distinct matte/specular response');
-  assert.match(source, /zoneGrade = mix\(zoneGrade, float\(0\.925\), m\.green\)/,
+  assert.match(source, /zoneGrade = mix\(zoneGrade, float\(0\.950\), m\.green\)/,
     'green pigment support must remain restrained relative to fairway');
   assert.doesNotMatch(source, /uNear0|uNear1|const camDist\s*=/,
     'detail handoff must not be camera-distance/radial');
@@ -256,9 +256,9 @@ test('rough blade density includes a stable ecological-scale cluster field', asy
   assert.match(source, /macroCluster\s*=\s*mx_noise_float/, 'rough clustering must be world anchored');
   assert.match(source, /mix\( hE, ecological, roughMask \)/, 'cluster field must be confined to rough transitions');
   assert.match(source, /keepCandidate\s*=\s*hC\.lessThan/, 'rough density must explicitly reject candidates');
-  assert.match(source, /ROUGH_COVERAGE_MIN\s*=\s*0\.28/, 'rough occupancy must retain a dense coverage floor');
-  assert.match(source, /ROUGH_COVERAGE_MAX\s*=\s*0\.66/, 'rough occupancy must retain solid tuft mass');
-  assert.match(source, /ROUGH_COLONY_FLOOR\s*=\s*0\.64/, 'rough colonies must not collapse to sparse wire blades');
+  assert.match(source, /ROUGH_COVERAGE_MIN\s*=\s*0\.64/, 'rough patch occupancy must retain a dense coverage floor');
+  assert.match(source, /ROUGH_COVERAGE_MAX\s*=\s*0\.88/, 'rough patch occupancy must retain solid tuft mass');
+  assert.match(source, /ROUGH_COLONY_FLOOR\s*=\s*0\.88/, 'rough colonies must not collapse to sparse wire blades');
 });
 
 test('rough colonies vary tuft height, heading, and albedo without another draw', async () => {

@@ -7,6 +7,9 @@ traces/
 shaders/
 benchmarks/
 
+# Local capture/intermediate output from visual and foliage experiments.
+tmp/
+
 # Agent worktrees (Claude Code scratch copies of the tree)
 .claude/worktrees/
 

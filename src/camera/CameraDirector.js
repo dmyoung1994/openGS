@@ -18,6 +18,7 @@ export class CameraDirector {
     this.phase = 'address';
     this.aim = new Vector3(0, 0, -1);
     this._horizontal = new Vector3();
+    this._flightSide = new Vector3();
     this._resultAngle = 0;
     this._launchDir = new Vector3(0, 0, -1);
     this._launchY = 0;
@@ -51,9 +52,12 @@ export class CameraDirector {
     // Start directly on the target line behind the ball so the opening composition
     // reads straight down-range rather than as an offset over-the-shoulder view.
     this.pos.copy(ballPos).addScaledVector(this.aim, -4.5);
-    this.pos.y += 2.0;
+    // A 2 m camera looking almost level put the ball below the 40-degree vertical
+    // frustum on wide displays. Keep a golfer-height lens, then pitch it down just
+    // enough to hold the ball in the lower third without losing the target line.
+    this.pos.y += 1.45;
     this.look.copy(ballPos).addScaledVector(this.aim, 30);
-    this.look.y = ballPos.y + 1.2;
+    this.look.y = ballPos.y + 0.25;
   }
 
   onLaunch(ball) {
@@ -85,8 +89,11 @@ export class CameraDirector {
       return;
     }
 
-    const positionRate = this.phase === 'result' ? 1.6 : 3.2;
-    const lookRate = 4.5;
+    // Flight needs a responsive but still damped chase. The former 3.2 rate added
+    // roughly 20 m of spring lag to an already 42 m desired offset on a driver.
+    const positionRate = this.phase === 'result' ? 1.6
+      : (this.phase === 'chase' || this.phase === 'descent' ? 10.0 : 3.2);
+    const lookRate = this.phase === 'chase' || this.phase === 'descent' ? 8.0 : 4.5;
     this.camera.position.lerp(this.pos, 1 - Math.exp(-positionRate * dt));
     this._look.lerp(this.look, 1 - Math.exp(-lookRate * dt));
 
@@ -124,17 +131,22 @@ export class CameraDirector {
     const rising = v.y > 0.5;
     this.phase = rising ? 'chase' : 'descent';
 
-    const dist = Math.min(9 + hs * 0.9, 42);
+    // Stay close enough to read the physical ball and tracer as the subjects.
+    // Iron-speed shots target about 9 m and driver-speed shots cap at 11 m rather
+    // than the former 42 m; the faster flight spring bounds velocity-induced lag.
+    const dist = Math.min(5 + hs * 0.08, 11);
     this.pos.copy(p).addScaledVector(hv, -dist);
-    // Keep a touch of broadcast offset on ascent, then move closer to the shot line
-    // during descent so the falling ball sits nearer the centre of the frame.
-    this.pos.x += rising ? 0.8 : 0.2;
+    // A small trajectory-relative broadcast offset reveals the arc instead of
+    // looking straight down its tangent. It naturally follows shaped shots rather
+    // than applying an incorrect fixed world-X bias.
+    this._flightSide.set(hv.z, 0, -hv.x).multiplyScalar(rising ? -2.4 : -1.4);
+    this.pos.add(this._flightSide);
 
     if (rising) {
       // Rise with the shot while remaining above it. This keeps the horizon and course
       // in frame instead of making the audience look up into empty sky.
-      this.pos.y = p.y + 3.5;
-      this.look.copy(p).addScaledVector(hv, Math.min(hs * 0.22, 7));
+      this.pos.y = p.y + 2.4;
+      this.look.copy(p).addScaledVector(hv, Math.min(hs * 0.055, 2.2));
       this.look.y = p.y - 0.35;
       return;
     }
@@ -159,7 +171,7 @@ export class CameraDirector {
     // Bias strongly toward the ball while retaining a modest look-ahead cue. The
     // pitch constraint below still guarantees that the ground/landing zone remains
     // visible instead of letting the camera tilt back up at the descending ball.
-    this.look.set(landingX, landingY + 0.25, landingZ).lerp(p, 0.68);
+    this.look.set(landingX, landingY + 0.25, landingZ).lerp(p, 0.85);
   }
 
   onRest(ball) {

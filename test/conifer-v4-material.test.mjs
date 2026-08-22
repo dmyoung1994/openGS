@@ -9,14 +9,14 @@ test('v4 material branch is dormant, source-normal based, and shared-light only'
   assert.match(trees, /const _isConiferV4Atlas = \(part\) => \/conifer_v4_authored_alpha_atlas/);
   assert.match(trees, /const coniferV4 = _isConiferV4Atlas\(part\)/);
   assert.match(trees, /const v4ParentOutward = vec3\(/);
-  assert.match(trees, /normalLocal\.mul\(0\.64\)\.add\(v4ParentOutward\.mul\(0\.36\)\)/);
+  assert.match(trees, /normalLocal\.mul\(0\.46\)\.add\(v4ParentOutward\.mul\(0\.54\)\)/);
   assert.match(trees, /const v4BarkTile = v4AtlasUv\.x\.lessThan\(0\.25\)/);
   assert.match(trees, /const branchletAlbedo = needleTransmission\(/);
   assert.match(trees, /const atlasDaylightNormalization = \(coniferV4 \|\| coniferV5 \|\| coniferV6 \|\| coniferV7\) \? 1\.65 : 2\.85/);
   assert.match(trees, /const _isConiferV5Atlas = \(part\) => \/conifer_v5_authored_alpha_atlas/);
   assert.match(trees, /const _isConiferV6Atlas = \(part\) => \/conifer_v6_macro_alpha_atlas/);
   assert.match(trees, /const _isConiferV7Atlas = \(part\) => \/conifer_v7_macro_alpha_atlas/);
-  assert.match(trees, /const macroClusterAtlas = coniferV4 \|\| coniferV6 \|\| coniferV7/);
+  assert.match(trees, /const macroClusterAtlas = coniferV4 \|\| coniferV6 \|\| coniferV7 \|\| coniferV8/);
   assert.match(trees, /material\.normalNode = shadingViewNormal/);
   assert.doesNotMatch(trees, /coniferV4[\s\S]{0,140}emissive/);
   assert.match(viewer, /buildTreeBeautyLod/);

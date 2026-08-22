@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "benchmark:env": "node scripts/benchmark-environment.mjs",
     "benchmark:robustness": "node scripts/benchmark-environment-robustness.mjs",
+    "capture:foliage": "node scripts/capture-generated-foliage-matrix.mjs",
+    "promote:foliage": "node tools/foliage-pipeline/promote-pack.mjs",
     "verify:no-fallback-browser": "node scripts/verify-no-fallback-browser.mjs",
     "test": "node --test test/*.test.mjs"
   },
@@ -17,6 +19,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "ktx2-encoder": "^0.6.0",
     "puppeteer-core": "^25.5.0",
     "vite": "^8.1.5"
   }

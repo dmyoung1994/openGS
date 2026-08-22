@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "compatibilityVersion": 1,
+  "candidateOnly": true,
+  "foliageAlias": "builtin.douglas-fir.pnw.v1",
+  "species": {
+    "id": "douglas-fir",
+    "commonName": "Douglas fir",
+    "botanicalName": "Pseudotsuga menziesii",
+    "nativeHeightMeters": 19.5,
+    "clusterScaleMeters": [
+      0.45,
+      3.9
+    ]
+  },
+  "generationSpecHash": "5fdddb876d8a145003432a1ca67cf5142229626adf4118c1855a763013777ca6",
+  "processor": {
+    "id": "foliage-pipeline-v3",
+    "config": "douglas-fir.v1.json",
+    "configSha256": "dfdca116bfb049175f79245d60b77ecb8e5284e7a127527d74e0ec27b737654d"
+  },
+  "requiredFiles": [
+    {
+      "file": "douglas-fir-cluster-atlas.png",
+      "sha256": "ea9873f7b87d8018435063318bf959d86a27f63d3cc23e4b29069b8327511aaa",
+      "bytes": 2352924
+    },
+    {
+      "file": "douglas-fir-cluster-atlas.ktx2",
+      "sha256": "b8faa1b30164c566d05f70841f8bcdb11610847a23f9da46e4fe60d711ba1383",
+      "bytes": 1071825
+    },
+    {
+      "file": "douglas-fir-material-mask.png",
+      "sha256": "a77eda002a82e87d32d26504ddffeeca27ee1990faa04023608e5cd3c4243335",
+      "bytes": 1672943
+    },
+    {
+      "file": "douglas-fir-material-mask.ktx2",
+      "sha256": "f4f75e55a5d6ede6683537dccd8a2bb401331d95c6e7b3d97aaabb9291dd803f",
+      "bytes": 786853
+    },
+    {
+      "file": "douglas-fir-cluster-atlas.json",
+      "sha256": "860a8d58627aa5d413bd21a445f0bc7e02d5c32e1c4294d3babb6551dbc42858",
+      "bytes": 15213
+    },
+    {
+      "file": "douglas-fir-bark-albedo.jpg",
+      "sha256": "a5d25150ba1bee10008c039f98aa3c73b4477a404d6715c511ca9b5b0f4a9077",
+      "bytes": 776567
+    },
+    {
+      "file": "douglas-fir-bark-normal.jpg",
+      "sha256": "6a570ab53ab2249ecdfa93e7d3b9a8a2cb1a8ad391400e5a64c708914779b2c3",
+      "bytes": 1137533
+    },
+    {
+      "file": "douglas-fir-bark-arm.jpg",
+      "sha256": "95d4e9e62cd309fbc38a175e2306379c76c062425b09c0fb72c5b7356a719123",
+      "bytes": 789264
+    }
+  ],
+  "materialChannels": {
+    "albedo": "sRGB RGBA; A is coverage",
+    "materialMask": "linear RGBA; R roughness, G transmission, B/A coverage"
+  },
+  "structuralMaterial": {
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/fir_tree_01",
+    "provenance": "config-relative:../../../docs/fir-tree-source-candidate-provenance.md",
+    "textures": {
+      "albedo": "douglas-fir-bark-albedo.jpg",
+      "normal": "douglas-fir-bark-normal.jpg",
+      "arm": "douglas-fir-bark-arm.jpg"
+    }
+  },
+  "runtime": {
+    "metadata": "douglas-fir-cluster-atlas.json",
+    "albedo": {
+      "png": "douglas-fir-cluster-atlas.png",
+      "ktx2": "douglas-fir-cluster-atlas.ktx2"
+    },
+    "materialMask": {
+      "png": "douglas-fir-material-mask.png",
+      "ktx2": "douglas-fir-material-mask.ktx2"
+    },
+    "bark": {
+      "albedo": "douglas-fir-bark-albedo.jpg",
+      "normal": "douglas-fir-bark-normal.jpg",
+      "arm": "douglas-fir-bark-arm.jpg"
+    }
+  },
+  "hierarchy": {
+    "levels": [
+      0,
+      1,
+      2
+    ],
+    "selection": "projected-screen-error",
+    "transition": "exclusive-stable-membership"
+  },
+  "validation": {
+    "state": "candidate",
+    "maximumMeasuredMipDrift": 0.0008168220520019531,
+    "transparentOverdrawEstimate": 0.5740659035163276
+  },
+  "provenance": {
+    "sourceFile": "douglas-fir-source-sheet-v2.png",
+    "sourceSha256": "2fb5a9236647efc445e24fecea69abe2b6a2b672d7c1912d4ac91aa0599a7302",
+    "promptRecord": "config-relative:../../../public/assets/trees_candidates/generated_fir_clusters/README.md"
+  }
+}

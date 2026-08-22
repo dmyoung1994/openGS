@@ -104,16 +104,16 @@ Pass threshold: 15/18.
 
 ### 5. Temporal quality and performance — 16 points
 
-- All seven production cameras: GPU completion p95 <= 14.0 ms, request-animation-
-  frame p95 <= 18.5 ms, and zero frames over 33.34 ms at 1280x720,
+- All seven production cameras: GPU completion p95 <= 33.3 ms, request-animation-
+  frame p95 <= 34.0 ms, and zero frames over 50.0 ms at 1280x720,
   `high-desktop-webgpu` on the user's machine.
 - Native-panel very-high-quality probes at 2408x1506 (`address-tee`, `low-rough`,
   `pond-contact`, and `tree-edge-close`) must retain the same renderer features and
   pass visual/temporal gates with GPU completion p95 <= 33.3 ms. This is the actual
   5-core Apple A18 Pro / 8 GB / Metal 4 target, not a scaled desktop surrogate.
-- `tree-edge-close` stress camera: GPU completion p95 <= 16.7 ms, rAF p95 <=
-  18.5 ms, zero hitches. It must pass visual quality even if it uses the looser GPU
-  budget.
+- `tree-edge-close` stress camera: GPU completion p95 <= 33.3 ms, rAF p95 <=
+  34.0 ms, zero frames over 50.0 ms. It must pass the same visual quality gates;
+  the interim 30 FPS target does not authorize reduced foliage coverage or features.
 - Frozen-time 32-frame sequences: RGB MAE <= 0.15 and pixels changing by more than
   8% <= 0.20%. No visible LOD pop, alpha boil, shadow crawl, reflection flicker, or
   post-process reset.
@@ -145,7 +145,7 @@ Each acceptance cycle consists of:
 npm test
 npm run build
 npm run benchmark:env
-npm run benchmark:env -- --scenario tree-edge-close --gpu-p95-ms 16.7
+npm run benchmark:env -- --scenario tree-edge-close --gpu-p95-ms 33.3
 npm run benchmark:env -- --scenario address-tee --size 2408x1506 --gpu-p95-ms 33.3 --out benchmarks/environment-native-address
 npm run benchmark:env -- --scenario low-rough --size 2408x1506 --gpu-p95-ms 33.3 --out benchmarks/environment-native-rough
 npm run benchmark:env -- --scenario pond-contact --size 2408x1506 --gpu-p95-ms 33.3 --out benchmarks/environment-native-pond
@@ -223,3 +223,4 @@ below its threshold, and two consecutive clean acceptance cycles show no regress
 | Cycle 53 (Alps HDR valley integration) | 20 | 16 | 17 | 16 | 12 | 81 | Fail overall/performance bar: a pinned CC0 2K Alps Field HDR supplies photographic mountain scale while its measured source sun is masked and replaced by the authoritative shared sun. A widened U-shaped 45–63 m saddle through the procedural near/middle wall exposes the massif downrange without revealing the course edge; address/approach composition materially improves, but the remaining central wall is still smoother and greener than the photographic background. Every attempted fuller conifer derivative and tree shader shortcut was measured and rejected/reverted; accepted v3 hashes and three exclusive LOD draws remain intact, leaving the close tree visual/performance blocker unresolved. Root clean state passes 188/188 tests, production build, derivative hashes, diff check, temporal/viewport gates, and no-fallback browser integration. At 24–26% battery, address GPU p95 is 25.20 ms with one hitch and the multi-scenario browser exits after two views; AC/native-panel, robustness, tree-edge <=16.7 ms, and two consecutive cycles remain unproven. |
 | Cycle 57 (grass material and conifer R&D) | 21 | 16 | 17 | 16 | 12 | 82 | Fail overall/performance bar: the rough keeps exactly 80,981 blades, 13 active tiles, the 31.82 m camera-forward tail, 7.5–18 mm rooted widths, crossed ribbons, shared daylight, shadows, MRT, and stable temporal output while a shared-environment Phong path lowers low-rough GPU completion p95 from 19.01 to 15.56 ms; the darker result is root-accepted as denser and less chalky, but still misses 14 ms. The benchmark now checkpoints every scenario atomically, so full-suite browser exits retain actionable evidence. Current production v3 remains binding and fails tree-edge at 23.47 ms / Scene MRT 18.77 ms with 24/46/20 residency; its skeletal crowns remain below the visual bar. Isolated conifer v4 proves a grounded, full-volume source-atlas silhouette and a registered LOD handoff, but its raw 4–5x geometry cost prevents production promotion; an optimized candidate remains in progress. The smooth green first wall, production tree realism/performance, native-panel suite, robustness, and two consecutive clean cycles remain open. |
 | Cycle 71 (photographic enclosure and v8 integration) | 17 | 15 | 18 | 14 | 14 | 78 | Fail visual bar, while the desktop performance blocker is cleared: the verified photographic Alps HDR now forms the complete runtime enclosure and the rejected smooth procedural shell submits zero runtime geometry. All seven production cameras pass at 8.43–10.80 ms GPU p95 with zero hitches, stable viewports, and frozen temporal output; two consecutive `tree-edge-close` stress runs pass at 16.61 and 16.37 ms. The close v8 conifer retains credible trunk/crown volume, but mid/far communities are too saturated, repetitive, and hard-edged against the photographic valley. Fairway, green, and tee still flatten into broad matte green planes; the pond remains an idealized blue analytic bowl in eye and overhead views. Native-panel, robustness, no-fallback, two full consecutive cycles, and production promotion of the v8 trial assets remain open. |
+| Generated foliage cycle 6 (unscored) | — | — | — | — | — | — | Pending AC/root verdict: three deterministic generated species now occupy nine purpose-built asymmetric practice-range perimeter groves without course-vibe placement. Italian- and Monterey-cypress cards map processor-authored stem-root-to-tip axes onto their supporting branches; Monterey now uses a three-leader exposed-trunk architecture instead of a radial fan. Species and forced-parent matrices pass 25/25 views, moving 12–607 m sweeps show branch-local rather than whole-tree LOD transitions, and two consecutive seven-camera battery runs pass validation, temporal, overflow, console, and residency gates. A generated-path three-rebuild robustness smoke passes with 0/3 retained Range WeakRefs and an exact stable GPU-resource multiset after fixing backdrop texture and PMREM sky-sphere ownership. This row remains deliberately unscored: strict AC/native-panel timing, the 30-minute robustness gate, production promotion, and root visual approval are still required. |

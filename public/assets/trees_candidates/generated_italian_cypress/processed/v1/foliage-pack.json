@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "compatibilityVersion": 1,
+  "candidateOnly": true,
+  "foliageAlias": "builtin.italian-cypress.mediterranean.v1",
+  "species": {
+    "id": "italian-cypress",
+    "commonName": "Italian cypress",
+    "botanicalName": "Cupressus sempervirens",
+    "nativeHeightMeters": 20,
+    "clusterScaleMeters": [
+      0.35,
+      3
+    ]
+  },
+  "generationSpecHash": "729b35dfa026ab94bced3662bce3ead8e33033417754cdf057c208cd10695ed5",
+  "processor": {
+    "id": "foliage-pipeline-v3",
+    "config": "italian-cypress.v1.json",
+    "configSha256": "a2403b488f416dd1fe0113e6ece6446143e98286a5453316374652f7d451f5b6"
+  },
+  "requiredFiles": [
+    {
+      "file": "italian-cypress-cluster-atlas.png",
+      "sha256": "70424cbd6db3f4d13e31145f02dc0f350206ad60c1a26e720e985e104017358d",
+      "bytes": 1040004
+    },
+    {
+      "file": "italian-cypress-cluster-atlas.ktx2",
+      "sha256": "3c04e496726896353311319d32638dc65b821121d082c6c0f2e51998d55d1c45",
+      "bytes": 545277
+    },
+    {
+      "file": "italian-cypress-material-mask.png",
+      "sha256": "5339d259abcff62c7ad393ad0aa595fac3e94b73bd3130acaccdc54e408d6055",
+      "bytes": 753628
+    },
+    {
+      "file": "italian-cypress-material-mask.ktx2",
+      "sha256": "512c43f550ff15452afbd17a57ccc6619e5f2253708b9a8f5178019dd336eef4",
+      "bytes": 371281
+    },
+    {
+      "file": "italian-cypress-cluster-atlas.json",
+      "sha256": "02d8e289edb6a35a7574e808671b481d27bd037227d25bde63250ec95eb035b5",
+      "bytes": 16941
+    },
+    {
+      "file": "italian-cypress-bark-albedo.jpg",
+      "sha256": "a5d25150ba1bee10008c039f98aa3c73b4477a404d6715c511ca9b5b0f4a9077",
+      "bytes": 776567
+    },
+    {
+      "file": "italian-cypress-bark-normal.jpg",
+      "sha256": "6a570ab53ab2249ecdfa93e7d3b9a8a2cb1a8ad391400e5a64c708914779b2c3",
+      "bytes": 1137533
+    },
+    {
+      "file": "italian-cypress-bark-arm.jpg",
+      "sha256": "95d4e9e62cd309fbc38a175e2306379c76c062425b09c0fb72c5b7356a719123",
+      "bytes": 789264
+    }
+  ],
+  "materialChannels": {
+    "albedo": "sRGB RGBA; A is coverage",
+    "materialMask": "linear RGBA; R roughness, G transmission, B/A coverage"
+  },
+  "structuralMaterial": {
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/fir_tree_01",
+    "provenance": "config-relative:../../../docs/fir-tree-source-candidate-provenance.md",
+    "textures": {
+      "albedo": "italian-cypress-bark-albedo.jpg",
+      "normal": "italian-cypress-bark-normal.jpg",
+      "arm": "italian-cypress-bark-arm.jpg"
+    }
+  },
+  "runtime": {
+    "metadata": "italian-cypress-cluster-atlas.json",
+    "albedo": {
+      "png": "italian-cypress-cluster-atlas.png",
+      "ktx2": "italian-cypress-cluster-atlas.ktx2"
+    },
+    "materialMask": {
+      "png": "italian-cypress-material-mask.png",
+      "ktx2": "italian-cypress-material-mask.ktx2"
+    },
+    "bark": {
+      "albedo": "italian-cypress-bark-albedo.jpg",
+      "normal": "italian-cypress-bark-normal.jpg",
+      "arm": "italian-cypress-bark-arm.jpg"
+    }
+  },
+  "hierarchy": {
+    "levels": [
+      0,
+      1,
+      2
+    ],
+    "selection": "projected-screen-error",
+    "transition": "exclusive-stable-membership"
+  },
+  "validation": {
+    "state": "candidate",
+    "maximumMeasuredMipDrift": 0.0007910728454589844,
+    "transparentOverdrawEstimate": 0.7003309553386263
+  },
+  "provenance": {
+    "sourceFile": "italian-cypress-source-sheet-v1.png",
+    "sourceSha256": "0cc71dc46de6c732afc50b1eaa39c9613c895896e182a6e24c690dd37a10ed54",
+    "promptRecord": "config-relative:../../../public/assets/trees_candidates/generated_italian_cypress/README.md"
+  }
+}

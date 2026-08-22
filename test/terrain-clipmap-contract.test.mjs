@@ -9,8 +9,8 @@ test('terrain clipmap keeps exact ring radii while removing low-value display ve
   assert.match(source, /\{ half: 36, step: 0\.9, inner: 0 \}/);
   assert.match(source, /\{ half: 72, step: 1\.8, inner: 36 \}/);
   assert.match(source, /\{ half: 144, step: 3\.6, inner: 72 \}/);
-  assert.match(source, /\{ half: 288, step: 4\.8, inner: 144 \}/,
-    'outer ring must preserve the existing camera snap step');
+  assert.match(source, /\{ half: 384, step: 4\.8, inner: 144 \}/,
+    'outer ring must cover the full flight view while preserving the camera snap step');
   assert.match(source, /authoritative 0\.6 m height texture remains intact/,
     'display tessellation reduction must not weaken physics/render height sampling');
 });

@@ -33,6 +33,20 @@ test('grass LOD follows the final active render camera, not the ball or a static
     'full rough geometry must not regain a ball-centred LOD input');
 });
 
+test('grass tile culling encloses the authoritative terrain height and blade canopy', async () => {
+  const grass = await read('src/terrain/Grass.js');
+  assert.match(grass, /const heightData = this\.terrain\.heights/,
+    'tile bounds must come from the same heightfield used by terrain and grass roots');
+  assert.match(grass, /minHeight - 0\.05[\s\S]*?maxHeight \+ BLADE_H\.deepRough \+ 0\.06/,
+    'vertical bounds must include dipped roots and the tallest complete canopy');
+  assert.match(grass, /const verticalBounds = tileHeightBounds\.element\( tile \)/,
+    'GPU tile classification must consume the baked vertical interval');
+  assert.match(grass, /pointVisible\( 0\.0, verticalBounds\.x, 0\.0 \)[\s\S]*?pointVisible\( TILE_SIZE, verticalBounds\.y, TILE_SIZE \)/,
+    'frustum classification must test all lower and upper terrain-tile corners');
+  assert.doesNotMatch(grass, /vec4\( origin\.x\.add\( ox \), 0\.0, origin\.z\.add\( oz \)/,
+    'tile visibility must never return to a flat world-zero ground assumption');
+});
+
 test('view-oriented far tier extends the terminal horizon without changing close density', async () => {
   const grass = await read('src/terrain/Grass.js');
   const near = scalar(grass, 'DENSITY_NEAR_RADIUS');
@@ -43,24 +57,39 @@ test('view-oriented far tier extends the terminal horizon without changing close
   const tailTerminal = scalar(grass, 'FAR_TIER_TERMINAL_RADIUS');
   const lateralScale = scalar(grass, 'FAR_TIER_LATERAL_SCALE');
   const tailPeak = scalar(grass, 'FAR_TIER_PEAK_KEEP');
+  const farStride = scalar(grass, 'FAR_ONLY_CANDIDATE_STRIDE');
   const baseTerminal = near + (far - near)
     * (1 - Math.pow(feather / (1.08 + feather), 1 / power));
 
   assert.equal(near, 0.18, 'the accepted full-density close field is immutable');
   assert.ok(tailStart < baseTerminal,
     'the sparse tail must overlap the base fade instead of exposing a gap');
-  assert.ok(tailTerminal >= 0.70 && tailTerminal <= 0.78,
-    'forward geometry must reach the requested 70–78% of nominal radius');
-  assert.ok(tailTerminal / lateralScale < baseTerminal,
-    'the far tier must be view-oriented, not a widened circular disk');
-  assert.ok(tailPeak > 0 && tailPeak <= 0.10,
-    'the projected far tier must remain a bounded sparse population');
+  assert.ok(tailTerminal >= 2.20 && tailTerminal <= 2.30,
+    'forward geometry must extend beyond 95 m on the accepted high tier');
+  assert.ok(tailTerminal / lateralScale >= 1.45,
+    'lateral geometry must extend beyond 60 m instead of exposing a narrow strip');
+  assert.equal(tailPeak, 0.22,
+    'the projected far tier must retain enough midfield population to avoid a bare LOD band');
+  assert.equal(farStride, 4,
+    'far-only work must use the accepted quarter-rate candidate lattice');
   assert.match(grass, /const keepProb = baseKeepProb\.toVar\(\);[\s\S]*?keepProb\.maxAssign\( farTierKeepAt/,
     'tail acceptance may only add far candidates; it must not thin the base field');
   assert.match(grass, /const nearby = nearbyBase\.or\( nearbyFar \)/,
     'tile dispatch must cover the union of the accepted base disk and forward tail');
   assert.match(grass, /tail\.mul\( tail \)\.mul\( FAR_TIER_PEAK_KEEP \)\.mul\( forwardGate \)/,
     'terminal transition must be a soft forward-gated falloff');
+  assert.match(grass, /const samplesCandidate = farOnly\.not\(\)\.or\( groupInTile\.lessThan\([\s\S]*?GROUPS_PER_TILE \/ FAR_ONLY_CANDIDATE_STRIDE/,
+    'the far lattice must retain every near/overlap workgroup and one coherent quarter of far workgroups');
+  assert.match(grass, /const farLocalCandidate = blockZ\.mul\( uint\( 2 \* GRID \) \)[\s\S]*?blockX\.mul\( uint\( 2 \) \)/,
+    'quarter-rate workgroups must remap their lanes across every 2x2 block, not one contiguous tile strip');
+  const sampleGuard = grass.indexOf('If( samplesCandidate');
+  const acceptanceHash = grass.indexOf('hC.assign( hash2', sampleGuard);
+  assert.ok(sampleGuard >= 0 && acceptanceHash > sampleGuard,
+    'far-only rejection must precede even the acceptance trig hash');
+  assert.match(grass, /farTierKeepAt\( radius, dx, dz, cameraForward \)[\s\S]*?\.mul\( farSamplingScale \)\.min\( 1\.0 \)/,
+    'candidate acceptance must compensate quarter-rate far sampling');
+  assert.match(grass, /farTierKeepAt\( radius, lodDx, lodDz, forwardAxis \)[\s\S]*?\.mul\( farSamplingScale \)\.min\( 1\.0 \)/,
+    'temporal LOD reconstruction must use the same compensated far probability');
 });
 
 test('grass diagnostics expose the live LOD footprint contract', async () => {
@@ -85,7 +114,7 @@ test('grass diagnostics expose the live LOD footprint contract', async () => {
     'the engine harness must reject a ball- or origin-centred grass footprint');
   assert.match(benchmark, /grass LOD forward axis is not the active evaluator view/,
     'the engine harness must reject a stale world-space forward axis');
-  assert.match(benchmark, /farTierTerminalRadius >= grassDiagnostics\.nominalRadius \* 0\.70/,
+  assert.match(benchmark, /farTierTerminalRadius >= grassDiagnostics\.nominalRadius \* 2\.20/,
     'the engine harness must bind the extended forward horizon');
 });
 
@@ -95,8 +124,10 @@ test('all active tiles reject provably impossible lanes before expensive turf pr
     'early rejection must use the exact tuft and coverage maxima');
   assert.match(grass, /const tileBoundHalfExtent = TILE_SIZE \* 0\.5 \+ CANDIDATE_JITTER_MARGIN/,
     'tile distance bound must explicitly include the full authored candidate jitter');
-  assert.match(grass, /nearestDx[\s\S]*?tileMinDistance[\s\S]*?baseKeepUpper[\s\S]*?\.max\( FAR_TIER_PEAK_KEEP \)/,
-    'tile bound must conservatively cover both radial density and the projected far tail');
+  assert.match(grass, /farFootprintDistance[\s\S]*?farMinDistance[\s\S]*?farKeepUpper[\s\S]*?baseKeepUpper\.max\( farKeepUpper \)/,
+    'tile compute must use a conservative distance-aware ceiling for the projected far tail');
+  assert.match(grass, /const farSamplingScale = nearbyBase\.not\(\)[\s\S]*?farKeepUpper[\s\S]*?\.mul\( farSamplingScale \)\.min\( 1\.0 \)/,
+    'far-only tile ceilings must remain conservative after stochastic compensation');
   assert.match(grass, /densityUpperByte[\s\S]*?\.add\( uint\( 1 \) \)\.min\( uint\( ACTIVE_TILE_BOUND_MAX \) \)/,
     'quantized tile ceiling must round upward');
   assert.match(grass, /tile\.shiftLeft\( uint\( ACTIVE_TILE_RECORD_SHIFT \) \)[\s\S]*?densityUpperByte\.shiftLeft\( uint\( 1 \) \)[\s\S]*?bitOr\( farOnly \)/,
@@ -130,13 +161,15 @@ test('all active tiles reject provably impossible lanes before expensive turf pr
     for (const dz of [-29, -13, -4, 0, 9.5, 21, 32]) {
       const nearestDx = Math.max(Math.abs(dx) - tileHalfExtent, 0);
       const nearestDz = Math.max(Math.abs(dz) - tileHalfExtent, 0);
+      // The strongest possible compensated far-only threshold is 0.22 * 4;
+      // overlap tiles retain the unscaled base/far maximum.
       const analytic = Math.min(1,
-        Math.max(densityAt(43, Math.hypot(nearestDx, nearestDz)), 0.09) * maxScale);
+        Math.max(densityAt(43, Math.hypot(nearestDx, nearestDz)), 0.22 * 4) * maxScale);
       const boundByte = Math.min(255, Math.trunc(analytic * 255) + 1);
       const decodedBound = boundByte / 255;
       for (const ox of [-tileHalfExtent, -4, -2.25, 0, 1.75, 4, tileHalfExtent]) {
         for (const oz of [-tileHalfExtent, -4, -1.5, 0, 2.5, 4, tileHalfExtent]) {
-          const candidateKeep = Math.max(densityAt(43, Math.hypot(dx + ox, dz + oz)), 0.09);
+          const candidateKeep = Math.max(densityAt(43, Math.hypot(dx + ox, dz + oz)), 0.22 * 4);
           assert.ok(decodedBound + Number.EPSILON >= candidateKeep * maxScale,
             'upward-rounded tile bound must never reject a candidate that the exact predicate can retain');
         }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PerspectiveCamera, Vector3 } from 'three';
 import { CameraDirector } from '../src/camera/CameraDirector.js';
+import { readFile } from 'node:fs/promises';
 
 function makeBall() {
   return {
@@ -49,6 +50,27 @@ test('flight camera climbs through apex without ever pitching upward', () => {
   assert.ok(descentLead < 12, `descent framing leads too far ahead of the ball: ${descentLead}`);
 });
 
+test('flight camera remains in a close responsive chase envelope', () => {
+  const camera = new PerspectiveCamera();
+  const director = new CameraDirector(camera);
+  const ball = makeBall();
+  director.setAddress(ball.position, new Vector3(0, 0, -1));
+  director.onLaunch(ball);
+
+  for (let frame = 0; frame < 120; frame++) {
+    ball.position.z -= 48 / 60;
+    ball.position.y = 8 + Math.sin(frame / 120 * Math.PI) * 18;
+    ball.velocity.set(0, frame < 60 ? 8 : -8, -48);
+    director.update(1 / 60, ball);
+  }
+  const horizontalSeparation = Math.hypot(
+    camera.position.x - ball.position.x,
+    camera.position.z - ball.position.z,
+  );
+  assert.ok(horizontalSeparation >= 7 && horizontalSeparation <= 21,
+    `flight chase should stay close to the ball, got ${horizontalSeparation.toFixed(2)} m`);
+});
+
 test('address camera starts directly behind the ball looking down-range', () => {
   const camera = new PerspectiveCamera();
   const director = new CameraDirector(camera);
@@ -61,10 +83,16 @@ test('address camera starts directly behind the ball looking down-range', () => 
   const horizontalOffset = new Vector3(offset.x, 0, offset.z);
   const expectedBack = aim.clone().multiplyScalar(-4.5);
   assert.ok(horizontalOffset.distanceTo(expectedBack) < 1e-8);
+  assert.ok(Math.abs(offset.y - 1.45) < 1e-8);
 
   camera.getWorldDirection(forward);
   const horizontalForward = new Vector3(forward.x, 0, forward.z).normalize();
   assert.ok(horizontalForward.distanceTo(aim) < 1e-8);
+  camera.updateMatrixWorld();
+  camera.updateProjectionMatrix();
+  const projectedBall = ball.clone().project(camera);
+  assert.ok(projectedBall.y > -0.88 && projectedBall.y < -0.45,
+    `ball must begin visible in the lower frame, got NDC y=${projectedBall.y}`);
 });
 
 test('result camera returns to address through a damped transition', () => {
@@ -99,4 +127,22 @@ test('result camera returns to address through a damped transition', () => {
   for (let i = 0; i < 330; i++) director.update(1 / 60, ball);
   assert.equal(director.phase, 'address');
   assert.ok(camera.position.distanceTo(director.pos) < 0.06);
+});
+
+test('production capture harness exercises generated foliage through flight and return', async () => {
+  const source = await readFile(new URL('../scripts/shot.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const shotFlightSequence = game && has\('shot-flight-seq'\)/);
+  assert.match(source, /requestedSequenceFrames === true \? 180/,
+    'bare sequence flags must retain the full default capture length');
+  assert.match(source, /else window\.viewer\.setCamera\(position, lookAt\)/,
+    'isolated foliage sweeps must exercise the production viewer camera');
+  assert.match(source, /diagnostics: window\.viewer\.treeDiagnostics\(\)/,
+    'isolated foliage sweeps must record local hierarchy selection');
+  assert.match(source, /url\.searchParams\.set\('foliageCandidate', String\(foliageCandidate\)\)/);
+  assert.match(source, /cameraPosition: window\.golf\.sm\.camera\.position\.toArray\(\)/);
+  assert.match(source, /ballPosition: window\.golf\.ball\.position\.toArray\(\)/);
+  assert.match(source, /shotFlightSequence \? state\.phase === 'result'/,
+    'flight capture must span chase/descent until the real result transition');
+  assert.match(source, /state\.phase === 'address'/,
+    'return capture must span the real result/return/address transition');
 });

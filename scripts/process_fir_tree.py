@@ -24,6 +24,9 @@ import mmap
 import pathlib
 import struct
 from collections import defaultdict
+from dataclasses import dataclass
+
+import numpy as np
 
 
 ROLE_ORDER = ("bark", "trunk", "foliage", "branches")
@@ -60,6 +63,9 @@ def args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--foliage-selection", choices=("triangle", "component"), default="triangle")
+    parser.add_argument("--variant", choices=("a", "b", "c", "all"), default="all")
+    parser.add_argument("--prefix", default=None)
     return parser.parse_args()
 
 
@@ -150,6 +156,141 @@ def select_triangles(source: Source, primitive: dict, role: str, target: int) ->
     return [source.value(indices, triangle + offset)[0] for triangle in selected for offset in range(3)]
 
 
+@dataclass(frozen=True)
+class ComponentSelection:
+    indices: list[int]
+    centres: dict[int, tuple[float, float, float]]
+    scale: float
+    source_triangles: int
+    selected_components: int
+    source_components: int
+
+
+def _accessor_array(source: Source, accessor_index: int) -> np.ndarray:
+    """Return a zero-copy strided NumPy view over a scalar/vector accessor."""
+    accessor = source.gltf["accessors"][accessor_index]
+    view = source.gltf["bufferViews"][accessor["bufferView"]]
+    dtype = {5121: np.uint8, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}[accessor["componentType"]]
+    components = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[accessor["type"]]
+    item_bytes = np.dtype(dtype).itemsize * components
+    stride = view.get("byteStride", item_bytes)
+    offset = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+    shape = (accessor["count"],) if components == 1 else (accessor["count"], components)
+    strides = (stride,) if components == 1 else (stride, np.dtype(dtype).itemsize)
+    return np.ndarray(shape=shape, dtype=dtype, buffer=source.mm, offset=offset, strides=strides)
+
+
+def _hash32(values: np.ndarray) -> np.ndarray:
+    values = values.astype(np.uint32, copy=True)
+    values ^= values << np.uint32(13)
+    values ^= values >> np.uint32(17)
+    values ^= values << np.uint32(5)
+    return values
+
+
+def select_foliage_components(source: Source, primitive: dict, target: int, lod: int) -> ComponentSelection:
+    """Retain complete authored foliage islands with spatially even coverage.
+
+    The old reservoir selected unrelated individual triangles in Y bands.  A
+    needle spray therefore arrived as disconnected glitter even when its total
+    triangle count met budget.  This path first recovers source connected
+    components, distributes them through a 3-D crown grid, and enlarges each
+    surviving component by a bounded amount around its own centroid.  It is the
+    offline equivalent of SpeedTree leaf-size compensation / Nanite Preserve
+    Area: fewer aggregate elements, but no missing crown zones and no broken
+    source element.
+    """
+    index_values = np.asarray(_accessor_array(source, primitive["indices"]), dtype=np.uint32)
+    triangles = index_values.reshape(-1, 3)
+    vertex_count = source.gltf["accessors"][primitive["attributes"]["POSITION"]]["count"]
+    parent = np.arange(vertex_count, dtype=np.int32)
+    rank = np.zeros(vertex_count, dtype=np.uint8)
+
+    def find(value: int) -> int:
+        root = value
+        while int(parent[root]) != root:
+            root = int(parent[root])
+        while int(parent[value]) != value:
+            next_value = int(parent[value])
+            parent[value] = root
+            value = next_value
+        return root
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+
+    for a, b, c in triangles:
+        union(int(a), int(b))
+        union(int(a), int(c))
+
+    used = np.unique(index_values)
+    roots = np.fromiter((find(int(value)) for value in used), dtype=np.int32, count=len(used))
+    unique_roots, inverse = np.unique(roots, return_inverse=True)
+    root_to_component = np.full(vertex_count, -1, dtype=np.int32)
+    root_to_component[unique_roots] = np.arange(len(unique_roots), dtype=np.int32)
+
+    positions = np.asarray(_accessor_array(source, primitive["attributes"]["POSITION"]), dtype=np.float64)
+    component_counts = np.bincount(inverse, minlength=len(unique_roots))
+    centres = np.column_stack([
+        np.bincount(inverse, weights=positions[used, axis], minlength=len(unique_roots)) / component_counts
+        for axis in range(3)
+    ])
+    triangle_components = root_to_component[np.fromiter(
+        (find(int(value)) for value in triangles[:, 0]), dtype=np.int32, count=len(triangles),
+    )]
+    triangle_counts = np.bincount(triangle_components, minlength=len(unique_roots))
+
+    # Crown bins are deliberately finer vertically than horizontally: fir tiers
+    # are the most visible holes, while 12x12 azimuthal cells prevent one camera
+    # side receiving all of a random reservoir's surviving sprays.
+    bounds_min = centres.min(axis=0)
+    bounds_span = np.maximum(centres.max(axis=0) - bounds_min, 1e-9)
+    grid = np.array((12, 48, 12), dtype=np.int32)
+    cell = np.minimum(((centres - bounds_min) / bounds_span * grid).astype(np.int32), grid - 1)
+    cell_id = cell[:, 0] + grid[0] * (cell[:, 1] + grid[1] * cell[:, 2])
+    fraction = min(1.0, target / max(len(triangles), 1))
+    seed = np.uint32((0x9E3779B9 + lod * 0x85EBCA6B) & 0xFFFFFFFF)
+    score = _hash32(unique_roots.astype(np.uint32) ^ seed)
+    order = np.lexsort((score, cell_id))
+    ordered_cells = cell_id[order]
+    starts = np.flatnonzero(np.r_[True, ordered_cells[1:] != ordered_cells[:-1]])
+    ends = np.r_[starts[1:], len(order)]
+    selected = np.zeros(len(unique_roots), dtype=bool)
+    for start, end in zip(starts, ends):
+        count = end - start
+        keep = min(count, max(1, int(round(count * fraction))))
+        selected[order[start:start + keep]] = True
+
+    selected_triangles = selected[triangle_components]
+    kept_indices = index_values.reshape(-1, 3)[selected_triangles].reshape(-1)
+    kept_vertices = np.unique(kept_indices)
+    kept_roots = np.fromiter((find(int(value)) for value in kept_vertices), dtype=np.int32, count=len(kept_vertices))
+    kept_components = root_to_component[kept_roots]
+    centre_by_vertex = {
+        int(vertex): tuple(float(value) for value in centres[int(component)])
+        for vertex, component in zip(kept_vertices, kept_components)
+    }
+    # Bounded rather than exact area conservation: exact sqrt(source/kept)
+    # would make a 4:1 LOD reduction double every needle spray and erase the
+    # authored negative space. These values restore mass without blobs.
+    scale = 1.36 if lod == 0 else 1.72
+    return ComponentSelection(
+        indices=[int(value) for value in kept_indices],
+        centres=centre_by_vertex,
+        scale=scale,
+        source_triangles=len(triangles),
+        selected_components=int(selected.sum()),
+        source_components=len(unique_roots),
+    )
+
+
 def add_view(binary: bytearray, views: list[dict], payload: bytes, target: int | None = None) -> int:
     start = align4(len(binary))
     binary.extend(b"\0" * (start - len(binary)))
@@ -161,14 +302,20 @@ def add_view(binary: bytearray, views: list[dict], payload: bytes, target: int |
     return len(views) - 1
 
 
-def build_variant(source: Source, mesh_index: int, variant: str, lod: int, output: pathlib.Path) -> dict:
+def build_variant(source: Source, mesh_index: int, variant: str, lod: int, output: pathlib.Path,
+                  foliage_selection: str = "triangle") -> dict:
     mesh = source.gltf["meshes"][mesh_index]
     role_indices: dict[str, list[int]] = {}
     role_sources: dict[str, dict] = {}
+    component_selection: ComponentSelection | None = None
     for primitive_index, role in ROLE_SPECS:
         primitive = mesh["primitives"][primitive_index]
         role_sources[role] = primitive
-        role_indices[role] = select_triangles(source, primitive, role, ROLE_BUDGETS[lod][role])
+        if role == "foliage" and foliage_selection == "component":
+            component_selection = select_foliage_components(source, primitive, ROLE_BUDGETS[lod][role], lod)
+            role_indices[role] = component_selection.indices
+        else:
+            role_indices[role] = select_triangles(source, primitive, role, ROLE_BUDGETS[lod][role])
 
     min_y = min(
         source.value(source.setup(primitive["attributes"]["POSITION"]), index)[1]
@@ -189,6 +336,12 @@ def build_variant(source: Source, mesh_index: int, variant: str, lod: int, outpu
                 remap[old] = len(positions)
                 position = source.value(pos_setup, old)
                 normal = source.value(normal_setup, old)
+                if role == "foliage" and component_selection is not None:
+                    centre = component_selection.centres[old]
+                    position = tuple(
+                        centre[axis] + (position[axis] - centre[axis]) * component_selection.scale
+                        for axis in range(3)
+                    )
                 if not all(math.isfinite(value) for value in (*position, *normal)):
                     raise ValueError(f"non-finite source attribute in {variant} LOD{lod}")
                 positions.append((position[0], position[1] - min_y, position[2]))
@@ -221,7 +374,10 @@ def build_variant(source: Source, mesh_index: int, variant: str, lod: int, outpu
 
     name = f"fir_tree_01_variant_{variant}_lod{lod}"
     output_gltf = {
-        "asset": {"version": "2.0", "generator": "process_fir_tree.py@1"},
+        "asset": {"version": "2.0", "generator": (
+            "process_fir_tree.py@2-component-area-preserve"
+            if component_selection is not None else "process_fir_tree.py@1"
+        )},
         "scene": 0,
         "scenes": [{"name": "Scene", "nodes": [0]}],
         "nodes": [{"mesh": 0, "name": name}],
@@ -230,7 +386,24 @@ def build_variant(source: Source, mesh_index: int, variant: str, lod: int, outpu
         "buffers": [{"byteLength": len(binary)}],
         "bufferViews": views,
         "accessors": accessors,
-        "extras": {"sourceAsset": "fir_tree_01", "sourceVariant": variant, "sourceMeshIndex": mesh_index, "lod": lod, "roles": list(ROLE_ORDER), "materialMode": "baked-role-colors"},
+        "extras": {
+            "candidateOnly": component_selection is not None,
+            "sourceAsset": "fir_tree_01",
+            "sourceVariant": variant,
+            "sourceMeshIndex": mesh_index,
+            "lod": lod,
+            "roles": list(ROLE_ORDER),
+            "materialMode": "baked-role-colors",
+            "foliageSelection": ({
+                "method": "connected-components-3d-stratified-area-preserving",
+                "sourceTriangles": component_selection.source_triangles,
+                "selectedTriangles": len(component_selection.indices) // 3,
+                "sourceComponents": component_selection.source_components,
+                "selectedComponents": component_selection.selected_components,
+                "componentScale": component_selection.scale,
+                "grid": [12, 48, 12],
+            } if component_selection is not None else {"method": "triangle-height-reservoir"}),
+        },
     }
     json_chunk = json.dumps(output_gltf, separators=(",", ":")).encode("utf-8")
     json_chunk += b" " * ((4 - len(json_chunk) % 4) % 4)
@@ -251,11 +424,19 @@ def main() -> None:
     try:
         output_dir = pathlib.Path(parsed.output_dir).resolve()
         reports = []
-        for mesh_index, variant in enumerate(("a", "b", "c")):
+        variants = ("a", "b", "c") if parsed.variant == "all" else (parsed.variant,)
+        for variant in variants:
+            mesh_index = ("a", "b", "c").index(variant)
             for lod in (0, 1):
-                suffix = "" if variant == "a" else f"_variant_{variant}"
-                output = output_dir / f"fir_tree_01{suffix}_lod{lod}.glb"
-                report = build_variant(source, mesh_index, variant, lod, output)
+                if parsed.prefix:
+                    output = output_dir / f"{parsed.prefix}_lod{lod}.glb"
+                else:
+                    suffix = "" if variant == "a" else f"_variant_{variant}"
+                    output = output_dir / f"fir_tree_01{suffix}_lod{lod}.glb"
+                report = build_variant(
+                    source, mesh_index, variant, lod, output,
+                    foliage_selection=parsed.foliage_selection,
+                )
                 reports.append(report)
                 print("FIR_TREE_DONE", json.dumps(report, sort_keys=True))
     finally:

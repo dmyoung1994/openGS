@@ -3,10 +3,20 @@ import { Grass } from '../terrain/Grass.js';
 import { buildBunkerMesh } from '../scene/Bunkers.js';
 import { createGolfBallMesh } from '../scene/GolfBall.js';
 import { loadTreePrototype, loadTreeImpostor, buildTreeBeautyLod } from '../scene/Trees.js';
+import { GeneratedFoliageForest, GeneratedFoliageTree } from '../scene/GeneratedFoliageTree.js';
+import { loadFoliageAlias } from '../foliage/FoliagePackResolver.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import {
+  BufferAttribute, BufferGeometry, ClampToEdgeWrapping, CylinderGeometry,
+  DoubleSide, Group, LinearMipmapLinearFilter, Mesh, MeshStandardMaterial, NearestFilter, PlaneGeometry,
+  SRGBColorSpace, TextureLoader, Vector3,
+} from 'three';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
+import { mix, texture, vec3 } from 'three/tsl';
 
 const viewerGltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const viewerTextureLoader = new TextureLoader();
 import { WaterSurface } from '../scene/WaterSurface.js';
 
 // Asset registry for the isolated viewer (viewer.html).
@@ -150,6 +160,7 @@ async function firTreePatch({ camera, renderer, motionHistory, environment, tree
     x: cx, z: cz, y: baseY, rotY: 0, targetHeight,
   }], {
     renderer, camera, motionHistory, environment,
+    wind: { model: 'hierarchical-tree-v1', trunkStiffness: 0.94, branchStiffness: 0.72, leafStiffness: 0.38, gustResponse: 0.52 },
     seed: 0x51a7e5d,
     lodNear: 12,
     lodFar: 20,
@@ -272,6 +283,269 @@ async function coniferV4CandidatePatch({ renderer, lod = 0 }) {
   return { terrain, objects: [terrain.mesh, subject], focus: { x: cx, z: cz }, treeBeauty };
 }
 
+function generatedFirCardGeometry(clusters) {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const up = new Vector3(0, 1, 0);
+  const tangent = new Vector3();
+  const branch = new Vector3();
+  const cardUp = new Vector3();
+  const normal = new Vector3();
+  const center = new Vector3();
+  const corner = new Vector3();
+  let cardCount = 0;
+  const random = (n) => {
+    const value = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
+    return value - Math.floor(value);
+  };
+
+  function appendCard({ y, azimuth, length, width, roll, cluster }) {
+    branch.set(Math.cos(azimuth), 0.055 + random(cardCount + 71) * 0.08, Math.sin(azimuth)).normalize();
+    tangent.set(-Math.sin(azimuth), 0, Math.cos(azimuth));
+    cardUp.copy(up).multiplyScalar(Math.cos(roll)).addScaledVector(tangent, Math.sin(roll)).normalize();
+    center.copy(branch).multiplyScalar(length * 0.5 + 0.10);
+    center.y += y;
+    // Broad canopy lighting should follow the crown volume, not expose the
+    // orientation of each flat support plane. Fine needle response stays in the
+    // albedo; this spherical normal keeps adjacent crossed sprays coherent.
+    normal.set(center.x, Math.max(0.35, width * 0.22), center.z).normalize();
+    const halfLength = length * 0.5;
+    const halfWidth = width * 0.5;
+    const base = positions.length / 3;
+    const signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+    for (const [su, sv] of signs) {
+      corner.copy(center).addScaledVector(branch, su * halfLength).addScaledVector(cardUp, sv * halfWidth);
+      positions.push(corner.x, corner.y, corner.z);
+      normals.push(normal.x, normal.y, normal.z);
+    }
+    const { u0, v0, u1, v1 } = cluster.uv;
+    const uBase = cluster.baseEdge === 'right' ? u1 : u0;
+    const uTip = cluster.baseEdge === 'right' ? u0 : u1;
+    uvs.push(uBase, v0, uTip, v0, uTip, v1, uBase, v1);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    cardCount++;
+  }
+
+  // A Douglas-fir crown is assembled from radial branch sprays, not random
+  // billboards. Dense cards mass the interior while crossed sparse cards break
+  // the outline and keep the crown volumetric when a radial plane turns edge-on.
+  const levels = 15;
+  for (let level = 0; level < levels; level++) {
+    const t = level / (levels - 1);
+    const y = 1.8 + t * 17.1;
+    const radius = 0.68 + 4.55 * Math.pow(1 - t, 0.76);
+    const branches = level < 9 ? 7 : (level < 13 ? 6 : 5);
+    for (let branchIndex = 0; branchIndex < branches; branchIndex++) {
+      const seed = level * 19 + branchIndex * 7;
+      const azimuth = branchIndex * Math.PI * 2 / branches + level * 0.47 + (random(seed) - 0.5) * 0.18;
+      const length = radius * (0.84 + random(seed + 1) * 0.20);
+      const primaryIndex = level < 3 ? 3 : (level > 9 ? 0 : [1, 2, 5][(level + branchIndex) % 3]);
+      const primary = clusters[primaryIndex];
+      appendCard({
+        y, azimuth, length,
+        width: Math.max(0.50, length / Math.max(1.15, primary.aspect) * 0.62),
+        roll: (random(seed + 2) - 0.5) * 0.72,
+        cluster: primary,
+      });
+      if (level < 14) {
+        const breaker = clusters[(level + branchIndex) % 3 === 0 ? 7 : 0];
+        appendCard({
+          y: y + 0.08, azimuth: azimuth + 0.035, length: length * 0.88,
+          width: Math.max(0.42, length / Math.max(1.1, breaker.aspect) * 0.46),
+          roll: 0.94 + (random(seed + 3) - 0.5) * 0.54,
+          cluster: breaker,
+        });
+      }
+    }
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
+  geometry.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2));
+  geometry.setIndex(indices);
+  geometry.computeBoundingSphere();
+  return { geometry, cardCount };
+}
+
+// Candidate-only generated-cluster renderer. It proves the source/processing/card
+// assembly loop in the real viewer while staying isolated from Range and the
+// production tree catalog. One masked foliage draw plus one trunk draw makes its
+// performance shape honest enough to evaluate before building hierarchical LOD.
+function generatedPackInspection(pack, { subject, mipLevel = 0 }) {
+  const group = new Group();
+  group.name = `generated-foliage-pack-${subject}`;
+  if (subject === 'mip') {
+    // Forced low mips are magnified for inspection; nearest filtering makes the
+    // actual retained texels readable instead of smoothly reconstructing them.
+    pack.atlas.magFilter = NearestFilter;
+    pack.atlas.needsUpdate = true;
+  }
+  const atlasSample = texture(pack.atlas).level(mipLevel);
+  const material = new MeshBasicNodeMaterial({ side: DoubleSide });
+  if (subject === 'atlas' || subject === 'mip') {
+    // Composite transparent atlas texels over a neutral reference so dilation,
+    // fringe, cell gutters, and a forced mip are visible without checkerboard
+    // aliasing becoming part of the inspection result.
+    material.colorNode = mix(vec3(0.075), atlasSample.rgb, atlasSample.a);
+    material.opacity = 1;
+  } else {
+    material.colorNode = atlasSample.rgb;
+    material.opacityNode = atlasSample.a;
+    material.alphaTest = 0.02;
+    material.transparent = false;
+    material.depthWrite = true;
+  }
+  material.needsUpdate = true;
+
+  if (subject === 'atlas' || subject === 'mip') {
+    const plane = new Mesh(new PlaneGeometry(12, 12), material);
+    plane.position.set(-2, 9.5, 0);
+    group.add(plane);
+  } else {
+    for (const [index, cluster] of pack.metadata.clusters.entries()) {
+      const width = 2.8;
+      const height = width / Math.max(0.5, cluster.aspect);
+      const geometry = new PlaneGeometry(width, height);
+      const cardUv = geometry.getAttribute('uv');
+      for (let vertex = 0; vertex < cardUv.count; vertex++) {
+        cardUv.setXY(vertex,
+          cluster.uv.u0 + (cluster.uv.u1 - cluster.uv.u0) * cardUv.getX(vertex),
+          cluster.uv.v0 + (cluster.uv.v1 - cluster.uv.v0) * cardUv.getY(vertex));
+      }
+      cardUv.needsUpdate = true;
+      const card = new Mesh(geometry, material);
+      card.name = `generated-foliage-card:${index}:${cluster.name}`;
+      card.position.set(-2 + (index % 4 - 1.5) * 3.25, 12.0 - Math.floor(index / 4) * 5.0, 0);
+      group.add(card);
+    }
+  }
+
+  return {
+    group,
+    diagnostics: Object.freeze({
+      candidateOnly: true, generatedSource: true, labSubject: subject,
+      mipLevel, clusterCount: pack.metadata.clusters.length,
+      clusterNames: pack.metadata.clusters.map(({ name }) => name),
+      drawCalls: subject === 'cards' ? pack.metadata.clusters.length : 1,
+      textureMode: pack.textureMode, atlasMetrics: pack.metadata.metrics,
+    }),
+    dispose() {
+      for (const child of group.children) child.geometry?.dispose();
+      material.dispose();
+      pack.atlas.dispose(); pack.materialMask.dispose();
+      for (const barkTexture of Object.values(pack.bark)) barkTexture.dispose();
+    },
+  };
+}
+
+async function generatedTreePatch({ renderer, camera, environment, motionHistory }, {
+  alias, height, foliageStandoff, frameWidth, forceBand = null,
+}) {
+  const minX = PATCH_X, minZ = -PATCH / 2;
+  const cx = minX + PATCH / 2, cz = 0;
+  const terrain = new Terrain({
+    bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH },
+    spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
+    surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
+  });
+  const textureMode = new URL(window.location.href).searchParams.get('texture') === 'png' ? 'png' : 'ktx2';
+  const requestedDebug = new URL(window.location.href).searchParams.get('debug') ?? 'beauty';
+  const debugMode = ['beauty', 'alpha', 'material', 'normal', 'lod', 'hull', 'overdraw'].includes(requestedDebug)
+    ? requestedDebug : 'beauty';
+  const boundedQueryNumber = (name, fallback, min, max) => {
+    const value = new URL(window.location.href).searchParams.get(name);
+    if (value === null || value.trim() === '') return fallback;
+    const raw = Number(value);
+    return Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : fallback;
+  };
+  const labControls = {
+    alphaTest: boundedQueryNumber('alphaTest', 0.20, 0, 0.95),
+    roughnessStrength: boundedQueryNumber('roughness', 1, 0, 1),
+    normalShaping: boundedQueryNumber('normalShape', 0, 0, 1),
+    transmissionStrength: boundedQueryNumber('transmission', 1, 0, 2),
+  };
+  const pack = await loadFoliageAlias(alias, {
+    renderer, textureMode, allowCandidate: true,
+  });
+  const requestedSubject = new URL(window.location.href).searchParams.get('subject') ?? 'tree';
+  const subject = ['tree', 'atlas', 'cards', 'mip'].includes(requestedSubject) ? requestedSubject : 'tree';
+  if (subject !== 'tree') {
+    const mipLevel = subject === 'mip' ? boundedQueryNumber('mip', 4, 0, 10) : 0;
+    const inspection = generatedPackInspection(pack, { subject, mipLevel });
+    const baseY = terrain.heightAt(cx, cz);
+    inspection.group.position.set(cx, baseY, cz);
+    const treeBeauty = {
+      group: inspection.group, update() {},
+      residencyEstimate() { return inspection.diagnostics; },
+      readDiagnostics() { return inspection.diagnostics; },
+      dispose() { inspection.dispose(); },
+    };
+    return {
+      terrain, objects: [terrain.mesh, inspection.group], focus: { x: cx, z: cz }, treeBeauty,
+      focusY: baseY + 9.5, foliageStandoff: 10,
+      frameBounds: { center: [cx, baseY + 9.5, cz], size: [14, 14, 1] },
+    };
+  }
+  const generatedTree = new GeneratedFoliageTree({ pack, environment, camera, motionHistory,
+    seed: 0x51a7e5d, height, debugMode, forceBand, labControls });
+  const group = generatedTree.group;
+  const baseY = terrain.heightAt(cx, cz);
+  group.position.set(cx, baseY, cz);
+  const treeBeauty = {
+    group,
+    update(activeCamera) { generatedTree.update(activeCamera); },
+    residencyEstimate(activeCamera) { return generatedTree.diagnostics(activeCamera); },
+    readDiagnostics() { return generatedTree.diagnostics(camera); },
+    dispose() { generatedTree.dispose(); },
+  };
+  return {
+    terrain, objects: [terrain.mesh, group], focus: { x: cx, z: cz }, treeBeauty,
+    focusY: baseY + height * 0.49,
+    foliageStandoff,
+    frameBounds: { center: [cx, baseY + height * 0.5, cz], size: [frameWidth, height, frameWidth] },
+  };
+}
+
+async function generatedDouglasFirForestPatch({ renderer, camera, environment, motionHistory }) {
+  const minX = PATCH_X - 28, minZ = -32;
+  const cx = PATCH_X, cz = 0;
+  const terrain = new Terrain({
+    bounds: { minX, maxX: minX + 56, minZ, maxZ: minZ + 64 },
+    spacing: 0.8, renderSpacing: 0.8, heightFn: swell,
+    surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
+  });
+  const textureMode = new URL(window.location.href).searchParams.get('texture') === 'png' ? 'png' : 'ktx2';
+  const pack = await loadFoliageAlias('builtin.douglas-fir.pnw.v1', {
+    renderer, textureMode, allowCandidate: true,
+  });
+  const perimeter = [
+    [-24, -26, 0.96], [-15, -29, 0.72], [-5, -30, 1.08], [7, -29, 0.82], [20, -25, 1.02],
+    [-25, -12, 0.76], [-24, 5, 1.12], [-25, 22, 0.88],
+    [25, -9, 1.04], [24, 8, 0.70], [26, 24, 0.98],
+    [-18, 27, 0.74], [-6, 29, 1.06], [8, 28, 0.84], [20, 26, 0.94],
+  ].map(([dx, dz, scale], index) => ({
+    x: cx + dx, z: cz + dz, y: terrain.heightAt(cx + dx, cz + dz), scale,
+    rotY: index * 2.399 + (index % 3) * 0.17,
+  }));
+  const forest = new GeneratedFoliageForest({ pack, placements: perimeter, environment, camera, motionHistory, renderer,
+    seed: 0x67d0a61, identityCount: 3 });
+  return {
+    terrain, objects: [terrain.mesh, forest.group], focus: { x: cx, z: cz },
+    focusY: terrain.heightAt(cx, cz) + 8,
+    frameBounds: { center: [cx, terrain.heightAt(cx, cz) + 10, cz], size: [56, 22, 64] },
+    treeBeauty: {
+      group: forest.group,
+      update(activeCamera) { forest.update(activeCamera); },
+      residencyEstimate() { return forest.residencyEstimate(); },
+      readDiagnostics() { return forest.residencyEstimate(); },
+      dispose() { forest.dispose(); },
+    },
+  };
+}
+
 async function sourceTreePatch({ renderer }) {
   const minX = PATCH_X, minZ = -PATCH / 2;
   const cx = minX + PATCH / 2, cz = 0;
@@ -313,7 +587,11 @@ async function pineTreePatch({ camera, renderer, motionHistory, environment }) {
   const targetHeight = 14.85;
   const treeBeauty = buildTreeBeautyLod(proto, midProto, impostor, impostorTexture, [{
     x: cx, z: cz, y: baseY, rotY: 0, targetHeight,
-  }], { renderer, camera, motionHistory, environment, seed: 0x51a7e5d, lodNear: 12, lodFar: 20 });
+  }], {
+    renderer, camera, motionHistory, environment,
+    wind: { model: 'hierarchical-tree-v1', trunkStiffness: 0.9, branchStiffness: 0.62, leafStiffness: 0.28, gustResponse: 0.66 },
+    seed: 0x51a7e5d, lodNear: 12, lodFar: 20,
+  });
   // See the frameBounds note in firTreePatch: GPU-placed trees expose no CPU bbox.
   return {
     terrain, objects: [terrain.mesh, treeBeauty.group], focus: { x: cx, z: cz }, treeBeauty,
@@ -369,6 +647,37 @@ function standingTurf(kind, opts = {}) {
 }
 
 export const ASSETS = {
+  'tree candidate: generated Douglas-fir clusters': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.douglas-fir.pnw.v1', height: 19.5, foliageStandoff: 5.25, frameWidth: 10.5,
+  }),
+  'tree candidate: generated Italian cypress': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.italian-cypress.mediterranean.v1', height: 18, foliageStandoff: 2.3, frameWidth: 5.2,
+  }),
+  'tree candidate: generated Monterey cypress': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.monterey-cypress.coastal.v1', height: 16.5, foliageStandoff: 7.2, frameWidth: 15.5,
+  }),
+  'tree candidate: generated valley oak': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.valley-oak.california.v1', height: 17, foliageStandoff: 12.8, frameWidth: 27,
+  }),
+  'tree candidate: generated sugar maple': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.sugar-maple.northeastern.v1', height: 18.5, foliageStandoff: 8.8, frameWidth: 19,
+  }),
+  'tree candidate: generated Douglas-fir far parent': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.douglas-fir.pnw.v1', height: 19.5, foliageStandoff: 5.25, frameWidth: 10.5, forceBand: 2,
+  }),
+  'tree candidate: generated Italian cypress far parent': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.italian-cypress.mediterranean.v1', height: 18, foliageStandoff: 2.3, frameWidth: 5.2, forceBand: 2,
+  }),
+  'tree candidate: generated Monterey cypress far parent': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.monterey-cypress.coastal.v1', height: 16.5, foliageStandoff: 7.2, frameWidth: 15.5, forceBand: 2,
+  }),
+  'tree candidate: generated valley oak far parent': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.valley-oak.california.v1', height: 17, foliageStandoff: 12.8, frameWidth: 27, forceBand: 2,
+  }),
+  'tree candidate: generated sugar maple far parent': (ctx) => generatedTreePatch(ctx, {
+    alias: 'builtin.sugar-maple.northeastern.v1', height: 18.5, foliageStandoff: 8.8, frameWidth: 19, forceBand: 2,
+  }),
+  'tree candidate: generated Douglas-fir perimeter forest': (ctx) => generatedDouglasFirForestPatch(ctx),
   'tree: fir LOD lab': (ctx) => firTreePatch(ctx),
   'tree candidate: source PBR LOD0': (ctx) => firTreeSourceCandidatePatch({ ...ctx, lod: 0 }),
   'tree candidate: source PBR LOD1': (ctx) => firTreeSourceCandidatePatch({ ...ctx, lod: 1 }),
@@ -406,6 +715,13 @@ export const ASSETS = {
     prototypeBase: '/assets/trees_candidates/conifer_v8/conifer_v8',
     impostorUrl: '/assets/trees_candidates/conifer_v8/conifer_v8_impostor.png',
   }),
+  'tree candidate: conifer v9 component foliage': (ctx) => firTreePatch({
+    ...ctx,
+    treePrefix: 'conifer_v9',
+    prototypeBase: '/assets/trees_candidates/conifer_v9/conifer_v9',
+    impostorUrl: '/assets/trees_candidates/conifer_v9/conifer_v9_impostor.png',
+    targetHeight: 18.833,
+  }),
   'tree: conifer volume v2': (ctx) => firTreePatch({ ...ctx, treePrefix: 'conifer_volume_v2', impostorFile: 'conifer_volume_v2_impostor.png' }),
   'tree: conifer v3 branchlets': (ctx) => firTreePatch({ ...ctx, treePrefix: 'conifer_v3', impostorFile: 'conifer_v3_impostor.png' }),
   'tree: pine sapling canonical': (ctx) => firTreePatch({ ...ctx, treePrefix: 'pine_sapling_medium_canonical', impostorFile: 'pine_sapling_medium_canonical_impostor.png' }),
@@ -425,6 +741,26 @@ export const ASSETS = {
     treePrefix: 'bk_grand_fir',
     impostorFile: 'bk_grand_fir_impostor.png',
     targetHeight: 8.109,
+  }),
+  'tree candidate: grand fir v10 preserve area': (ctx) => firTreePatch({
+    ...ctx,
+    treePrefix: 'bk_grand_fir_v10',
+    prototypeBase: '/assets/trees_candidates/bk_grand_fir_v10/bk_grand_fir_v10',
+    impostorUrl: '/assets/trees_candidates/bk_grand_fir_v10/bk_grand_fir_v10_impostor.png',
+    targetHeight: 8.115,
+  }),
+  'tree candidate: Douglas fir summer': (ctx) => firTreePatch({
+    ...ctx,
+    treePrefix: 'bk_douglas_fir_summer',
+    prototypeBase: '/assets/trees_candidates/bk_douglas_fir_summer/bk_douglas_fir_summer',
+    impostorUrl: '/assets/trees_candidates/bk_douglas_fir_summer/bk_douglas_fir_summer_impostor.png',
+    targetHeight: 25.439,
+  }),
+  'tree candidate: dense conifer at 20m': (ctx) => firTreePatch({
+    ...ctx,
+    treePrefix: 'bk_dense_conifer',
+    impostorFile: 'bk_dense_conifer_impostor.png',
+    targetHeight: 20,
   }),
   // 29 m Scots pine: an open, high crown whose canopy is a realized
   // geometry-nodes scatter thinned to budget rather than decimated.

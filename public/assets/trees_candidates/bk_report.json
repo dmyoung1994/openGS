@@ -160,5 +160,73 @@
    "baseY": -0.039,
    "topY": 29.328
   }
+ ],
+ "bk_grand_fir_v10": [
+  {
+   "lod": 0,
+   "file": "public/assets/trees_candidates/bk_grand_fir_v10/bk_grand_fir_v10_lod0.glb",
+   "sha256": "c34a286f6c7742f2e778ee56a3d6c83e03a748f19a84de11bcd2f14c4dae6d7a",
+   "bytes": 17213288,
+   "tris": {
+    "trunk": 9000,
+    "branches": 26000,
+    "foliage": 78000,
+    "foliage_2": 52000
+   },
+   "width": 5.782,
+   "height": 8.115,
+   "depth": 5.501,
+   "baseY": 0.034,
+   "topY": 8.149
+  },
+  {
+   "lod": 1,
+   "file": "public/assets/trees_candidates/bk_grand_fir_v10/bk_grand_fir_v10_lod1.glb",
+   "sha256": "4a11b5dabc11c347796519f249016b65939e0db784f4bd87526130b29aec75f4",
+   "bytes": 6853380,
+   "tris": {
+    "trunk": 2499,
+    "branches": 6000,
+    "foliage": 18000,
+    "foliage_2": 12000
+   },
+   "width": 5.803,
+   "height": 8.141,
+   "depth": 5.498,
+   "baseY": 0.034,
+   "topY": 8.175
+  }
+ ],
+ "bk_douglas_fir_summer": [
+  {
+   "lod": 0,
+   "file": "public/assets/trees/bk_douglas_fir_summer_lod0.glb",
+   "sha256": "75f44d7208557ba1cefeb333ceb6f316b3d42517c0dba81951e9df5bc343c04f",
+   "bytes": 7551692,
+   "tris": {
+    "foliage": 10874,
+    "branches": 117840
+   },
+   "width": 13.048,
+   "height": 25.439,
+   "depth": 12.85,
+   "baseY": 0.0,
+   "topY": 25.439
+  },
+  {
+   "lod": 1,
+   "file": "public/assets/trees/bk_douglas_fir_summer_lod1.glb",
+   "sha256": "20f753e00a0debfb3531421c44ec244196a727ed3d26f10ae7a73175ac6161e5",
+   "bytes": 7245512,
+   "tris": {
+    "foliage": 6500,
+    "branches": 117840
+   },
+   "width": 12.921,
+   "height": 25.439,
+   "depth": 12.644,
+   "baseY": 0.0,
+   "topY": 25.439
+  }
  ]
 }

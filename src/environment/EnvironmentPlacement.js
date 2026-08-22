@@ -99,6 +99,12 @@ function distributedScale(record, asset, random, placed) {
   if (asset.category === 'groundcover' || asset.category === 'shrub') {
     return 0.76 + random() * 0.44;
   }
+  if (asset.category === 'tree') {
+    // A forest wall needs age structure, not a row of cloned nursery stock.
+    // Preserve the authored species while spanning young edge trees through
+    // mature canopy dominants; this changes scale only, never placement count.
+    return 0.66 + random() * 0.72;
+  }
   return 0.78 + random() * 0.44;
 }
 

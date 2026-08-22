@@ -12,7 +12,7 @@ import {
   workgroupBarrier, workgroupId, localId,
 } from 'three/tsl';
 import { disposeComputeNodes, disposeWebGPUAttributes } from '../scene/WebGPUResourceDisposal.js';
-import { turfBase } from './turfColor.js';
+import { turfBladeBase } from './turfColor.js';
 
 // SceneManager supplies the shared PMREM through the builder rather than setting a
 // material-local envMap. Keep Phong on that same real environment path so this
@@ -66,9 +66,12 @@ const SURFACE_TRANSITION_M = 1.5;
 // the authored long-grass variation below.
 const ROUGH_BLADE_WIDTH_MIN_M = 0.0075;
 const ROUGH_BLADE_WIDTH_MAX_M = 0.018;
-const ROUGH_COVERAGE_MIN = 0.28;
-const ROUGH_COVERAGE_MAX = 0.66;
-const ROUGH_COLONY_FLOOR = 0.64;
+// Preserve the pre-optimization visual mass. The 192x192 candidate field and
+// crossed ribbons need a high acceptance floor or oblique views expose the ground
+// between blades even though the top-down count still looks dense.
+const ROUGH_COVERAGE_MIN = 0.64;
+const ROUGH_COVERAGE_MAX = 0.88;
+const ROUGH_COLONY_FLOOR = 0.88;
 // The already-sampled R8 grass mask carries one exact growable-surface bit and a
 // seven-bit dense-canopy field. A single crown contributes at most 63/127: enough
 // for a restrained ~26% reduction only at its centre. Smooth overlap from multiple
@@ -98,16 +101,25 @@ const DENSITY_ACTIVE_RADIUS = 0.45;
 const TILE_CIRCUMRADIUS = Math.SQRT2 * TILE_SIZE * 0.5 + CELL;
 // The dense, view-independent field above remains untouched. A second term in the
 // same stochastic acceptance curve carries a small population of those exact same
-// world-cell blades farther into the *visible* camera footprint. It is deliberately
-// a forward ellipse rather than a larger camera-centred disk: at high tier the old
-// field becomes empty at ~19 m, while this tail reaches 31.8 m down-view and only
-// 16.3 m laterally. Close density, rooted width, candidate identity, draw count, and
-// GPU capacity are unchanged.
+// world-cell blades into the complete perception-sensitive camera footprint. The
+// accepted tail now reaches 96.8 m down-view and 64.5 m laterally at high tier, so
+// low cameras cannot expose the former 31.8 m geometry cutoff. Close density, rooted
+// width, candidate identity, draw count, and GPU capacity are unchanged.
 const FAR_TIER_START_RADIUS = 0.36;
-const FAR_TIER_TERMINAL_RADIUS = 0.74;
-const FAR_TIER_LATERAL_SCALE = 1.95;
-const FAR_TIER_PEAK_KEEP = 0.09;
+const FAR_TIER_TERMINAL_RADIUS = 2.25;
+const FAR_TIER_LATERAL_SCALE = 1.50;
+// The former 9% tail exposed a visibly bare band immediately after the dense base
+// field ended around 19 m. A 22% world-cell population keeps the golfer-visible
+// midfield continuous; quarter-rate far sampling still caps actual candidate work
+// at one lane per 2x2 block and the quadratic tail retires it toward the horizon.
+const FAR_TIER_PEAK_KEEP = 0.22;
 const FAR_TIER_FORWARD_FEATHER = 0.08;
+// Far-only tiles are beyond the complete base field, where a full 192x192
+// candidate evaluation is substantial sub-pixel overdraw. Sample one stable lane
+// from each 2x2 world-cell block and compensate the stochastic keep probability.
+// This preserves expected coverage and the authored horizon while avoiding 75% of
+// the hashes, terrain reads, ecological noise, wind, and record preparation there.
+const FAR_ONLY_CANDIDATE_STRIDE = 4;
 const DENSITY_TARGET_MAX_SCALE = 1.24 * ROUGH_COVERAGE_MAX;
 // Active-tile records keep their existing far-only flag in bit zero, carry an
 // upward-rounded conservative density ceiling in the next byte, and retain the
@@ -119,8 +131,6 @@ const ACTIVE_TILE_BOUND_MAX = ( 1 << ACTIVE_TILE_BOUND_BITS ) - 1;
 const MAX_WIDTH_RAMP = 2.2;
 // Avoid one synthetic neon-green population. Species/age grading below supplies
 // the hue spread; this keeps the shared turf pigment vivid without clipping it.
-const BLADE_SAT = 1.28;
-const _bladeHSL = { h: 0, s: 0, l: 0 };
 
 // Four normalized scalars in one existing u32 record lane. Wind uses [-16,16] m/s;
 // camera LOD uses [fade, width/6.6] pairs. The maximum geometric quantization is
@@ -174,8 +184,11 @@ export function bakeDenseCanopyMask( data, nx, nz, { minX, minZ, spacing }, plac
         const inward = Math.pow( 1 - normalizedDistance, CANOPY_KERNEL_POWER );
         const smoothCrown = inward * inward * ( 3 - 2 * inward );
         const index = iz * nx + ix;
-        data[ index ] = Math.min( CANOPY_MASK_MAX,
-          data[ index ] + Math.round( smoothCrown * CANOPY_CROWN_WEIGHT ) );
+        // The strongest local crown owns suppression. Summing every overlap made
+        // the denser 136-tree perimeter erase nearly half the same grass roots
+        // repeatedly and exposed the terrain between otherwise dense blades.
+        data[ index ] = Math.max( data[ index ],
+          Math.round( smoothCrown * CANOPY_CROWN_WEIGHT ) );
       }
     }
   }
@@ -209,7 +222,7 @@ function densityAtDistance( radius, distance ) {
 // Sparse projected-error tail. `dx/dz` and the forward axis are camera-relative,
 // but the candidate threshold remains the immutable world-cell hash, so translating
 // or rotating the camera changes only LOD residency and never the blade layout.
-// The quadratic terminal falloff is continuous and reaches exactly zero at 0.74R.
+// The quadratic terminal falloff is continuous and reaches exactly zero at 2.25R.
 function farTierKeepAt( radius, dx, dz, cameraForward ) {
   const along = dx.mul( cameraForward.x ).add( dz.mul( cameraForward.y ) );
   const lateral = dx.mul( cameraForward.y ).sub( dz.mul( cameraForward.x ) );
@@ -222,15 +235,9 @@ function farTierKeepAt( radius, dx, dz, cameraForward ) {
   return tail.mul( tail ).mul( FAR_TIER_PEAK_KEEP ).mul( forwardGate );
 }
 
-function bladeSaturate( color ) {
-  color.getHSL( _bladeHSL, 'srgb' );
-  color.setHSL( _bladeHSL.h, Math.min( _bladeHSL.s * BLADE_SAT, 1 ), _bladeHSL.l, 'srgb' );
-  return color;
-}
-
 const BLADE_COLOR = {};
 for ( const name of Object.keys( BLADE_H ) ) {
-  BLADE_COLOR[ name ] = bladeSaturate( turfBase( name, new Color() ) ).clone();
+  BLADE_COLOR[ name ] = turfBladeBase( name, new Color() ).clone();
 }
 
 export class Grass {
@@ -289,7 +296,9 @@ export class Grass {
     this.uRadius = uniform( radius );
     this.uSpecular = uniform( 0.045 );
 
-    this._tileOrigins = this._makeTileOrigins();
+    const tileMetadata = this._makeTileOrigins();
+    this._tileOrigins = tileMetadata.origins;
+    this._tileHeightBounds = tileMetadata.heightBounds;
     // StorageBufferNode does not proxy BufferAttribute.count; the GPU allocation's
     // authoritative element count lives on the attribute itself.
     this._tileCount = this._tileOrigins.value.count;
@@ -314,15 +323,12 @@ export class Grass {
       minZ: terrain.bounds.minZ,
       spacing: terrain.spacing,
     }, canopyPlacements );
-    const color = new Color();
     const { minX, minZ } = terrain.bounds;
     for ( let z = 0; z < nz; z ++ ) {
       for ( let x = 0; x < nx; x ++ ) {
         const wx = minX + x * terrain.spacing;
         const wz = minZ + z * terrain.spacing;
         const name = terrain.surfaceAt( wx, wz );
-        turfBase( name, color );
-        bladeSaturate( color );
         const i = z * nx + x;
         if ( bladeHeight( name ) > 0 ) data[ i ] |= GRASS_GROWABLE_BIT;
       }
@@ -340,7 +346,9 @@ export class Grass {
     const xs = Math.ceil( ( maxX - minX ) / TILE_SIZE );
     const zs = Math.ceil( ( maxZ - minZ ) / TILE_SIZE );
     const data = new Float32Array( xs * zs * 4 );
+    const heightBounds = new Float32Array( xs * zs * 2 );
     const surfaceData = this._const.dataTex.image.data;
+    const heightData = this.terrain.heights;
     const nx = this._const.nx, nz = this._const.nz;
     const spacing = this.terrain.spacing;
     let n = 0;
@@ -355,18 +363,34 @@ export class Grass {
         const iz0 = Math.max( 0, Math.floor( ( originZ - minZ ) / spacing - 0.5 ) );
         const iz1 = Math.min( nz - 1, Math.ceil( ( originZ + TILE_SIZE - minZ ) / spacing + 0.5 ) );
         let occupied = 0;
-        for ( let iz = iz0; iz <= iz1 && occupied === 0; iz ++ ) {
+        let minHeight = Infinity;
+        let maxHeight = -Infinity;
+        for ( let iz = iz0; iz <= iz1; iz ++ ) {
           for ( let ix = ix0; ix <= ix1; ix ++ ) {
-            if ( ( surfaceData[ iz * nx + ix ] & GRASS_GROWABLE_BIT ) !== 0 ) { occupied = 1; break; }
+            const sampleIndex = iz * nx + ix;
+            const height = heightData[ sampleIndex ];
+            minHeight = Math.min( minHeight, height );
+            maxHeight = Math.max( maxHeight, height );
+            if ( ( surfaceData[ sampleIndex ] & GRASS_GROWABLE_BIT ) !== 0 ) occupied = 1;
           }
         }
+        const tileIndex = z * xs + x;
+        // Bilinear height reconstruction stays inside the extrema of these exact
+        // source samples. Include root tolerance below and the tallest authored
+        // blade above so the frustum test encloses the complete visible canopy.
+        heightBounds[ tileIndex * 2 ] = Number.isFinite( minHeight ) ? minHeight - 0.05 : 0;
+        heightBounds[ tileIndex * 2 + 1 ] = Number.isFinite( maxHeight )
+          ? maxHeight + BLADE_H.deepRough + 0.06 : BLADE_H.deepRough;
         data[ n ++ ] = originX;
         data[ n ++ ] = 0;
         data[ n ++ ] = originZ;
         data[ n ++ ] = occupied;
       }
     }
-    return storage( new StorageBufferAttribute( data, 4 ), 'vec4', xs * zs ).toReadOnly();
+    return {
+      origins: storage( new StorageBufferAttribute( data, 4 ), 'vec4', xs * zs ).toReadOnly(),
+      heightBounds: storage( new StorageBufferAttribute( heightBounds, 2 ), 'vec2', xs * zs ).toReadOnly(),
+    };
   }
 
   _makeGpuState() {
@@ -421,6 +445,7 @@ export class Grass {
 
   _buildTileCompute() {
     const tileOrigins = this._tileOrigins;
+    const tileHeightBounds = this._tileHeightBounds;
     const activeTiles = this._activeTiles;
     const tileCounter = this._tileCounter;
     const cam = this.uCameraPosition;
@@ -430,24 +455,29 @@ export class Grass {
     return Fn( () => {
       const tile = uint( instanceIndex );
       const origin = tileOrigins.element( tile );
+      const verticalBounds = tileHeightBounds.element( tile );
       const dx = origin.x.add( TILE_SIZE * 0.5 ).sub( cam.x );
       const dz = origin.z.add( TILE_SIZE * 0.5 ).sub( cam.z );
       // Classify the whole 8 m tile, not just its centre. A centre-only test switches
       // square tiles on and off while orbiting, which exposes the compute grid even
       // though individual blades are world-stable. Corners plus a near-camera guard
       // admit a tile before any visible portion reaches the viewport.
-      const pointVisible = ( ox, oz ) => {
-        const clip = viewProjection.mul( vec4( origin.x.add( ox ), 0.0, origin.z.add( oz ), 1.0 ) );
+      const pointVisible = ( ox, oy, oz ) => {
+        const clip = viewProjection.mul( vec4( origin.x.add( ox ), oy, origin.z.add( oz ), 1.0 ) );
         return clip.w.greaterThan( 0.0 )
           .and( clip.x.abs().lessThan( clip.w.mul( 1.30 ) ) )
           .and( clip.y.abs().lessThan( clip.w.mul( 1.65 ) ) );
       };
       const nearCamera = dx.mul( dx ).add( dz.mul( dz ) ).lessThan( ( TILE_SIZE * 1.5 ) ** 2 );
       const inFrustum = nearCamera
-        .or( pointVisible( 0.0, 0.0 ) )
-        .or( pointVisible( TILE_SIZE, 0.0 ) )
-        .or( pointVisible( 0.0, TILE_SIZE ) )
-        .or( pointVisible( TILE_SIZE, TILE_SIZE ) );
+        .or( pointVisible( 0.0, verticalBounds.x, 0.0 ) )
+        .or( pointVisible( TILE_SIZE, verticalBounds.x, 0.0 ) )
+        .or( pointVisible( 0.0, verticalBounds.x, TILE_SIZE ) )
+        .or( pointVisible( TILE_SIZE, verticalBounds.x, TILE_SIZE ) )
+        .or( pointVisible( 0.0, verticalBounds.y, 0.0 ) )
+        .or( pointVisible( TILE_SIZE, verticalBounds.y, 0.0 ) )
+        .or( pointVisible( 0.0, verticalBounds.y, TILE_SIZE ) )
+        .or( pointVisible( TILE_SIZE, verticalBounds.y, TILE_SIZE ) );
       // Every surviving candidate lies within DENSITY_ACTIVE_RADIUS * radius of
       // the camera; include the complete tile footprint around that horizon. The
       // previous radius + 1.55*TILE_SIZE admitted a broad zero-output ring and made
@@ -480,7 +510,22 @@ export class Grass {
         const nearestDz = dz.abs().sub( tileBoundHalfExtent ).max( 0.0 );
         const tileMinDistance = nearestDx.mul( nearestDx ).add( nearestDz.mul( nearestDz ) ).sqrt();
         const { keepProb: baseKeepUpper } = densityAtDistance( radius, tileMinDistance );
-        const densityUpper = baseKeepUpper.max( FAR_TIER_PEAK_KEEP )
+        // Bound the far tail at this tile's closest possible elliptical distance.
+        // The former global peak made every distant tile evaluate extra hashes,
+        // terrain fetches, and ecological noise even as its actual tail approached
+        // zero. This one sqrt runs per tile, then rejects almost all terminal lanes
+        // after their immutable acceptance hash in the candidate compute pass.
+        const farFootprintDistance = along.mul( along )
+          .add( scaledLateral.mul( scaledLateral ) ).sqrt();
+        const farMinDistance = farFootprintDistance.sub( farMargin ).max( 0.0 );
+        const farProgress = farMinDistance.sub( radius.mul( FAR_TIER_START_RADIUS ) )
+          .div( radius.mul( FAR_TIER_TERMINAL_RADIUS - FAR_TIER_START_RADIUS ) ).clamp( 0.0, 1.0 );
+        const farTail = float( 1 ).sub( farProgress );
+        const farSamplingScale = nearbyBase.not()
+          .select( float( FAR_ONLY_CANDIDATE_STRIDE ), float( 1 ) );
+        const farKeepUpper = farTail.mul( farTail ).mul( FAR_TIER_PEAK_KEEP )
+          .mul( farSamplingScale ).min( 1.0 );
+        const densityUpper = baseKeepUpper.max( farKeepUpper )
           .mul( DENSITY_TARGET_MAX_SCALE ).clamp( 0.0, 1.0 );
         // Float-to-uint truncates downward; add one bucket before clamping so the
         // decoded threshold is always >= the analytic bound, never an approximation
@@ -547,18 +592,40 @@ export class Grass {
       // flattened global invocation by 36,864 for every candidate.
       const group = workgroupId.x;
       const activeSlot = group.div( uint( GROUPS_PER_TILE ) );
-      const localCandidate = group.mod( uint( GROUPS_PER_TILE ) ).mul( uint( WORKGROUP ) ).add( lid );
+      const groupInTile = group.mod( uint( GROUPS_PER_TILE ) );
+      const fullLocalCandidate = groupInTile.mul( uint( WORKGROUP ) ).add( lid );
       const activeRecord = activeTiles.element( activeSlot );
       const tile = activeRecord.shiftRight( uint( ACTIVE_TILE_RECORD_SHIFT ) );
+      const farOnly = activeRecord.bitAnd( uint( 1 ) ).equal( uint( 1 ) );
       const densityUpper = float( activeRecord.shiftRight( uint( 1 ) )
         .bitAnd( uint( ACTIVE_TILE_BOUND_MAX ) ) ).div( ACTIVE_TILE_BOUND_MAX );
       const origin = tileOrigins.element( tile );
+      // Keep the far decision coherent across an entire workgroup. A scattered
+      // one-in-four lane predicate still makes Apple SIMD execute both sides of the
+      // expensive branch. The first quarter of a far tile's workgroups instead map
+      // their contiguous reduced index over every 2x2 block in the tile; remaining
+      // workgroups take one uniform empty path. Near and overlap tiles retain the
+      // original candidate index exactly.
+      const samplesCandidate = farOnly.not().or( groupInTile.lessThan(
+        uint( GROUPS_PER_TILE / FAR_ONLY_CANDIDATE_STRIDE ) ) );
+      const reducedCandidate = groupInTile.mul( uint( WORKGROUP ) ).add( lid );
+      const blocksPerRow = uint( GRID / 2 );
+      const blockX = reducedCandidate.mod( blocksPerRow );
+      const blockZ = reducedCandidate.div( blocksPerRow );
+      const farPhase = tile.mul( uint( 1664525 ) ).add( uint( 1013904223 ) )
+        .bitAnd( uint( FAR_ONLY_CANDIDATE_STRIDE - 1 ) );
+      const farLocalCandidate = blockZ.mul( uint( 2 * GRID ) )
+        .add( farPhase.shiftRight( uint( 1 ) ).mul( uint( GRID ) ) )
+        .add( blockX.mul( uint( 2 ) ) ).add( farPhase.bitAnd( uint( 1 ) ) );
+      const localCandidate = farOnly.select( farLocalCandidate, fullLocalCandidate );
       const lx = float( localCandidate.mod( uint( GRID ) ) );
       const lz = float( localCandidate.div( uint( GRID ) ) );
       const wcx = origin.x.div( CELL ).add( lx );
       const wcz = origin.z.div( CELL ).add( lz );
       const cell = vec2( wcx, wcz );
-      const hC = hash2( cell, 3.3 );
+      const farSamplingScale = farOnly
+        .select( float( FAR_ONLY_CANDIDATE_STRIDE ), float( 1 ) );
+      const hC = float( 1 ).toVar();
       // Every tile carries an upward-rounded maximum density target. Compute the
       // immutable acceptance hash first, then avoid the other four trigonometric
       // hashes as well as jitter, terrain textures, noise, and ecological preparation
@@ -578,8 +645,10 @@ export class Grass {
       const heightClass = float( 0 ).toVar();
       const widthBase = float( ROUGH_BLADE_WIDTH_MIN_M ).toVar();
       const alive = uint( 0 ).toVar();
-      const canPossiblyLive = hC.lessThan( densityUpper );
-      If( canPossiblyLive, () => {
+      If( samplesCandidate, () => {
+        hC.assign( hash2( cell, 3.3 ) );
+        const canPossiblyLive = hC.lessThan( densityUpper );
+        If( canPossiblyLive, () => {
         hA.assign( hash2( cell, 0.0 ) );
         hB.assign( hash2( cell, 1.7 ) );
         hD.assign( hash2( cell, 5.1 ) );
@@ -623,7 +692,8 @@ export class Grass {
         const { keepProb: baseKeepProb } = densityAtDistance( radius, dist );
         const keepProb = baseKeepProb.toVar();
         If( baseKeepProb.lessThan( FAR_TIER_PEAK_KEEP ), () => {
-          keepProb.maxAssign( farTierKeepAt( radius, dx, dz, cameraForward ) );
+          keepProb.maxAssign( farTierKeepAt( radius, dx, dz, cameraForward )
+            .mul( farSamplingScale ).min( 1.0 ) );
         } );
         const macroCluster = mx_noise_float( vec3( worldX.mul( 0.075 ), worldZ.mul( 0.075 ), 31.7 ) ).mul( 0.5 ).add( 0.5 );
         const patchBreak = mx_noise_float( vec3( worldX.mul( 0.19 ), worldZ.mul( 0.19 ), 43.1 ) ).mul( 0.5 ).add( 0.5 );
@@ -649,6 +719,7 @@ export class Grass {
         widthBase.assign( mix( ROUGH_BLADE_WIDTH_MIN_M, ROUGH_BLADE_WIDTH_MAX_M, ecologicalWidth ) );
         alive.assign( inBounds.and( growable ).and( hMax.greaterThan( 0.002 ) )
           .and( keepCandidate ).select( uint( 1 ), uint( 0 ) ) );
+        } );
         } );
       } );
 
@@ -732,7 +803,8 @@ export class Grass {
             const { progress, keepProb: baseLodKeep } = densityAtDistance( radius, lodDistance );
             const lodKeep = baseLodKeep.toVar();
             If( baseLodKeep.lessThan( FAR_TIER_PEAK_KEEP ), () => {
-              lodKeep.maxAssign( farTierKeepAt( radius, lodDx, lodDz, forwardAxis ) );
+              lodKeep.maxAssign( farTierKeepAt( radius, lodDx, lodDz, forwardAxis )
+                .mul( farSamplingScale ).min( 1.0 ) );
             } );
             const fade = smoothstep( hC.sub( DENSITY_FEATHER ), hC.add( DENSITY_FEATHER ), lodKeep );
             const viewDirection = vec2( lodDx.negate(), lodDz.negate() ).div( lodDistance );
@@ -971,6 +1043,7 @@ export class Grass {
     this.mesh.material.dispose();
     disposeWebGPUAttributes(this.renderer, [
       this._tileOrigins.value,
+      this._tileHeightBounds.value,
       this._activeTiles.value,
       this._tileCounter.value,
       this._visibleCounter.value,

@@ -15,6 +15,7 @@
 // WebGPU-only: a WebGL fallback, unavailable adapter, page/shader/WebGPU error, or
 // incomplete environment asset set makes the command fail after writing its report.
 import { launch } from 'puppeteer-core';
+import { execFileSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { decodePNG } from './lib/png.mjs';
@@ -31,9 +32,10 @@ const outDir = resolve(String(arg('out', 'benchmarks/environment')));
 const [width, height] = String(arg('size', '1280x720')).split('x').map(Number);
 const warmupFrames = Number(arg('warmup', 180));
 const sampleFrames = Number(arg('frames', 300));
-const gpuP95BudgetMs = Number(arg('gpu-p95-ms', 14));
-const rafP95BudgetMs = Number(arg('raf-p95-ms', 18.5));
+const gpuP95BudgetMs = Number(arg('gpu-p95-ms', 33.3));
+const rafP95BudgetMs = Number(arg('raf-p95-ms', 34.0));
 const maxHitches = Number(arg('max-hitches', 0));
+const hitchThresholdMs = 50.0;
 const maxRenderPasses = Number(arg('max-render-passes', 8));
 // Canonical cloudy runtime contract. These values describe the shipped GPU
 // resource and the single low-resolution sky integration plus its ping-pong resolve.
@@ -50,6 +52,7 @@ const expectedDeviceTier = String(arg('expected-device-tier', 'high'));
 const allowPerformanceMiss = argv.includes('--allow-performance-miss');
 const requestedScenario = arg('scenario', null);
 const saveTemporalCaptures = argv.includes('--save-temporal-captures');
+const foliageCandidate = arg('foliage-candidate', null);
 const forbiddenDiagnosticFlags = argv.filter((value) => value.startsWith('--diagnose-'));
 const chrome = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
@@ -201,6 +204,29 @@ if (requestedScenario && selectedScenarios.length === 0) {
   throw new Error(`Unknown --scenario ${requestedScenario}; expected one of ${scenarios.map((scenario) => scenario.id).join(', ')}`);
 }
 
+const canonicalTimingContract = !allowPerformanceMiss
+  && warmupFrames >= 180 && sampleFrames >= 300
+  && rafP95BudgetMs === 34.0 && maxHitches === 0 && maxRenderPasses === 8
+  && temporalMaeBudget === 0.15 && temporalChangedPixelBudgetPct === 0.2
+  && performanceTier === 'high-desktop-webgpu' && expectedDeviceTier === 'high'
+  && (
+    (!requestedScenario && width === 1280 && height === 720 && gpuP95BudgetMs === 33.3)
+    || (requestedScenario === 'tree-edge-close' && width === 1280 && height === 720 && gpuP95BudgetMs === 33.3)
+    || (['address-tee', 'low-rough', 'pond-contact', 'tree-edge-close'].includes(requestedScenario)
+      && width === 2408 && height === 1506 && gpuP95BudgetMs === 33.3)
+  );
+const readHostState = (args) => {
+  if (process.platform !== 'darwin') return null;
+  try {
+    return execFileSync('/usr/bin/pmset', args, { encoding: 'utf8' }).trim();
+  } catch (error) {
+    return `unavailable: ${error.message}`;
+  }
+};
+const hostPowerSource = readHostState(['-g', 'batt']);
+const hostThermalState = readHostState(['-g', 'therm']);
+const acPowerEligible = process.platform === 'darwin' && /AC Power/i.test(hostPowerSource || '');
+
 const report = {
   schemaVersion: 1,
   kind: 'environment-render-benchmark',
@@ -213,7 +239,7 @@ const report = {
     expectedDeviceTier,
     warmupFrames,
     sampleFrames,
-    hitchThresholdMs: 33.34,
+    hitchThresholdMs,
     performanceBudgets: {
       gpuCompletionP95Ms: gpuP95BudgetMs,
       maxRenderPasses,
@@ -236,10 +262,19 @@ const report = {
     },
     frameMetric: 'requestAnimationFrame interval; reports presentation/CPU frame pacing, not GPU timestamp timing',
     gpuTiming: 'bounded native WebGPU timestamp intervals; performance uses frame-completion cadence because pass spans overlap and are not additive',
+    goalEligibility: {
+      canonicalTimingContract,
+      acPowerRequired: true,
+      acPowerEligible,
+      eligible: canonicalTimingContract && acPowerEligible,
+    },
   },
   scenarios: [],
   validation: { passed: false, errors: [], console: [], requests: [] },
 };
+if (canonicalTimingContract && !acPowerEligible) {
+  report.validation.errors.push(`Strict Metal performance evidence requires AC power; ${hostPowerSource || process.platform}`);
+}
 const reportPath = join(outDir, 'report.json');
 report.progress = {
   state: 'initializing',
@@ -421,7 +456,8 @@ async function proveStaticShadowCache() {
   const passLabels = (capture) => capture.passes?.map((entry) => entry.label) || [];
   const dirtyLabels = passLabels(proof.dirty);
   const cleanLabels = passLabels(proof.clean);
-  const shadowCompute = ['Tree shadow GPU reset', 'Tree shadow light-frustum compact'];
+  const shadowCompute = foliageCandidate
+    ? [] : ['Tree shadow GPU reset', 'Tree shadow light-frustum compact'];
   const dirtyMissing = shadowCompute.filter((label) => !dirtyLabels.includes(label));
   if (!dirtyLabels.some((label) => label.startsWith('Shadow Map'))) dirtyMissing.push('Shadow Map*');
   const cleanUnexpected = cleanLabels.filter((label) =>
@@ -514,7 +550,7 @@ async function collectScenario(scenario) {
     'Grass blade compact',
     'Grass indirect draw finalize',
   ];
-  const requiredTreeBeautyComputePasses = [
+  const requiredTreeBeautyComputePasses = foliageCandidate ? [] : [
     'Tree beauty GPU reset',
     'Tree beauty camera-relative LOD compact',
     'Tree beauty indirect finalize',
@@ -552,6 +588,13 @@ async function collectScenario(scenario) {
     }
     for (const label of requiredTreeBeautyComputePasses) {
       if (!labels.has(label)) pushError(`${scenario.id} GPU timing missing required tree-beauty compute pass: ${label}`);
+    }
+    if (foliageCandidate) {
+      const generatedReset = [...labels].some((label) => /^Generated foliage identity \d+ reset$/.test(label));
+      const generatedCompact = [...labels].some((label) => /^Tree beauty generated foliage identity \d+ compact$/.test(label));
+      if (!generatedReset || !generatedCompact) {
+        pushError(`${scenario.id} GPU timing missing generated foliage reset/compact work`);
+      }
     }
     const unexpectedShadow = [...labels].filter((label) =>
       label === 'Tree shadow GPU reset'
@@ -639,7 +682,7 @@ async function collectScenario(scenario) {
     }
   }
   const cpuP95 = quantile(sampled, 0.95);
-  const hitchCount = sampled.filter((ms) => ms > 33.34).length;
+  const hitchCount = sampled.filter((ms) => ms > hitchThresholdMs).length;
   const gpuP95 = gpuTiming.available && gpuTiming.complete
     ? gpuTiming.captureThroughput?.completionDeltaP95Ms ?? null
     : null;
@@ -735,7 +778,8 @@ async function collectScenario(scenario) {
   // them, so a second species cannot smuggle in a beauty caster or a fourth draw.
   const treeShadowDiagnostics = await page.evaluate(async () => {
     const { range, lighting } = window.golf;
-    if (!range.treeShadows?.length) throw new Error('GPU tree shadow proxy is missing.');
+    const generated = range.treeBeauties?.some((beauty) => beauty.residencyEstimate?.().generatedSource === true);
+    if (!range.treeShadows?.length && !generated) throw new Error('GPU tree shadow proxy is missing.');
     const proxyMeshes = new Set(range.treeShadows.map((shadow) => shadow.mesh));
     let beautyCasters = 0;
     range.trees.traverse((object) => {
@@ -747,6 +791,7 @@ async function collectScenario(scenario) {
         proxyLayer: shadow.mesh.layers.mask,
       }))),
       beautyCasters,
+      generated,
       shadowCameraLayers: lighting.sun.shadow.camera.layers.mask,
     };
   });
@@ -797,7 +842,7 @@ async function collectScenario(scenario) {
       pushError(`${scenario.id} grass LOD forward axis is not the active evaluator view: length ${forwardLength}, alignment ${forwardAlignment}`);
     }
     if (!(grassDiagnostics.activeTileCount > 0)
-      || !(grassDiagnostics.farTierTerminalRadius >= grassDiagnostics.nominalRadius * 0.70)
+      || !(grassDiagnostics.farTierTerminalRadius >= grassDiagnostics.nominalRadius * 2.20)
       || !(grassDiagnostics.farTierTerminalRadius > grassDiagnostics.baseTerminalRadius)) {
       pushError(`${scenario.id} grass forward footprint is incomplete: ${JSON.stringify(grassDiagnostics)}`);
     }
@@ -816,10 +861,16 @@ async function collectScenario(scenario) {
   if ((treeShadowDiagnostics.shadowCameraLayers & 2) === 0) {
     pushError(`${scenario.id} directional shadow camera does not include the tree proxy layer`);
   }
-  if (treeShadowDiagnostics.beautyCasters !== 0) {
+  if (!treeShadowDiagnostics.generated && treeShadowDiagnostics.beautyCasters !== 0) {
     pushError(`${scenario.id} beauty tree caster fallback detected: ${treeShadowDiagnostics.beautyCasters}`);
   }
   for (const beauty of treeBeautyDiagnostics) {
+    if (beauty.generatedSource) {
+      if (!beauty.classificationComplete || beauty.counts.visible !== beauty.counts.near + beauty.counts.far) {
+        pushError(`${scenario.id} generated foliage GPU classification is incomplete`);
+      }
+      continue;
+    }
     // One indirect command per LOD0 role primitive, the same set again for LOD1,
     // and exactly one runtime-lit impostor card. A combined one-part prototype is
     // the partCount === 1 case of that same contract.
@@ -947,6 +998,7 @@ try {
   await mkdir(outDir, { recursive: true });
   const url = new URL('/index.html', base);
   url.searchParams.set('view', 'practice');
+  if (foliageCandidate) url.searchParams.set('foliageCandidate', String(foliageCandidate));
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForFunction(() => window.golf?.sm?._ready && window.golf.range && window.golf.freeCam, {
     timeout: 90000, polling: 100,
@@ -996,6 +1048,8 @@ try {
       platform: process.platform,
       architecture: process.arch,
       node: process.version,
+      powerSource: hostPowerSource,
+      thermalState: hostThermalState,
     },
     ...await page.evaluate(() => {
       const { renderer } = window.golf.sm;

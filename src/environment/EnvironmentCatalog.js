@@ -49,6 +49,11 @@ export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
     bounds: Object.freeze({ radius: 2.891 }),
     placement: Object.freeze({ minSpacing: 6, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
   }),
+  'blenderkit-douglas-fir-summer': Object.freeze({
+    biomes: Object.freeze(['temperate-alpine']),
+    bounds: Object.freeze({ radius: 6.631 }),
+    placement: Object.freeze({ minSpacing: 6, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
+  }),
   'blenderkit-golden-larch': Object.freeze({
     biomes: Object.freeze(['temperate-alpine']),
     bounds: Object.freeze({ radius: 11.394 }),
@@ -317,6 +322,7 @@ function validateImpostor(raw, path, levels) {
   rejectUnknown(impostor, new Set([
     'kind', 'url', 'sha256', 'sourceLod', 'generator', 'azimuthFrames',
     'elevationFrames', 'columns', 'rows', 'frameSize', 'normalDepth',
+    'cardAspect', 'frameUv',
   ]), path);
   if (impostor.kind !== 'baked-atlas') fail(`${path}.kind must be baked-atlas`);
   if (typeof impostor.url !== 'string' || !impostor.url.startsWith('/assets/')) fail(`${path}.url must be a public /assets/ path`);
@@ -330,6 +336,22 @@ function validateImpostor(raw, path, levels) {
     fail(`${path} atlas grid cannot contain all declared frames`);
   }
   if (typeof impostor.normalDepth !== 'boolean') fail(`${path}.normalDepth must be boolean`);
+  if (impostor.cardAspect !== undefined
+    && (typeof impostor.cardAspect !== 'number' || !Number.isFinite(impostor.cardAspect)
+      || impostor.cardAspect <= 0 || impostor.cardAspect > 2)) {
+    fail(`${path}.cardAspect must be a finite number in (0, 2]`);
+  }
+  if (impostor.frameUv !== undefined) {
+    const frameUv = strictObject(impostor.frameUv, `${path}.frameUv`);
+    rejectUnknown(frameUv, new Set(['offsetU', 'offsetV', 'scaleU', 'scaleV']), `${path}.frameUv`);
+    for (const key of ['offsetU', 'offsetV', 'scaleU', 'scaleV']) {
+      if (typeof frameUv[key] !== 'number' || !Number.isFinite(frameUv[key])) fail(`${path}.frameUv.${key} must be finite`);
+    }
+    if (frameUv.offsetU < 0 || frameUv.offsetV < 0 || frameUv.scaleU <= 0 || frameUv.scaleV <= 0
+      || frameUv.offsetU + frameUv.scaleU > 1 || frameUv.offsetV + frameUv.scaleV > 1) {
+      fail(`${path}.frameUv must remain inside one atlas frame`);
+    }
+  }
   return { ...impostor };
 }
 

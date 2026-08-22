@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const source = await readFile(new URL('../src/scene/Trees.js', import.meta.url), 'utf8');
+const rangeSource = await readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8');
 const coniferBuild = await readFile(new URL('../scripts/build_conifer_v3.py', import.meta.url), 'utf8');
 
 test('tree GPU classifier uses exclusive near, middle, and impostor bands', () => {
@@ -16,7 +17,7 @@ test('tree GPU classifier uses exclusive near, middle, and impostor bands', () =
   assert.match(source, /const projectedHeight = h\.mul\(projectionScale\.y\)/);
   assert.match(source, /TREE_LOD0_PROJECTED_HEIGHT/);
   assert.match(source, /TREE_LOD1_PROJECTED_HEIGHT/);
-  assert.match(source, /const nearBand = distance\.lessThan\(lodNear\)/);
+  assert.match(source, /const nearBand = uint\(this\.forceFullLod \? 1 : 0\)\.equal\(uint\(1\)\)/);
   assert.match(source, /const middleBand = nearBand\.not\(\)/);
   assert.match(source, /const impostorBand = nearBand\.not\(\)\.and\(middleBand\.not\(\)\)/);
   assert.match(source, /uint\(this\.useMiddleLod \? 0 : 1\)\.equal\(uint\(1\)\)/);
@@ -94,7 +95,7 @@ test('LOD1 authored atlas uses shared daylight mask path while LOD0 stays PBR', 
   assert.match(source, /const barkRole = barkTile\.select\(float\(1\), float\(0\)\)/);
   assert.match(source, /vTreeLod1AtlasBarkRole/);
   assert.match(source, /vTreeLod1SharedDaylight/);
-  assert.match(source, /material\.maskNode = texel\.a\.greaterThan\(TREE_ALPHA_CUTOFF\)/);
+  assert.match(source, /useStableFoliageCoverage\(material, texel\.a\)/);
   assert.doesNotMatch(source, /receivedShadowNode =/);
   assert.match(source, /LOD0\s+\/\/\s+keeps the full MeshStandard response/);
 });
@@ -120,10 +121,10 @@ test('tree impostor view phase is deterministic and runtime-lit', () => {
   assert.doesNotMatch(source, /const nextFrame/);
   assert.doesNotMatch(source, /const frameBlend/);
   assert.doesNotMatch(source, /bakedCurrent|bakedNext/);
-  assert.match(source, /runtimeDiffuse.*mul\(2\.85\)/);
+  assert.match(source, /runtimeDiffuse.*mul\(2\.65\)/);
   assert.match(source, /environment\.zenithColor/);
   assert.match(source, /environment\.horizonColor/);
-  assert.match(source, /vec3\(0\.62, 0\.74, 0\.48\)/);
+  assert.match(source, /vec3\(0\.50, 0\.60, 0\.46\)/);
   assert.match(source, /material\.colorNode = pineAlbedo/);
 });
 
@@ -152,6 +153,18 @@ test('conifer foliage uses bounded, sun-oriented two-sided transmission', () => 
   assert.doesNotMatch(source, /material\.emissiveNode\s*=/);
 });
 
+test('foliage coverage rejects low-alpha hairs without temporal stipple', () => {
+  assert.match(source, /const TREE_FOLIAGE_ALPHA_CUTOFF = 0\.05/);
+  assert.match(source, /function useStableFoliageCoverage\(material, alphaNode\)/);
+  assert.match(source, /material\.opacityNode = alphaNode/);
+  assert.match(source, /material\.alphaTest = TREE_FOLIAGE_ALPHA_CUTOFF/);
+  assert.match(source, /material\.alphaHash = false/);
+  assert.match(source, /material\.transparent = false/);
+  assert.match(source, /material\.depthWrite = true/);
+  assert.match(source, /material\.alphaTest = TREE_IMPOSTOR_ALPHA_CUTOFF/,
+    'far impostors retain their lower measured cutoff so thin grounded silhouettes survive');
+});
+
 test('tree geometry keeps all semantic parts grounded under one rigid source transform', () => {
   assert.match(source, /part\.offsetY = -height \* 0\.075/);
   assert.match(source, /const leanX = 0/);
@@ -164,23 +177,48 @@ test('tree geometry keeps all semantic parts grounded under one rigid source tra
     'every representation must bury the robust opaque structural base');
 });
 
-test('tree motion uses yaw-only transforms and one root wind sample per history frame', () => {
+test('tree motion uses authored hierarchy and one root wind sample per history frame', () => {
   assert.match(source, /const rotateYaw = \(v\) => vec3\(/);
   assert.doesNotMatch(source, /const rotateXYZ/);
+  assert.match(rangeSource, /wind: asset\.wind/,
+    'the renderer must consume each catalog species wind contract');
+  assert.match(source, /\['none', 'hierarchical-tree-v1'\]/);
+  assert.match(source, /this\.wind = wind/);
+  assert.match(source, /wind\.trunkStiffness/);
+  assert.match(source, /wind\.branchStiffness/);
+  assert.match(source, /wind\.leafStiffness/);
+  assert.match(source, /wind\.gustResponse/);
+  assert.match(source, /function treeWindResponses\(wind\)/);
+  assert.match(source, /wind\.trunkStiffness - wind\.branchStiffness/);
+  assert.match(source, /wind\.branchStiffness - wind\.leafStiffness/);
+  assert.match(source, /const atlasFoliageMask = _isAuthoredAlphaAtlas\(part\)/,
+    'combined tree atlases must distinguish structural bark from foliage motion');
+  assert.match(source, /const windMotionAt = \(sample\) =>/);
+  assert.doesNotMatch(source, /const flutterMask|const flutterAmplitude|const transverse/,
+    'alpha-cut foliage must not shear under independent per-vertex flutter');
+  assert.match(source, /const arcDrop = horizontal\.length\(\)\.pow\(2\)/);
   assert.match(source, /const currentWind = this\.environment\.windAt\(transform\.xyz, this\.environment\.time\)/);
   assert.match(source, /const previousWind = this\.environment\.windAt\(transform\.xyz, this\.environment\.previousTime\)/);
+  assert.match(source, /windMotionAt\(currentWind\)/);
+  assert.match(source, /windMotionAt\(previousWind\)/);
   assert.doesNotMatch(source, /windAt\(staticWorld/);
   assert.doesNotMatch(source, /windAt\(world/);
   assert.match(source, /const bendWeight = heightFraction\.pow\(1\.7\)/);
+  assert.match(source, /const cardResponse = branchResponse \* 0\.42 \+ leafResponse \* 0\.58/,
+    'far cards retain an aggregate of branch and leaf response at the LOD handoff');
 });
 
 test('tree impostor cards preserve grounded deterministic age classes', () => {
   assert.match(source, /const ageScale = style\.x\.mul\(0\.754877666\)\.fract\(\)/);
   assert.match(source, /const centre = transform\.xyz\.add\(vec3\(0, height\.mul\(0\.46\), 0\)\)/);
-  assert.match(source, /const width = height\.mul\(6\.467 \/ 18\.895\)/);
-  assert.match(source, /const width = height\.mul\(6\.467 \/ 18\.895\)\.mul\(1\.06\)/);
-  assert.match(source, /uv\(\)\.x\.mul\(0\.34\)\.add\(0\.33\)/);
-  assert.match(source, /uv\(\)\.y\.mul\(0\.92\)\.add\(0\.04\)/);
+  assert.match(source, /const width = height\.mul\(this\.impostor\.cardAspect \?\? 1\)/,
+    'each atlas declares its own card aspect instead of inheriting another species');
+  assert.match(source, /const frameCrop = this\.impostor\.frameUv \?\?/,
+    'each atlas may declare its measured frame crop');
+  assert.match(source, /offsetU: 0\.015625, offsetV: 0\.015625, scaleU: 0\.96875, scaleV: 0\.96875/,
+    'new square bakes default to their full frame inside the fixed gutter');
+  assert.doesNotMatch(source, /6\.467 \/ 18\.895/,
+    'runtime impostors must not retain a hard-coded prototype aspect');
 });
 
 test('tree beauty records and crowns carry stable age/orientation/volume variation', () => {
@@ -199,6 +237,8 @@ test('tree beauty records and crowns carry stable age/orientation/volume variati
 
 test('tree lab exposes JSON-safe projected residency diagnostics', () => {
   assert.match(source, /residencyEstimate\(camera = this\.camera\)/);
+  assert.match(source, /if \(this\.forceFullLod \|\| distance < this\.uLodNear\.value/);
+  assert.match(source, /forcedFullLod: this\.forceFullLod/);
   assert.match(source, /projectedHeights/);
   assert.match(source, /classificationComplete:/);
 });

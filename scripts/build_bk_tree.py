@@ -25,6 +25,7 @@ import json
 import random
 import sys
 import tempfile
+import argparse
 from pathlib import Path
 
 import bmesh
@@ -67,6 +68,25 @@ ASSETS = {
             0: {'trunk': 9000, 'branches': 26000, 'foliage': 78000, 'foliage_2': 52000},
             1: {'trunk': 2500, 'branches': 6000, 'foliage': 18000, 'foliage_2': 12000},
         },
+    },
+    # Research candidate: same licensed authored hierarchy, but lower LODs keep
+    # spatially distributed whole cards and dilate the survivors. This mirrors
+    # aggregate-geometry area preservation instead of random density deletion.
+    'bk_grand_fir_v10': {
+        'source': SRC / 'grand_fir.blend',
+        'object': 'Fir',
+        'drop': {'ground'},
+        'roles': {
+            'trunk': ('trunk', 'trunk', 'bake'),
+            'branches': ('branches', 'branches', 'bake'),
+            'foliage': ('fir_needles', 'foliage', 'bake'),
+            'foliage_2': ('fir_needles2', 'foliage_2', 'bake'),
+        },
+        'tri_budget': {
+            0: {'trunk': 9000, 'branches': 26000, 'foliage': 78000, 'foliage_2': 52000},
+            1: {'trunk': 2500, 'branches': 6000, 'foliage': 18000, 'foliage_2': 12000},
+        },
+        'preserve_area': {0: 1.12, 1: 1.38},
     },
     'bk_dense_conifer': {
         'source': SRC / 'a_tree_25m.blend',
@@ -145,14 +165,41 @@ ASSETS = {
             1: {'foliage': 22000},
         },
     },
+    # Native 25 m Douglas fir with broad, overlapping foliage cards. Unlike the
+    # 8 m Grand Fir, this source was authored to read as a mature skyline tree;
+    # it therefore needs no 2-3x scale-up that exposes gaps between needle cards.
+    'bk_douglas_fir_summer': {
+        'source': SRC / 'douglas_fir_summer.blend',
+        'objects': {'leaves': 'foliage', 'tree': 'branches'},
+        'convert_to_mesh': {'tree'},
+        'drop': set(),
+        'roles': {
+            'foliage': (
+                'LeafSet019_PREVIEW', 'foliage',
+                'color_opacity:LeafSet019_1K_Color.jpg|LeafSet019_1K_Opacity.jpg|0.78',
+            ),
+            'branches': ('Bark 02', 'branches', 'bake'),
+        },
+        'tri_budget': {
+            # The woody curve is a hierarchy of disconnected bevelled splines;
+            # collapse decimation preferentially deletes the long lower trunk.
+            # Keep it authored until a hierarchy-aware woody LOD is baked.
+            0: {'foliage': 11000, 'branches': 0},
+            1: {'foliage': 6500, 'branches': 0},
+        },
+    },
 }
 
 
-def parse_args() -> str:
+def parse_args() -> tuple[str, Path]:
     argv = sys.argv[sys.argv.index('--') + 1:]
-    if not argv or argv[0] not in ASSETS:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('asset_id')
+    parser.add_argument('--output-dir', type=Path, default=DEST)
+    parsed = parser.parse_args(argv)
+    if parsed.asset_id not in ASSETS:
         raise SystemExit(f'usage: blender -b --python scripts/build_bk_tree.py -- <{"|".join(ASSETS)}>')
-    return argv[0]
+    return parsed.asset_id, parsed.output_dir
 
 
 def tri_count(mesh) -> int:
@@ -227,7 +274,7 @@ def separate_slot(obj, slot: int) -> bpy.types.Object:
     return new_obj
 
 
-def thin_cards_to(obj, target: int, seed: str) -> int:
+def thin_cards_to(obj, target: int, seed: str, preserve_scale: float = 1.0) -> int:
     """Reduce a card role to a triangle budget by deleting WHOLE cards.
 
     Collapse decimation is wrong for alpha-cutout foliage: it welds a needle
@@ -266,9 +313,38 @@ def thin_cards_to(obj, target: int, seed: str) -> int:
     if total <= target or not islands:
         bm.free()
         return total
-    rng = random.Random(f'{seed}:{obj.name}:{target}')
-    order = list(range(len(islands)))
-    rng.shuffle(order)
+    if preserve_scale > 1.0:
+        centres = []
+        for island in islands:
+            verts = {vert for face in island for vert in face.verts}
+            centres.append(sum((vert.co for vert in verts), Vector()) / max(len(verts), 1))
+        minimum = Vector((min(c.x for c in centres), min(c.y for c in centres), min(c.z for c in centres)))
+        maximum = Vector((max(c.x for c in centres), max(c.y for c in centres), max(c.z for c in centres)))
+        span = maximum - minimum
+        grid = (12, 12, 36)
+        cells: dict[tuple[int, int, int], list[int]] = {}
+        for index, centre in enumerate(centres):
+            cell = tuple(min(grid[axis] - 1, max(0, int(
+                (centre[axis] - minimum[axis]) / max(span[axis], 1e-8) * grid[axis]
+            ))) for axis in range(3))
+            cells.setdefault(cell, []).append(index)
+        fraction = target / max(total, 1)
+        order = []
+        for cell, members in sorted(cells.items()):
+            members.sort(key=lambda index: hashlib.sha256(
+                f'{seed}:{obj.name}:{cell}:{index}'.encode()).digest())
+            keep = min(len(members), max(1, round(len(members) * fraction)))
+            order.extend(members[:keep])
+        # Fill any budget left by rounded cell quotas using a stable global
+        # order. Every occupied cell gets first refusal, preventing crown holes.
+        chosen = set(order)
+        remainder = [index for index in range(len(islands)) if index not in chosen]
+        remainder.sort(key=lambda index: hashlib.sha256(f'{seed}:remainder:{index}'.encode()).digest())
+        order.extend(remainder)
+    else:
+        rng = random.Random(f'{seed}:{obj.name}:{target}')
+        order = list(range(len(islands)))
+        rng.shuffle(order)
     kept, running = set(), 0
     for index in order:
         cost = sum(len(f.verts) - 2 for f in islands[index])
@@ -287,6 +363,14 @@ def thin_cards_to(obj, target: int, seed: str) -> int:
               f'keeping the largest ({running} tris)')
     doomed = [f for index, island in enumerate(islands) if index not in kept for f in island]
     bmesh.ops.delete(bm, geom=doomed, context='FACES')
+    if preserve_scale > 1.0:
+        for index in kept:
+            verts = {vert for face in islands[index] if face.is_valid for vert in face.verts}
+            if not verts:
+                continue
+            centre = sum((vert.co for vert in verts), Vector()) / len(verts)
+            for vert in verts:
+                vert.co = centre + (vert.co - centre) * preserve_scale
     bm.to_mesh(obj.data)
     bm.free()
     obj.data.update()
@@ -630,6 +714,29 @@ def make_gold_alpha_image() -> bpy.types.Image:
     return _packed_srgb_image('golden_larch_alpha', w, h, out)
 
 
+def make_color_opacity_image(color_name: str, opacity_name: str, grade: float = 1.0) -> bpy.types.Image:
+    """Pack a source's separate colour and opacity maps into runtime RGBA."""
+    color = bpy.data.images[color_name]
+    opacity = bpy.data.images[opacity_name]
+    w, h = color.size
+    rgba = np.empty(w * h * 4, dtype=np.float32)
+    color.pixels.foreach_get(rgba)
+    rgba = rgba.reshape(h, w, 4)
+    rgba[:, :, :3] *= grade
+    ow, oh = opacity.size
+    mask = np.empty(ow * oh * 4, dtype=np.float32)
+    opacity.pixels.foreach_get(mask)
+    mask = mask.reshape(oh, ow, 4)[:, :, 0]
+    if (ow, oh) != (w, h):
+        ys = (np.arange(h) * oh // h).clip(0, oh - 1)
+        xs = (np.arange(w) * ow // w).clip(0, ow - 1)
+        mask = mask[ys][:, xs]
+    rgba[:, :, 3] = mask
+    image = _packed_srgb_image(f'{color_name}_rgba', w, h, rgba)
+    image['has_cutout'] = True
+    return image
+
+
 def build_role_material(run_name: str, style: str, source_material: str = '',
                         obj: bpy.types.Object | None = None) -> bpy.types.Material:
     if style.startswith('flat:'):
@@ -651,6 +758,15 @@ def build_role_material(run_name: str, style: str, source_material: str = '',
         return make_texture_material(run_name, image, cutout=True)
     if style == 'gold_alpha':
         return make_texture_material(run_name, make_gold_alpha_image(), cutout=True)
+    if style.startswith('color_opacity:'):
+        fields = style[len('color_opacity:'):].split('|')
+        if len(fields) not in {2, 3}:
+            raise SystemExit(f'color_opacity style requires color|opacity[|grade], got {style!r}')
+        color_name, opacity_name = fields[:2]
+        grade = float(fields[2]) if len(fields) == 3 else 1.0
+        return make_texture_material(
+            run_name, make_color_opacity_image(color_name, opacity_name, grade), cutout=True,
+        )
     if style in FLAT:
         return make_flat_material(run_name, FLAT[style])
     raise SystemExit(f'unknown style {style!r}')
@@ -818,6 +934,17 @@ def build_lod(asset_id: str, lod: int) -> dict:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.wm.open_mainfile(filepath=str(cfg['source']))
 
+    # Some compact BlenderKit trees keep the woody hierarchy as a bevelled curve.
+    # Convert only the explicitly-authorized role objects before the mesh-only
+    # split/decimation pipeline; conversion preserves their authored world pose.
+    for object_name in cfg.get('convert_to_mesh', set()):
+        obj = bpy.data.objects[object_name]
+        for other in bpy.context.selected_objects:
+            other.select_set(False)
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.convert(target='MESH')
+
     if 'realize' in cfg:
         realize_instances(cfg, lod)
         merge_into_source(cfg)
@@ -833,7 +960,9 @@ def build_lod(asset_id: str, lod: int) -> dict:
         obj.data.materials.append(mat)
         # Card roles thin by dropping whole cards; solid roles (trunk, limbs) are
         # ordinary surfaces where collapse decimation is exactly right.
-        tris_report[role] = (thin_cards_to(obj, budget[role], f'{asset_id}:{role}')
+        tris_report[role] = (thin_cards_to(
+            obj, budget[role], f'{asset_id}:{role}', cfg.get('preserve_area', {}).get(lod, 1.0),
+        )
                              if card_role and budget[role] > 0
                              else decimate_to(obj, budget[role]))
         obj.name = run_name
@@ -885,7 +1014,9 @@ def build_lod(asset_id: str, lod: int) -> dict:
 
 
 def main() -> None:
-    asset_id = parse_args()
+    asset_id, output_dir = parse_args()
+    global DEST
+    DEST = output_dir.resolve()
     DEST.mkdir(parents=True, exist_ok=True)
     lods = [build_lod(asset_id, 0), build_lod(asset_id, 1)]
     report = {asset_id: lods}

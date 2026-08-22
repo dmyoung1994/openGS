@@ -417,9 +417,9 @@ export class WeatherSky {
     const rotatedX = advected.x.mul(0.8480).sub(advected.z.mul(0.5299));
     const rotatedZ = advected.x.mul(0.5299).add(advected.z.mul(0.8480));
     const phase = vec3(
-      rotatedX.mul(0.00018),
-      advected.y.mul(0.00030),
-      rotatedZ.mul(0.00018),
+      rotatedX.mul(0.00032),
+      advected.y.mul(0.00036),
+      rotatedZ.mul(0.00032),
     ).add(vec3(0.37, 0.13, 0.61));
     // Mirror the finite volume instead of fract-wrapping a non-tileable field.
     // The old discontinuity jumped between unrelated edge voxels and produced
@@ -659,8 +659,8 @@ export class WeatherSky {
               const underside = oneMinus(smoothstep(0.10, 0.58, normalizedHeight));
               const ambientOcclusion = oneMinus(
                 density.mul(float(0.28).add(underside.mul(0.30))),
-              ).clamp(0.45, 1);
-              const ambient = cloudAmbient.mul(float(0.25).add(normalizedHeight.mul(0.40)))
+              ).clamp(0.62, 1);
+              const ambient = cloudAmbient.mul(float(0.38).add(normalizedHeight.mul(0.38)))
                 .mul(ambientOcclusion);
               const edgeLight = oneMinus(density).mul(0.75).add(0.55);
               const direct = sunTint.mul(pairedSunTransmittance).mul(phase)
@@ -709,6 +709,22 @@ export class WeatherSky {
 
   dispose() {
     this._disposed = true;
+    // WebGPURenderer's Background module owns a hidden SphereGeometry/NodeMaterial
+    // for every Scene that renders one of these root nodes. It subscribes to the
+    // root Node's documented `dispose` event to release those resources. Merely
+    // dropping our references leaves the renderer-side sky sphere resident across
+    // authored environment rebuilds (and PMREM capture scenes), so explicitly end
+    // the lifetime of each distinct root before releasing the textures below.
+    const backgroundRoots = new Set([
+      this.clearBackgroundNode,
+      this.iblBackgroundNode,
+      this.backgroundNode,
+    ]);
+    for (const root of backgroundRoots) root?.dispose?.();
+    this.clearBackgroundNode = null;
+    this.iblBackgroundNode = null;
+    this.backgroundNode = null;
+    this.outputNode = null;
     this._cloudVolumeInit?.dispose();
     this._cloudVolumeInit = null;
     this._cloudVolume?.dispose();

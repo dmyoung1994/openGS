@@ -5,6 +5,9 @@ import {
   MOW_STRIPE_PERIOD_M,
   MOW_STRIPE_PASS_WIDTH_M,
   MOW_STRIPE_CROSS_SLOPE,
+  TURF_BLADE_SATURATION,
+  turfBase,
+  turfBladeBase,
   mowingStripCoordinate,
   mowingStripPhase,
 } from '../src/terrain/turfColor.js';
@@ -72,12 +75,16 @@ test('rough retains thick blade ribbons while increasing close-field coverage', 
     'effective rooted blade width must stay literally within 7.5–18 mm');
   assert.doesNotMatch(source, /widthBase[^;]*\.mul\( mix\( 0\.92, 1\.12, ecological \) \)/,
     'effective rooted width must not multiply below or above the declared invariant');
-  assert.match(source, /ROUGH_COVERAGE_MIN\s*=\s*0\.28/,
-    'rough needs materially denser substrate coverage');
-  assert.match(source, /ROUGH_COLONY_FLOOR\s*=\s*0\.64/,
+  assert.match(source, /ROUGH_COVERAGE_MIN\s*=\s*0\.64/,
+    'rough needs a solid oblique-view coverage floor');
+  assert.match(source, /ROUGH_COVERAGE_MAX\s*=\s*0\.88/,
+    'rough needs dense high-colony occupancy without widening blades');
+  assert.match(source, /ROUGH_COLONY_FLOOR\s*=\s*0\.88/,
     'rough colony mass must remain present between individual blades');
-  assert.match(source, /const BLADE_SAT\s*=\s*1\.28/,
+  assert.equal(TURF_BLADE_SATURATION, 1.28,
     'rough pigment needs natural species/age colour variation without neon saturation');
+  assert.match(source, /BLADE_COLOR\[ name \] = turfBladeBase\( name, new Color\(\) \)/,
+    'geometric blades must consume the shared rough pigment transform');
   assert.match(source, /const age = mix\( hD, ecological, 0\.45 \)/,
     'rough pigment must carry stable age variation');
   assert.match(source, /const BLADE_INDEX_COUNT = BLADE_SEGMENTS \* 12/,
@@ -96,4 +103,16 @@ test('rough retains thick blade ribbons while increasing close-field coverage', 
     'colony floor must be applied to the stable world-space acceptance field');
   assert.doesNotMatch(source, /widthBase\s*=\s*mix\( 0\.0042, 0\.011/, 
     'rough pass must not silently thin blades to meet a density budget');
+});
+
+test('rough substrate and geometric blades share one canonical pigment', async () => {
+  const terrain = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
+  const blade = turfBladeBase('rough');
+  const base = turfBase('rough');
+  assert.notDeepEqual(blade.toArray(), base.toArray(),
+    'the shared blade tint must retain its intentional chlorophyll saturation');
+  assert.match(terrain, /rough: roughUndercoat\('rough'\), deepRough: roughUndercoat\('deepRough'\)/,
+    'both long-grass terrain classes must use the exact geometric-blade undercoat');
+  assert.match(terrain, /let zoneGrade = float\(0\.90\);[\s\S]*?float\(0\.90\), m\.rough/,
+    'rough undercoat value must match the mean stable blade pigment instead of reopening dark gaps');
 });
