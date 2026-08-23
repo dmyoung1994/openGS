@@ -6,7 +6,7 @@ import {
 } from 'three';
 import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
-import { loadTreePrototype, loadTreeImpostor, buildTreeBeautyLod, TreeShadowProxy } from './Trees.js';
+import { loadTreePrototype, buildTreeBeautyLod0, TreeShadowLod0 } from './Trees.js';
 import { createGolfBallMesh } from './GolfBall.js';
 import { disposeMaterialTextures, disposeWebGPUGeometries } from './WebGPUResourceDisposal.js';
 import { Noise } from '../util/noise.js';
@@ -16,9 +16,6 @@ import { getCatalogAsset } from '../environment/EnvironmentCatalog.js';
 import { WaterSurface } from './WaterSurface.js';
 import { buildEnvironmentProps } from './EnvironmentProps.js';
 import { BackdropTerrain } from './BackdropTerrain.js';
-import { GeneratedFoliageForest } from './GeneratedFoliageTree.js';
-import { loadFoliageAlias } from '../foliage/FoliagePackResolver.js';
-import { buildRangePerimeterFoliage } from '../foliage/RangePerimeterFoliage.js';
 import {
   bunkerGradeAt, roundedHazardFeature, signedDistanceToFeature,
 } from '../course/featureGeometry.js';
@@ -34,8 +31,7 @@ export class Range {
   // terrain from these (heightFn/surfaceFn below); nothing here edits raw heights.
   // That is what lets the whole course be (re)built from a prompt-driven course.json
   // with no terrain-editing surface exposed to the user.
-  constructor(scene, camera, course, { renderer, motionHistory, lighting, environmentTier, environment, environmentCatalog,
-    foliageCandidateAlias = null, localFoliagePackRegistry = null } = {}) {
+  constructor(scene, camera, course, { renderer, motionHistory, lighting, environmentTier, environment, environmentCatalog } = {}) {
     if (!environmentTier?.grassRadius || !environmentTier?.trees) {
       throw new Error('Range requires the resolved environment device tier.');
     }
@@ -51,13 +47,6 @@ export class Range {
     if (!environmentCatalog?.byId) throw new Error('Range requires the verified environment catalog.');
     this.environment = environment;
     this.environmentCatalog = environmentCatalog;
-    const requestedFoliage = foliageCandidateAlias ?? course.environment.foliageAliases
-      ?? course.environment.foliageAlias ?? null;
-    this.foliageAliases = Object.freeze(Array.isArray(requestedFoliage)
-      ? [...requestedFoliage] : requestedFoliage ? [requestedFoliage] : []);
-    this.foliageAlias = this.foliageAliases[0] ?? null;
-    this.allowCandidateFoliage = Boolean(foliageCandidateAlias);
-    this.localFoliagePackRegistry = localFoliagePackRegistry;
     this.group = new Group();
     scene.add(this.group);
 
@@ -156,13 +145,7 @@ export class Range {
     // grass bake. Canopy suppression therefore follows the exact authored roots
     // and scaled catalog crown bounds rather than a second procedural forest mask.
     const allTreePlacements = this._treePlacements();
-    // A practice range has its own perimeter planting logic. Generated foliage
-    // must not inherit course-vibe coordinates or a thinned side-line curtain.
-    const treePlacements = this.foliageAliases.length
-      ? buildRangePerimeterFoliage({
-        bounds: course.bounds, seed: this.environmentSeed, foliageAliases: this.foliageAliases,
-      })
-      : allTreePlacements;
+    const treePlacements = allTreePlacements;
 
     // Camera-relative grass (WebGPU / TSL). A world-cell-anchored field of ~1M
     // blades follows the camera every frame, sampling terrain height + surface
@@ -476,7 +459,6 @@ export class Range {
   _treePlacements() {
     const trees = this.environmentPlacements.filter((placement) => (
       getCatalogAsset(this.environmentCatalog, placement.assetId).category === 'tree'
-      && getCatalogAsset(this.environmentCatalog, placement.assetId).impostor.kind === 'baked-atlas'
     ));
     return trees.map((placement) => {
       const asset = getCatalogAsset(this.environmentCatalog, placement.assetId);
@@ -488,54 +470,12 @@ export class Range {
     });
   }
 
-  // Load the processed licensed near geometry and its source-baked far atlas. Both
-  // are part of the range readiness contract; rendering never begins with a
-  // substitute. One species is one classifier: a GPU batch draws a single canonical
-  // prototype, so a mixed tree line resolves to one TreeBeautyLod + shadow proxy per
-  // catalog asset rather than one merged batch.
+  // Load exactly the verified catalog LOD0 geometry. One species is one instanced
+  // prototype, so a mixed tree line resolves to one strict LOD0 beauty group and
+  // one matching LOD0 shadow group per catalog asset. No atlas or LOD1 derivative is
+  // required or consulted by the production range.
   async _buildTreeLine(placements = this._treePlacements()) {
     if (!placements.length) return;
-    if (this.foliageAliases.length) {
-      const grouped = new Map(this.foliageAliases.map((alias) => [alias, []]));
-      for (const placement of placements) {
-        if (!grouped.has(placement.foliageAlias)) {
-          throw new Error(`Range perimeter foliage produced undeclared alias "${placement.foliageAlias}".`);
-        }
-        grouped.get(placement.foliageAlias).push(placement);
-      }
-      const activeGroups = [...grouped].filter(([, records]) => records.length);
-      const packs = await Promise.all(activeGroups.map(([alias]) => loadFoliageAlias(alias, {
-        renderer: this.renderer, textureMode: 'ktx2', allowCandidate: this.allowCandidateFoliage,
-        local: this.localFoliagePackRegistry,
-      })));
-      this.trees = new Group();
-      this.trees.name = `trees-generated:${activeGroups.map(([alias]) => alias).join('+')}`;
-      this.treeBeauties = activeGroups.map(([alias, records], index) => {
-        const pack = packs[index];
-        const nativeHeight = pack.manifest.species?.nativeHeightMeters ?? 19.5;
-        const generatedPlacements = records.map((placement) => Object.freeze({
-          ...placement,
-          y: this.terrain.heightAt(placement.x, placement.z) - 0.04,
-          scale: placement.targetHeight / nativeHeight,
-          rotY: placement.rotationY,
-        }));
-        const forest = new GeneratedFoliageForest({
-          pack, placements: generatedPlacements, environment: this.environment,
-          camera: this.camera, motionHistory: this.motionHistory, renderer: this.renderer,
-          seed: deriveSeed(this.environmentSeed, `generated-foliage:${alias}`),
-          // Five independently seeded skeletons are the renderer's bounded maximum.
-          // Two identities still formed obvious A/B repeats in perimeter groves;
-          // yaw and scale cannot disguise identical leader and scaffold topology.
-          identityCount: 5,
-        });
-        this.trees.add(forest.group);
-        return forest;
-      });
-      this.treeShadows = [];
-      this.group.add(this.trees);
-      this.lighting?.invalidateShadow();
-      return;
-    }
     const byAsset = new Map();
     for (const placement of placements) {
       if (!byAsset.has(placement.assetId)) byAsset.set(placement.assetId, []);
@@ -545,50 +485,30 @@ export class Range {
     // course spec), so species batches build in a stable order across reloads.
     const species = [...byAsset.entries()].map(([assetId, assetPlacements]) => {
       const asset = getCatalogAsset(this.environmentCatalog, assetId);
-      if (asset.lods.length !== 2 || asset.lods[0].level !== 0 || asset.lods[1].level !== 1 || asset.impostor.kind !== 'baked-atlas') {
-        throw new Error(`${asset.id} requires verified catalog LOD derivatives and a source-baked impostor atlas.`);
-      }
-      return { asset, placements: assetPlacements };
+      const lod0 = asset.lods.find((lod) => lod.level === 0);
+      if (!lod0) throw new Error(`${asset.id} requires a verified catalog LOD0 derivative.`);
+      return { asset, lod0, placements: assetPlacements };
     });
-    // Every species' geometry and atlas load in parallel; a mixed line must not
+    // Every species' LOD0 geometry loads in parallel; a mixed line must not
     // serialise startup behind the first prototype.
-    const loaded = await Promise.all(species.map(async ({ asset }) => Promise.all([
-      loadTreePrototype(asset.lods[0].url),
-      loadTreePrototype(asset.lods[1].url),
-      loadTreeImpostor(asset.impostor),
-    ])));
+    const loaded = await Promise.all(species.map(({ lod0 }) => loadTreePrototype(lod0.url)));
     this.trees = new Group();
     this.trees.name = 'trees';
     this.treeBeauties = [];
     this.treeShadows = [];
     species.forEach(({ asset, placements: assetPlacements }, index) => {
-      const [proto, midProto, impostorTexture] = loaded[index];
-      // One GPU classifier owns every tree of this species. It emits compacted LOD0
-      // and LOD1 geometry through the foreground/middle distance, then the
-      // runtime-lit multi-view atlas. Every representation derives from the
-      // verified licensed source.
-      const beauty = buildTreeBeautyLod(proto, midProto, asset.impostor, impostorTexture, assetPlacements, {
-        // Seeding per species keeps each batch's tint/age variation independent
-        // and stable when another species is added or removed from the course.
-        seed: deriveSeed(this.environmentSeed, `tree-beauty-lod:${asset.id}`),
-        renderer: this.renderer,
+      const beauty = buildTreeBeautyLod0(loaded[index], assetPlacements, {
         camera: this.camera,
         motionHistory: this.motionHistory,
-        environment: this.environment,
         wind: asset.wind,
-        lodNear: this.environmentTier.trees.lodNear,
-        lodFar: this.environmentTier.trees.lodFar,
+        renderer: this.renderer,
       });
       this.trees.add(beauty.group);
-      // The beauty meshes never cast. One GPU-compacted, layer-isolated source-atlas
-      // caster per species is the complete tree shadow path; it projects that
-      // species' real silhouette rather than an unrelated procedural canopy mask.
-      const shadow = new TreeShadowProxy({
-        renderer: this.renderer,
+      // The beauty meshes never cast. The paired shadow group reuses the exact
+      // LOD0 geometry/material streams on the directional-light layer.
+      const shadow = new TreeShadowLod0({
         light: this.lighting?.sun,
-        records: beauty.shadowRecords,
-        impostorTexture,
-        impostor: asset.impostor,
+        beauty,
       });
       this.trees.add(shadow.mesh);
       this.treeBeauties.push(beauty);
@@ -607,7 +527,9 @@ export class Range {
   async _buildEnvironmentProps() {
     this.environmentProps = await buildEnvironmentProps({
       catalog: this.environmentCatalog,
-      placements: this.environmentPlacements,
+      placements: this.environmentPlacements.filter((placement) => (
+        getCatalogAsset(this.environmentCatalog, placement.assetId).category !== 'tree'
+      )),
       environmentSeed: this.environmentSeed,
     });
     this.group.add(this.environmentProps);
@@ -643,12 +565,12 @@ export class Range {
     // Every tree batch owns its own GPU resources and releases them below; the
     // generic traversal must skip all of them, not just the first species'.
     const treeOwned = new Set();
-    for (const shadow of this.treeShadows || []) treeOwned.add(shadow.mesh);
-    const beautyGroups = new Set((this.treeBeauties || []).map((beauty) => beauty.group));
+    for (const shadow of this.treeShadows || []) shadow.mesh.traverse((object) => treeOwned.add(object));
+    for (const beauty of this.treeBeauties || []) beauty.group.traverse((object) => treeOwned.add(object));
     const backdropOwned = new Set();
     this.backdrop?.group?.traverse((object) => backdropOwned.add(object));
     this.group.traverse((o) => {
-      if (o === this.grass?.mesh || treeOwned.has(o) || beautyGroups.has(o.parent) || backdropOwned.has(o)) return;
+      if (o === this.grass?.mesh || treeOwned.has(o) || backdropOwned.has(o)) return;
       if (o.geometry) geometries.push(o.geometry);
       const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
       materials.push(...mats);

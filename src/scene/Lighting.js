@@ -49,6 +49,7 @@ export class Lighting {
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.04;
     this.sun.shadow.radius = 2;         // readable penumbra without erasing tree/terrain shadow structure
+    this.sun.shadow.intensity = 0.66;   // preserve chromatic turf under dense canopy casters
     // Layer 1 is reserved for GPU-only shadow proxies.  ShadowNode preserves this
     // explicit 0|1 mask instead of copying the beauty camera's layer mask, while
     // ordinary world casters on layer 0 continue to render into the same map.

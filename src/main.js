@@ -29,13 +29,14 @@ import { createRng } from './util/random.js';
 import {
   loadEnvironmentCatalog, verifyEnvironmentCatalogAssets, collectEnvironmentAssetIds,
 } from './environment/EnvironmentCatalog.js';
-import { createLocalFoliagePackRegistry } from './foliage/FoliagePackResolver.js';
 
 // Clear alpine late-morning key from the left/downrange: a 37° elevation keeps
 // the source plausible while its lateral component gives terrain relief and
 // tree shadows a readable rake across the broadcast route. Every daylight
 // consumer receives this same authored direction through EnvironmentGpuBindings.
 const SUN = new Vector3(-0.72, 0.60, -0.32).normalize();
+const startupQuery = new URL(window.location.href).searchParams;
+const coursePath = startupQuery.get('course') === 'premium-range' ? '/premium-range.json' : '/course.json';
 
 const app = document.getElementById('app');
 const sm = new SceneManager(app);
@@ -73,7 +74,6 @@ window.golfBootstrap = Object.freeze({
   get elapsedMs() { return Math.round(performance.now() - bootstrapStartedAt); },
 });
 let lighting;
-let localFoliagePackRegistry;
 
 function showFatalEnvironmentError(error) {
   console.error('Required environment initialization failed.', error);
@@ -192,6 +192,10 @@ const minimap = new Minimap();   // M to toggle; drawn from the same baked zone 
 // Attach the physics event handlers to a (freshly built) ball.
 function wireBall(b) {
   b.on('rest', (r) => {
+    // Capture the terminal sample before the shot leaves the active stream. The
+    // update loop checks `flying` again after Ball.update(), so this point is not
+    // submitted twice when the rest event fires during the frame.
+    if (tracer.count < tracer.max) tracer.push(b.position);
     flying = false;
     director.onRest(b);
     panel.showResult(r);
@@ -298,6 +302,7 @@ function toAddress({ smooth = false } = {}) {
 // baked from the spec's FEATURES — this is the only path course data takes into the
 // scene, so there is no terrain-editing surface to expose.
 function buildCourse(course) {
+  tracer.clearHistory();
   if (range) {
     if (_rangeRetentionProbe) {
       Object.defineProperty(range, '__rangeRetentionProbeMarker', { value: true });
@@ -325,13 +330,7 @@ function buildCourse(course) {
   range = new Range(sm.scene, sm.camera, course, {
     renderer: sm.renderer, motionHistory: sm.motionHistory, lighting,
     environmentTier: sm.environmentTier, environment: environmentBindings,
-    environmentCatalog, localFoliagePackRegistry,
-    foliageCandidateAlias: new URL(window.location.href).searchParams.get('foliageCandidate') === 'generated'
-      ? [
-        'builtin.valley-oak.california.v1',
-        'builtin.sugar-maple.northeastern.v1',
-        'builtin.monterey-cypress.coastal.v1',
-      ] : null,
+    environmentCatalog,
   });
   ball = new Ball(range.terrain, env);
   wireBall(ball);
@@ -364,12 +363,6 @@ let divotPrepopDone = false;
 
 try {
   environmentCatalog = await environmentCatalogReady;
-  // A local authoring host may inject an alias-keyed descriptor object before this
-  // module loads. The registry accepts same-origin pack roots only and is immutable
-  // after bootstrap; the course itself still contains aliases, never local paths.
-  localFoliagePackRegistry = createLocalFoliagePackRegistry(
-    globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__ ?? [],
-  );
   // BACKDROP_PLAN Phase 1: the CC0 Alps HDR is no longer a render source. It is
   // composition inspiration for the procedural valley (Phase 2) and the A/B
   // skybox variant; the analytic clear-sky owns the visible background while
@@ -377,7 +370,9 @@ try {
   // shipped as the rollback A/B baseline (docs/BACKDROP_PLAN.md).
   sm.configureSkyManifest(null);
   setBootstrapStage('course-loading', { detail: 'Loading and validating the authored course…' });
-  const initialCourse = await loadCourse('/course.json', { catalogAssetIds: environmentCatalog.byId });
+  const initialCourse = coursePath === '/course.json'
+    ? await loadCourse('/course.json', { catalogAssetIds: environmentCatalog.byId })
+    : await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
   const initialAssetIds = collectEnvironmentAssetIds(initialCourse);
   setBootstrapStage('asset-integrity', {
     detail: `Verifying ${initialAssetIds.size} course-referenced asset${initialAssetIds.size === 1 ? '' : 's'}…`,
@@ -413,7 +408,7 @@ async function rebuildCourseFromDisk() {
   if (wasRunning) sm.pauseRendering();
   try {
     setBootstrapStage('course-loading', { detail: 'Loading and validating the edited course…' });
-    const nextCourse = await loadCourse('/course.json', { catalogAssetIds: environmentCatalog.byId });
+    const nextCourse = await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
     const nextAssetIds = collectEnvironmentAssetIds(nextCourse);
     setBootstrapStage('asset-integrity', {
       detail: `Re-verifying ${nextAssetIds.size} course-referenced asset${nextAssetIds.size === 1 ? '' : 's'}…`,
@@ -485,9 +480,11 @@ function hit() {
   // intentionally the same path used by the at-rest visual preview.
   applyEnvironmentConditions(panel.getEnv());
 
+  tracer.promoteActiveToWhite();
   tracer.reset();
   panel.hud.classList.remove('show');
   ball.launch(params);
+  tracer.push(ball.start);
   director.onLaunch(ball);
   flying = true;
 
@@ -637,7 +634,7 @@ sm.onUpdate((dt, t) => {
     syncBallMesh();
     // One bounded point upload per presented frame. The GPU owns history,
     // smoothing, ribbon expansion, and indirect draw count.
-    tracer.push(ball.position);
+    if (flying) tracer.push(ball.position);
 
     const speed = ball.velocity.length();
     const dist = Math.hypot(ball.position.x - ball.start.x, ball.position.z - ball.start.z) * M_TO_YARD;
@@ -702,6 +699,7 @@ dismissLoadingAfterRendererReady();
 window.golf = {
   get ball() { return ball; },
   get range() { return range; },
+  tracer,
   get freeCam() { return freeCam; },
   evaluatorCamera,
   director, panel, turfPanel, minimap, sm, lighting, builder, shell,

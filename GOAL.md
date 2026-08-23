@@ -818,3 +818,40 @@ size, forcing full LOD, or adding density everywhere. Diagnose the representatio
   launch. The complete 294/294 suite, production build, no-fallback hardware-browser
   verification, and diff hygiene pass. Root visual approval of this replacement remains
   required before the broader foliage goal can close.
+- **2026-08-21 — Augusta Southern parkland candidate cycle 25:** The existing
+  generated foliage workflow is now extended with two candidate-only species driven
+  by immutable ImageGen source sheets and the versioned `foliage-pipeline-v3`: Southern
+  live oak (`local.southern-live-oak.augusta.v1`) and loblolly pine
+  (`local.loblolly-pine.southeast.v1`). Both sheets pass strict eight-component
+  extraction, aligned masks, coverage-preserving PNG mips, UASTC KTX2 encoding, and
+  self-contained CC0 bark provenance. The live oak uses the forked broadleaf skeleton;
+  loblolly has a dedicated open layered Southern-pine scaffold instead of inheriting
+  the narrow Douglas-fir silhouette.
+
+  A query-gated `?foliageCandidate=augusta` preview registers both local packs without
+  changing production approval state. Its deterministic 136-slot perimeter pulls the
+  front/mid groves toward the maintained rough edge while keeping the central hitting
+  corridor outside `|x| <= 22`. The browser confirms the two exact local aliases, 67
+  live-oak records, 69 loblolly records, five seeded identities per species, complete
+  GPU classification, and zero console/request errors. Isolated oak and loblolly
+  viewer matrices cover 5/20/50 m beauty, alpha, and LOD views; range address, landing,
+  and tree-edge WebGPU smoke captures pass visual luminance/temporal gates. The host
+  is on battery and offscreen presentation cadence is 66--67 ms, so these captures are
+  visual/temporal evidence only—not AC/native performance certification or promotion
+  approval. Full regression/build verification remains required before this cycle can
+  be considered for root visual acceptance.
+- **2026-08-22 — Premium Range geometry cycle 26:** Added a separate query-gated
+  `premium-range.json` test course instead of replacing the checkpoint course. The
+  long Southern parkland range now spans 300 m laterally and 514 m downrange, uses
+  nine target greens from 40 to 450 yards, eleven bunker targets, a V-shaped
+  maintained corridor, and a 136-slot perimeter that reaches past 430 m. Premium
+  candidate age scales raise the tree frame to mature 30 m+ specimens while the
+  front groves move into the rough band for a golfer-height Augusta-style tee
+  frame. Use `?course=premium-range&foliageCandidate=augusta` to test it.
+
+  The benchmark harness now preserves URL query routes and accepts target-prop
+  counts from the authored target set. Real Premium Range address, tree-edge,
+  landing, and overview WebGPU captures pass with both local packs, no console or
+  request errors, complete generated-foliage classification, and stable visual /
+  temporal gates. Battery/offscreen timing remains smoke evidence only; no AC
+  performance certification or foliage promotion is implied.

@@ -9,18 +9,25 @@ import { getCatalogAsset } from '../environment/EnvironmentCatalog.js';
 
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const foliageName = /leaf|leaves|fern|frond|needle|foliage|canopy|branch|twig/i;
+// Branch meshes are structural shadow casters. Only thin leaf/twig roles should
+// stay out of the directional shadow map; otherwise alpha cards stamp their
+// rectangular coverage into the range turf.
+const thinTreeFoliageName = /leaf|leaves|fern|frond|needle|foliage|canopy|twig/i;
 
 // Static catalog props share one geometry/material draw bucket per source mesh and
-// asset ID. Trees with baked impostors retain the specialized GPU LOD path; this
-// renderer owns hero trees without impostors, shrubs, groundcover, rocks, and
-// deadwood. It never creates substitute geometry when a source asset is missing.
+// asset ID. Trees are owned exclusively by the strict LOD0 tree renderer; this
+// renderer owns shrubs, groundcover, rocks, deadwood, and other non-tree props.
+// Passing a tree here is an authoring/runtime contract error, never a reason to
+// silently switch to a lower-fidelity fallback.
 export async function buildEnvironmentProps({ catalog, placements, environmentSeed }) {
   const group = new Group();
   group.name = 'environment-props';
   const byAsset = new Map();
   for (const placement of placements) {
     const asset = getCatalogAsset(catalog, placement.assetId);
-    if (asset.category === 'tree' && asset.impostor.kind === 'baked-atlas') continue;
+    if (asset.category === 'tree') {
+      throw new Error(`Tree placement ${placement.sourceId} must be rendered by the strict LOD0 tree renderer.`);
+    }
     if (!byAsset.has(asset.id)) byAsset.set(asset.id, []);
     byAsset.get(asset.id).push(placement);
   }
@@ -44,7 +51,9 @@ export async function buildEnvironmentProps({ catalog, placements, environmentSe
       const mesh = new InstancedMesh(geometry, material, assetPlacements.length);
       mesh.name = `environment-prop:${assetId}:${partIndex}`;
       mesh.instanceMatrix.setUsage(StaticDrawUsage);
-      mesh.castShadow = asset.category === 'rock' || asset.category === 'deadwood' || asset.category === 'tree';
+      mesh.castShadow = asset.category === 'tree'
+        ? !thinTreeFoliageName.test(partName)
+        : asset.category === 'rock' || asset.category === 'deadwood';
       mesh.receiveShadow = true;
       // Layer 2 marks solid geometry eligible for the selective contact-depth
       // pass; layer 0 remains enabled for normal beauty rendering. Thin alpha-cut
@@ -101,7 +110,7 @@ export async function buildEnvironmentProps({ catalog, placements, environmentSe
 
 function isSolidContactDepthPart(category, name) {
   if (category === 'groundcover' || category === 'shrub') return false;
-  if (category === 'tree') return !foliageName.test(name);
+  if (category === 'tree') return !thinTreeFoliageName.test(name);
   return category === 'rock' || category === 'deadwood' || category === 'wall' || category === 'building';
 }
 

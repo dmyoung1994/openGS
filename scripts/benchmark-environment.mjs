@@ -28,6 +28,7 @@ const arg = (name, fallback) => {
 };
 
 const base = String(arg('url', process.env.BENCHMARK_URL || 'http://127.0.0.1:5173'));
+const baseUrl = new URL(base);
 const outDir = resolve(String(arg('out', 'benchmarks/environment')));
 const [width, height] = String(arg('size', '1280x720')).split('x').map(Number);
 const warmupFrames = Number(arg('warmup', 180));
@@ -951,11 +952,12 @@ async function collectScenario(scenario) {
       pushError(`${scenario.id} analytic zero-target water contract is incomplete: ${JSON.stringify(waterReflectionDiagnostics)}`);
     }
   }
-  if (targetPropDiagnostics.targetDraws !== 11 || targetPropDiagnostics.signDraws !== 6
-    || targetPropDiagnostics.instances?.flagPoles !== 6
-    || targetPropDiagnostics.instances?.flagCloth !== 6
-    || targetPropDiagnostics.instances?.flagBases !== 6
-    || targetPropDiagnostics.instances?.signPosts !== 12
+  const targetCount = targetPropDiagnostics.signDraws;
+  if (!Number.isInteger(targetCount) || targetPropDiagnostics.targetDraws !== targetCount + 5
+    || targetPropDiagnostics.instances?.flagPoles !== targetCount
+    || targetPropDiagnostics.instances?.flagCloth !== targetCount
+    || targetPropDiagnostics.instances?.flagBases !== targetCount
+    || targetPropDiagnostics.instances?.signPosts !== targetCount * 2
     || targetPropDiagnostics.instances?.teeMarkers !== 2) {
     pushError(`${scenario.id} target prop draw/instance contract failed: ${JSON.stringify(targetPropDiagnostics)}`);
   }
@@ -996,7 +998,8 @@ async function collectScenario(scenario) {
 
 try {
   await mkdir(outDir, { recursive: true });
-  const url = new URL('/index.html', base);
+  const url = new URL('/index.html', baseUrl);
+  for (const [key, value] of baseUrl.searchParams) url.searchParams.set(key, value);
   url.searchParams.set('view', 'practice');
   if (foliageCandidate) url.searchParams.set('foliageCandidate', String(foliageCandidate));
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });

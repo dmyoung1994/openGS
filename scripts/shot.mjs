@@ -89,8 +89,6 @@ if ((cameraSweepPose || cameraSweepLook) && (!cameraPose || !cameraLook || !came
 const url = new URL(game ? '/index.html' : '/viewer.html', base);
 if (game) {
   url.searchParams.set('view', arg('view', 'practice'));   // skip the landing menu
-  const foliageCandidate = arg('foliage-candidate');
-  if (foliageCandidate) url.searchParams.set('foliageCandidate', String(foliageCandidate));
 }
 else url.searchParams.set('asset', asset);
 if (!game && cameraPose) url.searchParams.set('cam', cameraPose.join(','));

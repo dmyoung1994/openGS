@@ -997,12 +997,15 @@ function sampleMaritime(terrain, bounds, noise, x, z, extent) {
   const blend = smootherstep(0, 150, distance);
   const far = clamp(distance / extent, 0, 1);
   const edgeHeight = terrain.heightAt(cx, cz);
-  const broad = noise.fbm(x * 0.0031, z * 0.0031, { octaves: 4 }) * (7 + 8 * far);
-  const ridge = noise.ridged(x * 0.0018, z * 0.0022, { octaves: 3 }) * (5 + 13 * far);
-  const backLift = z < bounds.minZ ? smootherstep(40, extent * 0.8, bounds.minZ - z) * 8 : 0;
-  const height = edgeHeight * (1 - blend) + (broad + ridge - 5 + backLift) * blend;
-  const color = new Color(0x3d5136).lerp(new Color(0x667263), 0.25 + far * 0.5);
-  color.multiplyScalar(0.88 + noise.noise2(x * 0.018, z * 0.018) * 0.07);
+  // Augusta-style parkland enclosure: low, warm berms and a restrained hedge
+  // horizon. The old maritime profile was a dark, almost planar wall under the
+  // blue sky; its relief and palette now stay subordinate to the playable turf.
+  const broad = noise.fbm(x * 0.0031, z * 0.0031, { octaves: 4 }) * (5 + 6 * far);
+  const ridge = noise.ridged(x * 0.0018, z * 0.0022, { octaves: 3 }) * (4 + 9 * far);
+  const backLift = z < bounds.minZ ? smootherstep(40, extent * 0.8, bounds.minZ - z) * 5 : 0;
+  const height = edgeHeight * (1 - blend) + (broad + ridge - 3 + backLift) * blend;
+  const color = new Color(0x526840).lerp(new Color(0x8a966c), 0.30 + far * 0.46);
+  color.multiplyScalar(0.98 + noise.noise2(x * 0.018, z * 0.018) * 0.045);
   return { height, color, rock: far * 0.25, snow: 0, scree: far * 0.12 };
 }
 
@@ -1408,8 +1411,8 @@ function worldMaterial(name, biome, {
     const lithology = mx_noise_float(vec3(world.x.mul(0.0041), world.z.mul(0.0037), seed))
       .mul(0.5).add(0.5);
     const slope = float(1.0).sub(smoothstep(0.38, 0.86, normalWorld.y));
-    material.colorNode = vertexColor().mul(lithology.sub(0.5).mul(0.24).add(1.0));
-    material.roughnessNode = mix(float(0.99), float(0.86), slope.mul(0.4).add(geology.x.mul(0.3)));
+    material.colorNode = vertexColor().mul(lithology.sub(0.5).mul(0.14).add(1.0));
+    material.roughnessNode = mix(float(0.98), float(0.86), slope.mul(0.4).add(geology.x.mul(0.3)));
     material.name = name;
     return material;
   }

@@ -309,300 +309,118 @@
       }
     },
     {
-      "id": "polyhaven-fir-sapling-medium",
+      "id": "polyhaven-fir-tree-01",
       "category": "tree",
-      "biomes": [
-        "temperate-alpine"
-      ],
-      "license": {
-        "spdx": "CC0-1.0",
-        "sourceUrl": "https://polyhaven.com/a/fir_tree_01"
-      },
+      "biomes": ["temperate-maritime", "temperate-alpine"],
+      "license": {"spdx": "CC0-1.0", "sourceUrl": "https://polyhaven.com/a/fir_tree_01"},
       "derivativeLineage": {
         "sourceAssetId": "polyhaven-fir-tree-01",
         "sourceUrl": "https://polyhaven.com/a/fir_tree_01",
         "sourceHash": "72e49eefb4ed4db6a8ca5e17fb10980f8463dd300d94589ac774cde95ade7709",
-        "pipelineVersion": "source-macro-cluster-conifer-v8+alpha-hull+neutral-impostor@1"
+        "pipelineVersion": "polyhaven-source-lod+source-baked-impostor@1"
       },
-      "dimensions": {
-        "width": 8.687,
-        "height": 18.833,
-        "depth": 8.616
-      },
-      "bounds": {
-        "radius": 6.118,
-        "baseY": -0.007,
-        "topY": 18.826
-      },
+      "dimensions": {"width": 6.353, "height": 18.903, "depth": 6.376},
+      "bounds": {"radius": 3.30, "baseY": -0.007, "topY": 18.895},
       "placement": {
         "minSpacing": 7,
         "maxSlopeDegrees": 32,
-        "clearance": {
-          "tee": 12,
-          "green": 18,
-          "bunker": 8,
-          "water": 6,
-          "fairway": 8
-        }
+        "clearance": {"tee": 12, "green": 18, "bunker": 8, "water": 6, "fairway": 8}
       },
-      "grounding": {
-        "burialFraction": 0.025
-      },
+      "grounding": {"burialFraction": 0},
       "lods": [
-        {
-          "level": 0,
-          "url": "/assets/trees/conifer_v8_lod0.glb",
-          "sha256": "a2557e64685bb3c4e1d0354c986e8724f84b4e91284877a170771251636dd925",
-          "maxDistance": 28,
-          "geometry": "glb"
-        },
-        {
-          "level": 1,
-          "url": "/assets/trees/conifer_v8_lod1.glb",
-          "sha256": "7d67ec2113b2eff760ec03648c903c630c5ce0854374f964b5c0dbe414fa9fac",
-          "maxDistance": 6000,
-          "geometry": "glb"
-        }
+        {"level": 0, "url": "/assets/trees/fir_tree_01_lod0.glb", "sha256": "8a17a4f87829805d4be4330b384838b3c6a46dd20985c7be6622908a9acfbc09", "maxDistance": 32, "geometry": "glb"},
+        {"level": 1, "url": "/assets/trees/fir_tree_01_lod1.glb", "sha256": "95b2a5a33ad3de3097d53f9dcb5666f19fe81a2b297235847561a6c1f5fa75b8", "maxDistance": 2400, "geometry": "glb"}
       ],
       "impostor": {
         "kind": "baked-atlas",
-        "url": "/assets/trees/conifer_v8_impostor.png",
-        "sha256": "029e6badad5b1983c16ab175928b991f3646054e220db580480b71957d67c593",
+        "url": "/assets/trees/fir_tree_01_impostor.png",
+        "sha256": "1c74a20c4bf5c645639a5d77b3d2b0fd49d8ee087d27acd0050b0da17e2fe513",
         "sourceLod": 0,
-        "generator": "build_conifer_v8@1-alpha-footprint-hulls-production",
+        "generator": "polyhaven-source-bake@1",
         "azimuthFrames": 8,
         "elevationFrames": 1,
         "columns": 4,
         "rows": 2,
         "frameSize": 512,
-        "cardAspect": 0.3632,
-        "frameUv": { "offsetU": 0.33, "offsetV": 0.04, "scaleU": 0.34, "scaleV": 0.92 },
         "normalDepth": false
       },
-      "wind": {
-        "model": "hierarchical-tree-v1",
-        "trunkStiffness": 0.96,
-        "branchStiffness": 0.76,
-        "leafStiffness": 0.42,
-        "gustResponse": 0.48
-      }
+      "wind": {"model": "hierarchical-tree-v1", "trunkStiffness": 0.96, "branchStiffness": 0.76, "leafStiffness": 0.42, "gustResponse": 0.48}
     },
     {
-      "id": "blenderkit-grand-fir",
+      "id": "polyhaven-fir-tree-01-variant-b",
       "category": "tree",
-      "biomes": [
-        "temperate-alpine"
-      ],
-      "license": {
-        "spdx": "LicenseRef-BlenderKit-RoyaltyFree",
-        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/89409ff4-ba59-44c1-b482-4da17ed3f718/"
-      },
+      "biomes": ["temperate-maritime", "temperate-alpine"],
+      "license": {"spdx": "CC0-1.0", "sourceUrl": "https://polyhaven.com/a/fir_tree_01"},
       "derivativeLineage": {
-        "sourceAssetId": "blenderkit-grand-fir-8m",
-        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/89409ff4-ba59-44c1-b482-4da17ed3f718/",
-        "sourceHash": "9e30585f4ddeabe5eb9233a5731783dbf905ea642350f10cd7cca993212b5d3f",
-        "pipelineVersion": "build_bk_tree@3-role-split-spatial-card-selection+preserve-area+neutral-impostor@2"
+        "sourceAssetId": "polyhaven-fir-tree-01",
+        "sourceUrl": "https://polyhaven.com/a/fir_tree_01",
+        "sourceHash": "72e49eefb4ed4db6a8ca5e17fb10980f8463dd300d94589ac774cde95ade7709",
+        "pipelineVersion": "polyhaven-source-variant-b@1"
       },
-      "dimensions": {
-        "width": 5.782,
-        "height": 8.115,
-        "depth": 5.501
-      },
-      "bounds": {
-        "radius": 2.891,
-        "baseY": 0.034,
-        "topY": 8.149
-      },
+      "dimensions": {"width": 5.557, "height": 14.042, "depth": 6.041},
+      "bounds": {"radius": 3.15, "baseY": 0, "topY": 14.042},
       "placement": {
-        "minSpacing": 6,
-        "maxSlopeDegrees": 30,
-        "clearance": {
-          "tee": 12,
-          "green": 18,
-          "bunker": 8,
-          "water": 6,
-          "fairway": 8
-        }
+        "minSpacing": 7,
+        "maxSlopeDegrees": 32,
+        "clearance": {"tee": 12, "green": 18, "bunker": 8, "water": 6, "fairway": 8}
       },
-      "grounding": {
-        "burialFraction": 0.02
-      },
-      "lods": [
-        {
-          "level": 0,
-          "url": "/assets/trees/bk_grand_fir_lod0.glb",
-          "sha256": "c34a286f6c7742f2e778ee56a3d6c83e03a748f19a84de11bcd2f14c4dae6d7a",
-          "maxDistance": 28,
-          "geometry": "glb"
-        },
-        {
-          "level": 1,
-          "url": "/assets/trees/bk_grand_fir_lod1.glb",
-          "sha256": "4a11b5dabc11c347796519f249016b65939e0db784f4bd87526130b29aec75f4",
-          "maxDistance": 6000,
-          "geometry": "glb"
-        }
-      ],
-      "impostor": {
-        "kind": "baked-atlas",
-        "url": "/assets/trees/bk_grand_fir_impostor.png",
-        "sha256": "f43bdca8d82d8885eb911495ace4c4e0d47d3ef79686db81a12de3191ab2e291",
-        "sourceLod": 0,
-        "generator": "build_bk_tree@3-spatial-cards-preserve-area+scripts/bake_tree_impostor.py@2-hard-cutout",
-        "azimuthFrames": 8,
-        "elevationFrames": 1,
-        "columns": 4,
-        "rows": 2,
-        "frameSize": 512,
-        "normalDepth": false
-      },
-      "wind": {
-        "model": "hierarchical-tree-v1",
-        "trunkStiffness": 0.94,
-        "branchStiffness": 0.72,
-        "leafStiffness": 0.38,
-        "gustResponse": 0.52
-      }
+      "grounding": {"burialFraction": 0},
+      "lods": [{"level": 0, "url": "/assets/trees/fir_tree_01_variant_b_lod0.glb", "sha256": "ec9ce773897956043158f6466ae108042061779a74d418b1557cc1058b84096d", "maxDistance": 240, "geometry": "glb"}],
+      "impostor": {"kind": "none"},
+      "wind": {"model": "none"}
     },
     {
-      "id": "blenderkit-douglas-fir-summer",
+      "id": "polyhaven-fir-tree-01-variant-c",
       "category": "tree",
-      "biomes": [
-        "temperate-alpine"
-      ],
-      "license": {
-        "spdx": "LicenseRef-BlenderKit-RoyaltyFree",
-        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/61faa48a-786a-427f-a318-5242f98447bb/"
-      },
+      "biomes": ["temperate-maritime", "temperate-alpine"],
+      "license": {"spdx": "CC0-1.0", "sourceUrl": "https://polyhaven.com/a/fir_tree_01"},
       "derivativeLineage": {
-        "sourceAssetId": "blenderkit-tree-dougles-fir-summer",
-        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/61faa48a-786a-427f-a318-5242f98447bb/",
-        "sourceHash": "19bc2d96a53e6554ccb454e521804994f19ad644b595f17dcd85d9ff2ecb96af",
-        "pipelineVersion": "build_bk_tree@4-native-mature-color-opacity-grade+neutral-impostor@2"
+        "sourceAssetId": "polyhaven-fir-tree-01",
+        "sourceUrl": "https://polyhaven.com/a/fir_tree_01",
+        "sourceHash": "72e49eefb4ed4db6a8ca5e17fb10980f8463dd300d94589ac774cde95ade7709",
+        "pipelineVersion": "polyhaven-source-variant-c@1"
       },
-      "dimensions": {
-        "width": 13.048,
-        "height": 25.439,
-        "depth": 12.85
-      },
-      "bounds": {
-        "radius": 6.631,
-        "baseY": 0,
-        "topY": 25.439
-      },
+      "dimensions": {"width": 6.017, "height": 14.493, "depth": 5.917},
+      "bounds": {"radius": 3.20, "baseY": 0, "topY": 14.493},
       "placement": {
-        "minSpacing": 6,
-        "maxSlopeDegrees": 30,
-        "clearance": {
-          "tee": 12,
-          "green": 18,
-          "bunker": 8,
-          "water": 6,
-          "fairway": 8
-        }
+        "minSpacing": 7,
+        "maxSlopeDegrees": 32,
+        "clearance": {"tee": 12, "green": 18, "bunker": 8, "water": 6, "fairway": 8}
       },
-      "grounding": {
-        "burialFraction": 0.012
-      },
-      "lods": [
-        {
-          "level": 0,
-          "url": "/assets/trees/bk_douglas_fir_summer_lod0.glb",
-          "sha256": "75f44d7208557ba1cefeb333ceb6f316b3d42517c0dba81951e9df5bc343c04f",
-          "maxDistance": 32,
-          "geometry": "glb"
-        },
-        {
-          "level": 1,
-          "url": "/assets/trees/bk_douglas_fir_summer_lod1.glb",
-          "sha256": "20f753e00a0debfb3531421c44ec244196a727ed3d26f10ae7a73175ac6161e5",
-          "maxDistance": 6000,
-          "geometry": "glb"
-        }
-      ],
-      "impostor": {
-        "kind": "baked-atlas",
-        "url": "/assets/trees/bk_douglas_fir_summer_impostor.png",
-        "sha256": "e5eeb950ca23c75304964bac8bc657aeee2c7632f8368e438045a4e6c5a7893b",
-        "sourceLod": 0,
-        "generator": "build_bk_tree@4+scripts/bake_tree_impostor.py@2-hard-cutout",
-        "azimuthFrames": 8,
-        "elevationFrames": 1,
-        "columns": 4,
-        "rows": 2,
-        "frameSize": 512,
-        "normalDepth": false
-      },
-      "wind": {
-        "model": "hierarchical-tree-v1",
-        "trunkStiffness": 0.98,
-        "branchStiffness": 0.84,
-        "leafStiffness": 0.68,
-        "gustResponse": 0.35
-      }
+      "grounding": {"burialFraction": 0},
+      "lods": [{"level": 0, "url": "/assets/trees/fir_tree_01_variant_c_lod0.glb", "sha256": "a699df7c5b9243a9a5e13693df1e6fe97d8bef7ebc4014fa8275c7dc2a74c3b4", "maxDistance": 240, "geometry": "glb"}],
+      "impostor": {"kind": "none"},
+      "wind": {"model": "none"}
     },
     {
-      "id": "blenderkit-golden-larch",
+      "id": "polyhaven-pine-tree-01",
       "category": "tree",
-      "biomes": [
-        "temperate-alpine"
-      ],
-      "license": {
-        "spdx": "LicenseRef-BlenderKit-RoyaltyFree",
-        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/33e69cd4-2035-4718-aad1-fdfe3618cf01/"
-      },
+      "biomes": ["temperate-maritime", "temperate-alpine"],
+      "license": {"spdx": "CC0-1.0", "sourceUrl": "https://polyhaven.com/a/pine_tree_01"},
       "derivativeLineage": {
-        "sourceAssetId": "blenderkit-larch-tree-fall-season",
-        "sourceUrl": "https://www.blenderkit.com/asset-gallery-detail/33e69cd4-2035-4718-aad1-fdfe3618cf01/",
-        "sourceHash": "d69d45112aac9160e8e4be1463159d11feb1e6527bd955ce61b8248ced6a84bb",
-        "pipelineVersion": "build_bk_tree@2-role-split-node-graph-tile-bake+neutral-impostor@2"
+        "sourceAssetId": "polyhaven-pine-tree-01",
+        "sourceUrl": "https://polyhaven.com/a/pine_tree_01",
+        "sourceHash": "c81e8eebbda722313f07bed37b8b9156ce520f7fa95488d83a694d02fffdb469",
+        "pipelineVersion": "polyhaven-source-variant-b-lod+source-baked-impostor@1"
       },
-      "dimensions": {
-        "width": 20.511,
-        "height": 39.09,
-        "depth": 22.788
-      },
-      "bounds": {
-        "radius": 11.394,
-        "baseY": 0,
-        "topY": 39.09
-      },
+      "dimensions": {"width": 7.153, "height": 14.858, "depth": 7.535},
+      "bounds": {"radius": 4.05, "baseY": 0, "topY": 14.858},
       "placement": {
-        "minSpacing": 9,
-        "maxSlopeDegrees": 28,
-        "clearance": {
-          "tee": 14,
-          "green": 20,
-          "bunker": 8,
-          "water": 6,
-          "fairway": 10
-        }
+        "minSpacing": 8,
+        "maxSlopeDegrees": 32,
+        "clearance": {"tee": 12, "green": 18, "bunker": 8, "water": 6, "fairway": 8}
       },
-      "grounding": {
-        "burialFraction": 0.015
-      },
+      "grounding": {"burialFraction": 0},
       "lods": [
-        {
-          "level": 0,
-          "url": "/assets/trees/bk_golden_larch_lod0.glb",
-          "sha256": "d5d5e3a27c838253bb7614d588f29296f52a38be4893f37cf58e7cf39f01152d",
-          "maxDistance": 32,
-          "geometry": "glb"
-        },
-        {
-          "level": 1,
-          "url": "/assets/trees/bk_golden_larch_lod1.glb",
-          "sha256": "035b246c9b392005ed63b71c8fbad2aff6ba9e39cbe8779276c22d123a5e01c1",
-          "maxDistance": 6000,
-          "geometry": "glb"
-        }
+        {"level": 0, "url": "/assets/trees/pine_tree_01_canonical_lod0.glb", "sha256": "f1e19cc47be01450415a92e59e84cb9d6a42f00caa5c05cf0010d7a30243d741", "maxDistance": 32, "geometry": "glb"},
+        {"level": 1, "url": "/assets/trees/pine_tree_01_canonical_lod1.glb", "sha256": "b9f68e537ee77d64613ffa85af7e260f65b5fe6d44628304767617a9c4f7a40b", "maxDistance": 2400, "geometry": "glb"}
       ],
       "impostor": {
         "kind": "baked-atlas",
-        "url": "/assets/trees/bk_golden_larch_impostor.png",
-        "sha256": "9c40aa9003c8b576a974c3a381e93aedffe090413a9d00f625dcaed9796c46f5",
+        "url": "/assets/trees/pine_tree_01_impostor.png",
+        "sha256": "fffe451399f40a674f814740765f3281ad903a4a611ca60fd6cfedd9b9e8690c",
         "sourceLod": 0,
-        "generator": "scripts/bake_tree_impostor.py@2-hard-cutout",
+        "generator": "polyhaven-source-bake@1",
         "azimuthFrames": 8,
         "elevationFrames": 1,
         "columns": 4,
@@ -610,13 +428,7 @@
         "frameSize": 512,
         "normalDepth": false
       },
-      "wind": {
-        "model": "hierarchical-tree-v1",
-        "trunkStiffness": 0.9,
-        "branchStiffness": 0.62,
-        "leafStiffness": 0.28,
-        "gustResponse": 0.66
-      }
+      "wind": {"model": "hierarchical-tree-v1", "trunkStiffness": 0.94, "branchStiffness": 0.72, "leafStiffness": 0.38, "gustResponse": 0.52}
     }
   ]
 }

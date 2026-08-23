@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "processorVersion": "foliage-pipeline-v3",
+  "foliageAlias": "local.southern-live-oak.augusta.v1",
+  "species": {
+    "id": "southern-live-oak",
+    "commonName": "Southern live oak",
+    "botanicalName": "Quercus virginiana",
+    "nativeHeightMeters": 17,
+    "clusterScaleMeters": [0.55, 4.8]
+  },
+  "source": {
+    "file": "../../../public/assets/trees_candidates/generated_southern_live_oak/source/southern-live-oak-source-sheet-v1.png",
+    "sha256": "7ccb470ee1d1f48f91f07d829ca8e8d24b50c417aa34586fb9da15cb19e17b54",
+    "generatedAt": "2026-08-21",
+    "provider": "OpenAI ImageGen built-in tool",
+    "mode": "stylized-concept",
+    "promptRecord": "../../../public/assets/trees_candidates/generated_southern_live_oak/README.md",
+    "layout": { "mode": "components-2x4", "columns": 2, "rows": 4 },
+    "roles": [
+      { "name": "sparse-outer-terminal", "density": "sparse", "lodUse": [0, 1, 2], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 2.6 },
+      { "name": "small-young-branchlet", "density": "medium", "lodUse": [0, 1], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 2.4 },
+      { "name": "broad-lateral-spray", "density": "medium", "lodUse": [0, 1, 2], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 3.8 },
+      { "name": "dense-interior", "density": "dense", "lodUse": [0, 1, 2], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 4.0 },
+      { "name": "forked-edge", "density": "medium", "lodUse": [0, 1], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 3.3 },
+      { "name": "dark-mature", "density": "dense", "lodUse": [0, 1, 2], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 3.6 },
+      { "name": "weathered-variation", "density": "medium", "lodUse": [0, 1], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 3.0 },
+      { "name": "silhouette-breaker", "density": "sparse", "lodUse": [0, 1, 2], "baseEdge": "bottom", "attachmentUv": [0.50, 0.02], "tipUv": [0.50, 0.98], "recommendedScaleMeters": 3.7 }
+    ]
+  },
+  "structuralMaterial": {
+    "license": "CC0-1.0",
+    "source": "https://polyhaven.com/a/island_tree_01",
+    "provenance": "../../../docs/deciduous-branch-bark-provenance.md",
+    "textures": [
+      { "role": "albedo", "file": "../../../public/assets/trees_src/island_tree_01/textures/island_tree_01_branches_diff_1k.jpg", "output": "southern-live-oak-bark-albedo.jpg", "sha256": "bee5ec22196e9e31ad0c95a5a9b4636571cc0124d5bb27a92f1e307d289cc60d" },
+      { "role": "normal", "file": "../../../public/assets/trees_src/island_tree_01/textures/island_tree_01_branches_nor_gl_1k.jpg", "output": "southern-live-oak-bark-normal.jpg", "sha256": "2d67393ba76a0f49cf965fa0c99d8c16268e71e87b1203d35539bfdb971a514e" },
+      { "role": "arm", "file": "../../../public/assets/trees_src/island_tree_01/textures/island_tree_01_branches_arm_1k.jpg", "output": "southern-live-oak-bark-arm.jpg", "sha256": "9e3f82263247ce4f619692cea4c4f6fe9936ff465a86623481849062642c7d05" }
+    ]
+  },
+  "processing": {
+    "atlasSize": 2048, "atlasPadding": 24, "supportHullSectors": 10,
+    "alphaCleanupThreshold": 18, "coverageThreshold": 51, "rgbDilationRadius": 18,
+    "trimPadding": 10, "minimumCellSeparationPixels": 8,
+    "maximumMipCoverageDrift": 0.025, "maximumTransparentOverdraw": 0.72,
+    "ktx2": { "mode": "UASTC", "qualityLevel": 3, "rdoQualityLevel": 1.25, "zstdSupercompression": true, "flipYForThreeTextureConvention": true }
+  }
+}

@@ -161,21 +161,6 @@ test('alpine bands use a bounded depth-safe overlap rather than cracking', async
   backdrop.dispose();
 });
 
-test('far-conifer community derivative is deterministic, bounded, and cataloged', async () => {
-  const script = await readFile(new URL('../scripts/build_backdrop_conifer_community.py', import.meta.url), 'utf8');
-  const atlas = await readFile(new URL('../public/assets/trees/conifer_community_v1_impostor.png', import.meta.url));
-  assert.match(script, /random\.Random\(0xC01F3E/);
-  assert.match(script, /Image\.alpha_composite|out\.alpha_composite/);
-  assert.match(script, /COLS = 4/);
-  assert.match(script, /ROWS = 2/);
-  assert.ok(atlas.byteLength < 3_000_000, 'community atlas must remain a bounded 2K static asset');
-  assert.equal(createHash('sha256').update(atlas).digest('hex'),
-    '30d9c0567b92ee7be3e429982887881c3598950ed445f54bfefbf1f00e6b6d79');
-  const catalog = await readFile(new URL('../public/assets/environment/backdrop-community-catalog.json', import.meta.url), 'utf8');
-  assert.match(catalog, /conifer_community_v1_impostor\.png/);
-  assert.match(catalog, /polyhaven-fir-sapling-medium/);
-});
-
 test('alpine world composition is deterministic, seed-variable, and continuous at the playable edge', () => {
   const first = alpineComposition(1128746828);
   const second = alpineComposition(1128746828);

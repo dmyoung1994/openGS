@@ -14,6 +14,7 @@ const threeWebGPU = fileURLToPath(
 );
 
 const courseManifestPath = fileURLToPath(new URL('./course.json', import.meta.url));
+const premiumRangeManifestPath = fileURLToPath(new URL('./premium-range.json', import.meta.url));
 
 // The course manifest is authored beside the source tree so the local course
 // agent can update it, but production still requires that exact manifest. Emit
@@ -25,8 +26,11 @@ function requiredCourseManifest() {
     apply: 'build',
     buildStart() {
       const source = readFileSync(courseManifestPath, 'utf8');
+      const premiumSource = readFileSync(premiumRangeManifestPath, 'utf8');
       JSON.parse(source);
+      JSON.parse(premiumSource);
       this.emitFile({ type: 'asset', fileName: 'course.json', source });
+      this.emitFile({ type: 'asset', fileName: 'premium-range.json', source: premiumSource });
     },
   };
 }

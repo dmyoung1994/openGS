@@ -39,25 +39,25 @@ export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
     bounds: Object.freeze({ radius: 1.55 }),
     placement: Object.freeze({ minSpacing: 4, clearance: Object.freeze({ tee: 12, green: 12, bunker: 5, water: 3, fairway: 7 }) }),
   }),
-  'polyhaven-fir-sapling-medium': Object.freeze({
-    biomes: Object.freeze(['temperate-alpine']),
-    bounds: Object.freeze({ radius: 2.75 }),
+  'polyhaven-fir-tree-01': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 3.30 }),
     placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
   }),
-  'blenderkit-grand-fir': Object.freeze({
-    biomes: Object.freeze(['temperate-alpine']),
-    bounds: Object.freeze({ radius: 2.891 }),
-    placement: Object.freeze({ minSpacing: 6, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
+  'polyhaven-fir-tree-01-variant-b': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 3.15 }),
+    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
   }),
-  'blenderkit-douglas-fir-summer': Object.freeze({
-    biomes: Object.freeze(['temperate-alpine']),
-    bounds: Object.freeze({ radius: 6.631 }),
-    placement: Object.freeze({ minSpacing: 6, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
+  'polyhaven-fir-tree-01-variant-c': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 3.20 }),
+    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
   }),
-  'blenderkit-golden-larch': Object.freeze({
-    biomes: Object.freeze(['temperate-alpine']),
-    bounds: Object.freeze({ radius: 11.394 }),
-    placement: Object.freeze({ minSpacing: 9, clearance: Object.freeze({ tee: 14, green: 20, bunker: 8, water: 6, fairway: 10 }) }),
+  'polyhaven-pine-tree-01': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 4.05 }),
+    placement: Object.freeze({ minSpacing: 8, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
   }),
 });
 export const BUILTIN_ENVIRONMENT_ASSET_IDS = Object.freeze(Object.keys(BUILTIN_ENVIRONMENT_ASSETS));

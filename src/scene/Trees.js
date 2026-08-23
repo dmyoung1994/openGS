@@ -1,5 +1,6 @@
 import {
-  Group, DoubleSide, Box3, Matrix4, Vector2, Vector3, Color,
+  Group, DoubleSide, Box3, Matrix4, Vector2, Vector3, Color, Euler, Quaternion,
+  InstancedMesh, StaticDrawUsage,
   SRGBColorSpace, TextureLoader, PlaneGeometry,
   LinearFilter, ClampToEdgeWrapping, Float32BufferAttribute,
 } from 'three';
@@ -556,6 +557,244 @@ function makeTreeBeautyRecords(proto, placements, seed) {
     style: new Float32Array(style),
     shadowRecords: new Float32Array(shadowRecords),
   };
+}
+
+// The production course tree path is deliberately simple: a catalog tree is a
+// real LOD0 GLB, and that GLB is what the player sees.  LOD1 and impostor atlases
+// are optional catalog derivatives for experiments, never prerequisites for a
+// valid tree.  Keeping this path instanced preserves the source mesh materials
+// (base colour/alpha, normal, roughness, metalness, AO, and vertex colours) while
+// making every authored tree species render through the same engine contract.
+function cloneLod0Material(source) {
+  const cloneOne = (material) => {
+    if (!material?.clone) throw new Error('Catalog LOD0 tree part requires a cloneable material.');
+    const clone = material.clone();
+    clone.side = DoubleSide;
+    clone.transparent = false;
+    clone.depthWrite = true;
+    clone.alphaHash = false;
+    clone.metalness = 0;
+    if (clone.map) {
+      clone.map.colorSpace = SRGBColorSpace;
+      clone.alphaTest = Math.max(clone.alphaTest || 0, TREE_ALPHA_CUTOFF);
+    }
+    // The source GLB is an albedo/normal/material source, not a studio light.
+    // Keep the shared range sun and PMREM as the only illumination.
+    if (clone.emissive?.isColor) {
+      clone.emissive.setRGB(0, 0, 0);
+      clone.emissiveIntensity = 0;
+    }
+    clone.needsUpdate = true;
+    return clone;
+  };
+  return Array.isArray(source) ? source.map(cloneOne) : cloneOne(source);
+}
+
+function flattenMaterials(material) {
+  return Array.isArray(material) ? material : [material];
+}
+
+function makeLod0PlacementRecords(proto, placements) {
+  if (!proto?.parts?.length || !Number.isFinite(proto.height) || proto.height <= 0) {
+    throw new Error('Catalog LOD0 tree prototype must contain measurable geometry.');
+  }
+  if (!placements.length) throw new Error('Catalog LOD0 tree renderer requires at least one placement.');
+  const up = new Vector3(0, 1, 0);
+  const surfaceNormal = new Vector3();
+  const alignQuaternion = new Quaternion();
+  const yawQuaternion = new Quaternion();
+  const variationQuaternion = new Quaternion();
+  const variationEuler = new Euler();
+  const records = placements.map((placement) => {
+    const targetHeight = Number.isFinite(placement.targetHeight) && placement.targetHeight > 0
+      ? placement.targetHeight
+      : proto.height * (Number.isFinite(placement.scale) && placement.scale > 0 ? placement.scale : 1);
+    const sourceScale = targetHeight / proto.height;
+    const baseY = (Number.isFinite(placement.y) ? placement.y : 0)
+      - proto.plantBaseY * sourceScale
+      - targetHeight * 0.032;
+    surfaceNormal.set(
+      Number.isFinite(placement.normalX) ? placement.normalX : 0,
+      Number.isFinite(placement.normalY) ? placement.normalY : 1,
+      Number.isFinite(placement.normalZ) ? placement.normalZ : 0,
+    );
+    if (surfaceNormal.lengthSq() < 1e-8) surfaceNormal.copy(up);
+    else surfaceNormal.normalize();
+    alignQuaternion.setFromUnitVectors(up, surfaceNormal);
+    const yaw = Number.isFinite(placement.rotationY)
+      ? placement.rotationY
+      : (Number.isFinite(placement.rotY) ? placement.rotY : 0);
+    yawQuaternion.setFromAxisAngle(surfaceNormal, yaw);
+    variationEuler.set(
+      Number.isFinite(placement.rotationX) ? placement.rotationX : 0,
+      0,
+      Number.isFinite(placement.rotationZ) ? placement.rotationZ : 0,
+      'XYZ',
+    );
+    variationQuaternion.setFromEuler(variationEuler);
+    const quaternion = new Quaternion()
+      .multiplyQuaternions(yawQuaternion, alignQuaternion)
+      .multiply(variationQuaternion);
+    const matrix = new Matrix4().compose(
+      new Vector3(Number(placement.x), baseY, Number(placement.z)),
+      quaternion,
+      new Vector3(sourceScale, sourceScale, sourceScale),
+    );
+    return Object.freeze({ placement, targetHeight, sourceScale, baseY, matrix });
+  });
+  return records;
+}
+
+// Strict production LOD0 renderer.  This is intentionally independent of the
+// atlas classifier above: a valid catalog tree only needs its verified LOD0 GLB,
+// and every part of that GLB is instanced with its original PBR material.
+export class TreeBeautyLod0 {
+  constructor({ renderer, camera, motionHistory, proto, placements }) {
+    if (!renderer?.isWebGPURenderer) throw new Error('TreeBeautyLod0 requires WebGPU; no compatibility tree path exists.');
+    if (!camera) throw new Error('TreeBeautyLod0 requires the active camera.');
+    if (!motionHistory) throw new Error('TreeBeautyLod0 requires SceneManager motion history for TRAA velocity.');
+    if (!proto?.parts?.length) throw new Error('TreeBeautyLod0 requires a catalog LOD0 prototype with at least one part.');
+    if (!Array.isArray(placements) || placements.length === 0) {
+      throw new Error('TreeBeautyLod0 requires non-empty catalog tree placements.');
+    }
+    this.renderer = renderer;
+    this.camera = camera;
+    this.motionHistory = motionHistory;
+    this.proto = proto;
+    this.records = makeLod0PlacementRecords(proto, placements);
+    this.sourceCount = this.records.length;
+    this.partCount = proto.parts.length;
+    this.group = new Group();
+    this.group.name = 'trees-gpu-camera-relative';
+    this.meshes = [];
+    this._materials = [];
+    this.shadowRecords = new Float32Array(this.sourceCount * 4);
+    this.records.forEach((record, index) => {
+      this.shadowRecords.set([
+        Number(record.placement.x), record.baseY, Number(record.placement.z), record.targetHeight,
+      ], index * 4);
+    });
+
+    proto.parts.forEach((part, partIndex) => {
+      if (!part.geometry?.index?.count) {
+        throw new Error(`Catalog LOD0 tree part ${partIndex} requires indexed geometry.`);
+      }
+      const material = cloneLod0Material(part.material);
+      const mesh = new InstancedMesh(part.geometry, material, this.sourceCount);
+      mesh.name = `tree-catalog-lod0-${partIndex}`;
+      mesh.instanceMatrix.setUsage(StaticDrawUsage);
+      this.records.forEach((record, index) => mesh.setMatrixAt(index, record.matrix));
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.castShadow = false;
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 1;
+      this.group.add(mesh);
+      this.meshes.push(mesh);
+      this._materials.push(...flattenMaterials(material));
+    });
+  }
+
+  update() {
+    // LOD0 geometry is static and retains the authored Poly Haven materials.
+    // The camera-relative name remains for existing diagnostics integrations.
+    return false;
+  }
+
+  async readDiagnostics() {
+    return this._diagnostics();
+  }
+
+  _diagnostics() {
+    return {
+      sourceCount: this.sourceCount,
+      visibleCount: this.sourceCount,
+      lod0Only: true,
+      lod0Count: this.sourceCount,
+      lod1Count: 0,
+      impostorCount: 0,
+      lod0Draws: this.partCount,
+      lod1Draws: 0,
+      impostorDraws: 0,
+      beautyDraws: this.partCount,
+      partCount: this.partCount,
+      overflow: 0,
+      siblingCountsEqual: true,
+      classificationComplete: true,
+    };
+  }
+
+  residencyEstimate() {
+    return {
+      sourceCount: this.sourceCount,
+      counts: { lod0: this.sourceCount, lod1: 0, impostor: 0, rejected: 0 },
+      projectedHeights: this.records.map((record) => record.targetHeight),
+      forcedFullLod: true,
+      lod0Only: true,
+      classificationComplete: true,
+    };
+  }
+
+  dispose() {
+    disposeWebGPUGeometries(this.renderer, this.meshes.map((mesh) => mesh.geometry));
+    disposeMaterialTextures(this._materials);
+    this.meshes.length = 0;
+    this._materials.length = 0;
+  }
+}
+
+// LOD0 shadows reuse the exact visible geometry/materials.  There is no atlas
+// shadow proxy, broadleaf mask, or alternate silhouette: the light sees the same
+// catalog triangles the player sees.  The shadow meshes live on layer 1 only.
+export class TreeShadowLod0 {
+  constructor({ light, beauty }) {
+    if (!light?.castShadow) throw new Error('TreeShadowLod0 requires the directional shadow light.');
+    if (!(beauty instanceof TreeBeautyLod0)) throw new Error('TreeShadowLod0 requires a TreeBeautyLod0 source.');
+    this.light = light;
+    this.sourceCount = beauty.sourceCount;
+    this.partCount = beauty.partCount;
+    this.mesh = new Group();
+    this.mesh.name = 'tree-shadow-gpu-indirect';
+    this.mesh.layers.set(1);
+    this.meshes = [];
+    this.trianglesPerTree = 0;
+    beauty.meshes.forEach((sourceMesh, partIndex) => {
+      const shadowMesh = new InstancedMesh(sourceMesh.geometry, sourceMesh.material, this.sourceCount);
+      shadowMesh.name = `tree-shadow-lod0-${partIndex}`;
+      shadowMesh.instanceMatrix.setUsage(StaticDrawUsage);
+      shadowMesh.instanceMatrix.array.set(sourceMesh.instanceMatrix.array);
+      shadowMesh.instanceMatrix.needsUpdate = true;
+      shadowMesh.castShadow = true;
+      shadowMesh.receiveShadow = false;
+      shadowMesh.frustumCulled = false;
+      shadowMesh.layers.set(1);
+      this.mesh.add(shadowMesh);
+      this.meshes.push(shadowMesh);
+      this.trianglesPerTree += Math.floor((sourceMesh.geometry.index?.count ?? 0) / 3);
+    });
+    this.light.shadow.needsUpdate = true;
+  }
+
+  update() {
+    return false;
+  }
+
+  async readDiagnostics() {
+    return {
+      sourceCount: this.sourceCount,
+      visibleCount: this.sourceCount,
+      shadowDraws: this.partCount,
+      trianglesPerTree: this.trianglesPerTree,
+      lod0Only: true,
+    };
+  }
+
+  dispose() {
+    // Geometry and materials are owned by the paired TreeBeautyLod0.  Only clear
+    // the shadow references here so Range.dispose cannot double-release them.
+    this.mesh.clear();
+    this.meshes.length = 0;
+  }
 }
 
 // Three fixed GPU-indirect beauty draws for every tree source: one canonical
@@ -1453,6 +1692,10 @@ export class TreeBeautyLod {
 
 export function buildTreeBeautyLod(proto, midProto, impostor, impostorTexture, placements, options = {}) {
   return new TreeBeautyLod({ proto, midProto, impostor, impostorTexture, placements, ...options });
+}
+
+export function buildTreeBeautyLod0(proto, placements, options = {}) {
+  return new TreeBeautyLod0({ proto, placements, ...options });
 }
 
 // One WebGPU-only directional-shadow caster for every hero tree.  The fixed source

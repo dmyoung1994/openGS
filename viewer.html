@@ -63,6 +63,19 @@
       <div class="row"><span>SUN</span><button type="button" data-sun="fixed">FIXED</button><button type="button" data-sun="moving">MOVING</button></div>
       <div id="foliageDiagnostics" data-testid="foliage-diagnostics">waiting for foliage diagnostics…</div>
     </aside>
+    <!-- Candidate-only local foliage descriptors for the authoring viewer. -->
+    <script>
+      globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__ = {
+        'local.southern-live-oak.augusta.v1': {
+          rootUrl: '/assets/trees_candidates/generated_southern_live_oak/processed/v1',
+          compatibilityVersion: 1,
+        },
+        'local.loblolly-pine.southeast.v1': {
+          rootUrl: '/assets/trees_candidates/generated_loblolly_pine/processed/v1',
+          compatibilityVersion: 1,
+        },
+      };
+    </script>
     <script type="module" src="/src/viewer/main.js"></script>
   </body>
 </html>

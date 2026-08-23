@@ -1,6 +1,6 @@
 import {
   BufferAttribute, BufferGeometry, ClampToEdgeWrapping, DoubleSide, Group,
-  InterleavedBuffer, InterleavedBufferAttribute, LinearMipmapLinearFilter, Matrix4, Mesh, NoColorSpace, RepeatWrapping,
+  InstancedMesh, InterleavedBuffer, InterleavedBufferAttribute, LinearMipmapLinearFilter, Matrix4, Mesh, NoColorSpace, Object3D, RepeatWrapping,
   SRGBColorSpace, TextureLoader, Vector3,
 } from 'three';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
@@ -23,6 +23,11 @@ const textureLoader = new TextureLoader();
 const ktx2Loaders = new WeakMap();
 const TAU = Math.PI * 2;
 const UP = new Vector3(0, 1, 0);
+const BROADLEAF_SPECIES = new Set(['valley-oak', 'sugar-maple', 'southern-live-oak']);
+const OAK_SPECIES = new Set(['valley-oak', 'southern-live-oak']);
+
+function isBroadleafSpecies(speciesId) { return BROADLEAF_SPECIES.has(speciesId); }
+function isOakSpecies(speciesId) { return OAK_SPECIES.has(speciesId); }
 
 // SceneManager publishes one shared PMREM through the node builder. Generated
 // foliage must consume that same environment and the real scene lights; otherwise
@@ -205,21 +210,119 @@ function appendTaperedTrunk(builder, points, radii, sides = 9) {
   }
 }
 
+// Broadleaf leaders and the visible trunk must be generated from one curve.  The
+// old pair of implementations used the same broad shape but independent phase and
+// lean values, which left a small sky slit between a fork and the trunk on some
+// seeds.  Replaying the first deterministic random values keeps the authoring
+// stream unchanged while giving structuralGeometry the exact skeleton curve.
+function replayBroadleafTrunkParams(height, seed, speciesId) {
+  const random = createRng(deriveSeed(seed, `${speciesId}-forked-broadleaf-crown`));
+  random(); // phase
+  random(); // spreadScale
+  random(); // riseScale
+  return {
+    trunkHeight: height * (isOakSpecies(speciesId) ? 0.29 : 0.25),
+    trunkLeanScaleX: 0.72 + random() * 0.62,
+    trunkLeanScaleZ: 0.72 + random() * 0.62,
+    trunkPhaseX: random() * 1.8,
+    trunkPhaseZ: random() * 1.8,
+  };
+}
+
+function broadleafTrunkCurve(height, speciesId, params) {
+  return (y) => {
+    const trunkHeight = params.trunkHeight;
+    const t = Math.min(1, Math.max(0, y / trunkHeight));
+    return new Vector3(
+      Math.sin(t * 6.2 + 0.4 + params.trunkPhaseX) * 0.055 * t
+        + Math.sin(t * 4.1 + 0.7 + params.trunkPhaseX)
+          * (isOakSpecies(speciesId) ? 0.34 : 0.18) * params.trunkLeanScaleX * t,
+      y,
+      Math.sin(t * 4.7 + 1.7 + params.trunkPhaseZ) * 0.045 * t
+        + Math.sin(t * 3.2 + 1.2 + params.trunkPhaseZ)
+          * 0.16 * params.trunkLeanScaleZ * t,
+    );
+  };
+}
+
+// Shadow casters use a connected, opaque canopy hull rather than the sparse alpha
+// cards used for beauty.  This keeps projected shadows organic and continuous while
+// avoiding the large pixelated shadow islands produced when every far card is a
+// separate hard alpha silhouette.  The hull is deliberately low-poly: it exists on
+// the shadow layer only and does not compete with the authored foliage geometry.
+function connectedShadowGeometry(speciesId) {
+  const broadleaf = isBroadleafSpecies(speciesId);
+  const oak = isOakSpecies(speciesId);
+  const pine = speciesId === 'loblolly-pine';
+  const profile = oak
+    ? [[0.00, 0.055], [0.10, 0.065], [0.22, 0.15], [0.40, 0.34], [0.60, 0.48], [0.77, 0.41], [0.91, 0.25], [1.00, 0.045]]
+    : pine
+      ? [[0.00, 0.070], [0.08, 0.13], [0.20, 0.28], [0.42, 0.25], [0.64, 0.19], [0.82, 0.12], [0.95, 0.06], [1.00, 0.018]]
+      : broadleaf
+        ? [[0.00, 0.055], [0.12, 0.08], [0.30, 0.20], [0.52, 0.31], [0.73, 0.27], [0.90, 0.16], [1.00, 0.035]]
+        : [[0.00, 0.060], [0.10, 0.12], [0.24, 0.25], [0.44, 0.24], [0.66, 0.18], [0.84, 0.11], [1.00, 0.025]];
+  const sides = 10;
+  const positions = [];
+  const indices = [];
+  for (const [y, radius] of profile) {
+    for (let side = 0; side < sides; side++) {
+      const angle = side / sides * TAU;
+      positions.push(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+    }
+  }
+  const bottom = positions.length / 3;
+  positions.push(0, profile[0][0], 0);
+  const top = positions.length / 3;
+  positions.push(0, profile.at(-1)[0], 0);
+  for (let ring = 0; ring < profile.length - 1; ring++) {
+    const lower = ring * sides;
+    const upper = lower + sides;
+    for (let side = 0; side < sides; side++) {
+      const next = (side + 1) % sides;
+      indices.push(lower + side, lower + next, upper + side,
+        lower + next, upper + next, upper + side);
+    }
+  }
+  const first = 0;
+  const last = (profile.length - 1) * sides;
+  for (let side = 0; side < sides; side++) {
+    const next = (side + 1) % sides;
+    indices.push(bottom, first + next, first + side, top, last + side, last + next);
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+  geometry.setIndex(indices);
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function connectedShadowWidth(speciesId) {
+  if (isOakSpecies(speciesId)) return 0.50;
+  if (speciesId === 'loblolly-pine') return 0.34;
+  if (isBroadleafSpecies(speciesId)) return 0.37;
+  return 0.31;
+}
+
 function structuralGeometry({ height, seed, branches, speciesId = 'douglas-fir' }) {
   const builder = { positions: [], normals: [], uvs: [], bend: [], indices: [] };
   const random = createRng(deriveSeed(seed, 'structural-skeleton'));
-  const broadleaf = speciesId === 'valley-oak' || speciesId === 'sugar-maple';
+  const broadleaf = isBroadleafSpecies(speciesId);
+  const oak = isOakSpecies(speciesId);
   const trunkSegments = speciesId === 'monterey-cypress' ? 10 : broadleaf ? 9 : 11;
   // Monterey cypress commonly resolves its main stem into broad, persistent
   // leaders well below the crown top. Continuing one procedural pole through
   // 80% of the tree made the exposed architecture read as pollarded topiary.
-  const trunkHeight = speciesId === 'monterey-cypress' ? height * 0.54
-    : speciesId === 'valley-oak' ? height * 0.29
+  const broadleafParams = broadleaf ? replayBroadleafTrunkParams(height, seed, speciesId) : null;
+  const trunkHeight = broadleaf ? broadleafParams.trunkHeight : speciesId === 'monterey-cypress' ? height * 0.54
+    : oak ? height * 0.29
       : speciesId === 'sugar-maple' ? height * 0.25 : height;
   const trunkPointAt = (t) => {
+    if (broadleaf) return broadleafTrunkCurve(height, speciesId, broadleafParams)(
+      t === 0 ? -0.22 : trunkHeight * t,
+    );
     const montereyLean = speciesId === 'monterey-cypress' ? Math.pow(t, 1.35) * 1.05 : 0;
     const italianLean = speciesId === 'italian-cypress' ? Math.sin(t * 3.4) * 0.08 * t : 0;
-    const broadleafLean = broadleaf ? Math.sin(t * 4.1 + 0.7) * (speciesId === 'valley-oak' ? 0.34 : 0.18) * t : 0;
+    const broadleafLean = broadleaf ? Math.sin(t * 4.1 + 0.7) * (oak ? 0.34 : 0.18) * t : 0;
     return new Vector3(
       Math.sin(t * 6.2 + 0.4) * 0.055 * t + montereyLean + italianLean + broadleafLean,
       t === 0 ? -0.22 : trunkHeight * t,
@@ -229,8 +332,8 @@ function structuralGeometry({ height, seed, branches, speciesId = 'douglas-fir' 
     );
   };
   const trunkScale = speciesId === 'monterey-cypress' ? 1.38 : speciesId === 'italian-cypress' ? 0.78
-    : speciesId === 'valley-oak' ? 2.05 : speciesId === 'sugar-maple' ? 1.48 : 1;
-  const trunkRadiusAt = (t) => speciesId === 'valley-oak' ? 0.42 + 0.46 * Math.pow(1 - t, 1.35)
+    : oak ? 2.05 : speciesId === 'sugar-maple' ? 1.48 : 1;
+  const trunkRadiusAt = (t) => oak ? 0.42 + 0.46 * Math.pow(1 - t, 1.35)
     : speciesId === 'sugar-maple' ? 0.27 + 0.35 * Math.pow(1 - t, 1.35)
       : (0.055 + 0.34 * Math.pow(1 - t, 1.45)) * trunkScale;
   const trunkPoints = [];
@@ -245,10 +348,10 @@ function structuralGeometry({ height, seed, branches, speciesId = 'douglas-fir' 
   for (let root = 0; root < rootCount; root++) {
     const angle = root / rootCount * TAU + random() * 0.3;
     const length = (1.05 + random() * 0.8) * (speciesId === 'monterey-cypress' ? 1.3
-      : speciesId === 'italian-cypress' ? 0.66 : speciesId === 'valley-oak' ? 1.55 : broadleaf ? 1.2 : 1);
+      : speciesId === 'italian-cypress' ? 0.66 : oak ? 1.55 : broadleaf ? 1.2 : 1);
     appendTaperedSegment(builder, new Vector3(0, 0.12, 0), new Vector3(
       Math.cos(angle) * length, -0.10 - random() * 0.16, Math.sin(angle) * length,
-    ), broadleaf ? (speciesId === 'valley-oak' ? 0.42 : 0.31) + random() * 0.06
+    ), broadleaf ? (oak ? 0.42 : 0.31) + random() * 0.06
       : 0.22 + random() * 0.05, 0.035, 0, 7);
   }
   for (const branch of branches) {
@@ -365,6 +468,67 @@ function buildDouglasBranchSkeleton(height, seed) {
     const end = new Vector3(Math.cos(azimuth) * length, y + 0.12 + leader * 0.05, Math.sin(azimuth) * length);
     branches.push({ level: levels + leader, t, heightFraction: t, start, mid: start.clone().lerp(end, 0.55), end,
       direction: end.clone().sub(start).normalize(), secondaries: [], radius: 0.07, length, azimuth });
+  }
+  return branches;
+}
+
+function buildLoblollyPineSkeleton(height, seed) {
+  const random = createRng(deriveSeed(seed, 'loblolly-pine-open-layered-whorls'));
+  const branches = [];
+  const levels = 18;
+  const crownPhase = random() * TAU;
+  const prevailingSide = random() * TAU;
+  for (let level = 0; level < levels; level++) {
+    const t = level / (levels - 1);
+    const y = 2.0 + t * (height - 3.2) + (random() - 0.5) * 0.34;
+    const irregularity = 0.88 + Math.sin(t * 13.7 + crownPhase) * 0.12 + Math.sin(t * 29.1) * 0.06;
+    const radius = Math.max(0.62, 5.8 * Math.pow(Math.max(0, 1 - t), 0.52) * irregularity);
+    const count = t > 0.82 ? 3 : t > 0.52 ? 4 : 5;
+    const whorlOffset = level * 1.47 + random() * 0.52;
+    for (let branchIndex = 0; branchIndex < count; branchIndex++) {
+      if ((level * 7 + branchIndex * 5) % 17 === 0) continue;
+      const azimuth = whorlOffset + branchIndex / count * TAU + (random() - 0.5) * 0.26;
+      const directionalBias = 0.90 + Math.cos(azimuth - prevailingSide) * 0.18;
+      const length = radius * (0.74 + random() * 0.42) * directionalBias;
+      const branchY = y + (random() - 0.5) * 0.80;
+      const start = new Vector3(Math.cos(azimuth) * 0.09, branchY, Math.sin(azimuth) * 0.09);
+      const radial = new Vector3(Math.cos(azimuth), 0, Math.sin(azimuth));
+      const tangent = radial.clone().cross(UP).normalize();
+      const curve = (random() - 0.5) * Math.min(1.5, length * 0.18);
+      const mid = start.clone().addScaledVector(radial, length * 0.52)
+        .addScaledVector(tangent, curve * 0.50)
+        .addScaledVector(UP, length * (0.005 + random() * 0.035));
+      const end = start.clone().addScaledVector(radial, length)
+        .addScaledVector(tangent, curve)
+        .addScaledVector(UP, length * (-0.04 + random() * 0.10));
+      const direction = end.clone().sub(start).normalize();
+      const secondaries = [];
+      for (const side of [-1, 1]) {
+        const secondaryStart = start.clone().lerp(end, 0.48 + random() * 0.22);
+        const secondaryLength = length * (0.24 + random() * 0.12);
+        const secondaryDirection = direction.clone().multiplyScalar(0.60)
+          .addScaledVector(tangent, side * (0.50 + random() * 0.20))
+          .addScaledVector(UP, 0.10 + random() * 0.20).normalize();
+        secondaries.push({
+          start: secondaryStart,
+          end: secondaryStart.clone().addScaledVector(secondaryDirection, secondaryLength),
+        });
+      }
+      branches.push({ level, t, heightFraction: branchY / height, start, mid, end, direction, secondaries,
+        radius: 0.095 + 0.14 * Math.pow(1 - t, 1.35), length, azimuth });
+    }
+  }
+  // Loblolly tips form a loose candle crown rather than a dense Douglas-fir pole.
+  for (let leader = 0; leader < 6; leader++) {
+    const t = 0.91 + leader / 6 * 0.08;
+    const y = height * t;
+    const azimuth = crownPhase + leader * 2.31;
+    const length = 0.55 + (1 - t) * 3.0 + random() * 0.24;
+    const start = new Vector3(0, y, 0);
+    const radial = new Vector3(Math.cos(azimuth), 0, Math.sin(azimuth));
+    const end = start.clone().addScaledVector(radial, length).addScaledVector(UP, 0.16 + random() * 0.20);
+    branches.push({ level: levels + leader, t, heightFraction: t, start, mid: start.clone().lerp(end, 0.52), end,
+      direction: end.clone().sub(start).normalize(), secondaries: [], radius: 0.065, length, azimuth });
   }
   return branches;
 }
@@ -505,7 +669,7 @@ function pointOnBentBranch(branch, fraction) {
 }
 
 function buildBroadleafSkeleton(height, seed, speciesId) {
-  const oak = speciesId === 'valley-oak';
+  const oak = isOakSpecies(speciesId);
   const random = createRng(deriveSeed(seed, `${speciesId}-forked-broadleaf-crown`));
   const branches = [];
   const phase = random() * TAU;
@@ -519,16 +683,13 @@ function buildBroadleafSkeleton(height, seed, speciesId) {
   // This is the exact broadleaf trunk curve used by structuralGeometry. Leader
   // starts must sample it rather than approximate a straight line to the top;
   // otherwise a fork can miss the crooked trunk centerline and expose a sky gap.
-  const trunkPoint = (y) => {
-    const t = Math.min(1, Math.max(0, y / trunkHeight));
-    return new Vector3(
-      Math.sin(t * 6.2 + 0.4 + trunkPhaseX) * 0.055 * t
-        + Math.sin(t * 4.1 + 0.7 + trunkPhaseX) * (oak ? 0.34 : 0.18) * trunkLeanScaleX * t,
-      y,
-      Math.sin(t * 4.7 + 1.7 + trunkPhaseZ) * 0.045 * t
-        + Math.sin(t * 3.2 + 1.2 + trunkPhaseZ) * 0.16 * trunkLeanScaleZ * t,
-    );
-  };
+  const trunkPoint = broadleafTrunkCurve(height, speciesId, {
+    trunkHeight,
+    trunkLeanScaleX,
+    trunkLeanScaleZ,
+    trunkPhaseX,
+    trunkPhaseZ,
+  });
   let level = 0;
   const leaderSpecs = oak
     ? [
@@ -635,9 +796,10 @@ function buildBroadleafSkeleton(height, seed, speciesId) {
 }
 
 function buildBranchSkeleton(height, seed, speciesId = 'douglas-fir') {
+  if (speciesId === 'loblolly-pine') return buildLoblollyPineSkeleton(height, seed);
   if (speciesId === 'italian-cypress') return buildItalianCypressSkeleton(height, seed);
   if (speciesId === 'monterey-cypress') return buildMontereyCypressSkeleton(height, seed);
-  if (speciesId === 'valley-oak' || speciesId === 'sugar-maple') {
+  if (isBroadleafSpecies(speciesId)) {
     return buildBroadleafSkeleton(height, seed, speciesId);
   }
   return buildDouglasBranchSkeleton(height, seed);
@@ -722,7 +884,7 @@ function foliageGeometry(metadata, branches, seed) {
   if (metadata.species === 'italian-cypress' || metadata.species === 'monterey-cypress') {
     return cypressFoliageGeometry(metadata, branches, seed);
   }
-  if (metadata.species === 'valley-oak' || metadata.species === 'sugar-maple') {
+  if (isBroadleafSpecies(metadata.species)) {
     return broadleafFoliageGeometry(metadata, branches, seed);
   }
   const builder = { positions: [], normals: [], uvs: [], anchors: [], hierarchyAnchors: [], foliageParams: [],
@@ -846,7 +1008,7 @@ function broadleafFoliageGeometry(metadata, branches, seed) {
   const builder = { positions: [], normals: [], uvs: [], anchors: [], hierarchyAnchors: [], foliageParams: [], cardAxes: [], cardUps: [],
     indices: [], cards: 0, cardsByBand: [0, 0, 0] };
   const branchCards = [];
-  const oak = metadata.species === 'valley-oak';
+  const oak = isOakSpecies(metadata.species);
   const random = createRng(deriveSeed(seed, `${metadata.species}-foliage-hierarchy`));
   const clusters = metadata.clusters;
   const foliageBranches = branches.filter((branch) => branch.foliage !== false);
@@ -1037,7 +1199,7 @@ function foliageMaterial(atlas, materialMask, environment, projectionScale, moti
   // toward the camera so it cannot collapse into a one-pixel hanging strip at an
   // oblique view. Retaining a small authored component keeps crossed sprays from
   // becoming coplanar and avoids screen-facing cardboard motion.
-  const cameraFacingStrength = speciesId === 'valley-oak' || speciesId === 'sugar-maple' ? 0.88 : 0.76;
+  const cameraFacingStrength = isBroadleafSpecies(speciesId) ? 0.88 : 0.76;
   const resolveFrame = (cameraNode) => {
     const view = cameraInPositionSpace(cameraNode).sub(staticAnchor);
     const projectedView = view.sub(cardAxis.mul(view.dot(cardAxis)));
@@ -1250,9 +1412,24 @@ export class GeneratedFoliageTree {
     this.structure.receiveShadow = true;
     this.foliage = new Mesh(foliage.geometry, this.foliageMaterial);
     this.foliage.name = `generated-${speciesId}-hierarchical-foliage`;
-    this.foliage.castShadow = true;
+    // Beauty cards are alpha-cut surfaces; asking every card to populate the
+    // directional map creates a jagged, disconnected shadow at range distance.
+    // The connected hull below owns the lab tree's shadow instead.
+    this.foliage.castShadow = false;
     this.foliage.receiveShadow = true;
-    this.group.add(this.structure, this.foliage);
+    this.structure.castShadow = false;
+    this.shadowProxy = new Mesh(
+      connectedShadowGeometry(speciesId),
+      new MeshBasicNodeMaterial({ color: 0xffffff, side: DoubleSide }),
+    );
+    this.shadowProxy.name = `generated-${speciesId}-connected-shadow`;
+    this.shadowProxy.scale.set(
+      height * connectedShadowWidth(speciesId), height, height * connectedShadowWidth(speciesId),
+    );
+    this.shadowProxy.layers.set(1);
+    this.shadowProxy.castShadow = true;
+    this.shadowProxy.receiveShadow = false;
+    this.group.add(this.structure, this.foliage, this.shadowProxy);
     this.metrics = Object.freeze({ branches: branches.length, cardsAllLods: foliage.cards,
       cardsByBand: foliage.cardsByBand,
       structuralTriangles: structure.index.count / 3, foliageTrianglesAllLods: foliage.geometry.index.count / 3,
@@ -1291,8 +1468,10 @@ export class GeneratedFoliageTree {
   dispose() {
     this.structure.geometry.dispose();
     this.foliage.geometry.dispose();
+    this.shadowProxy.geometry.dispose();
     this.structureMaterial.dispose();
     this.foliageMaterial.dispose();
+    this.shadowProxy.material.dispose();
     this.pack.atlas.dispose();
     this.pack.materialMask.dispose();
     this.pack.bark.albedo.dispose();
@@ -1341,7 +1520,8 @@ export class GeneratedFoliageForest {
     const speciesId = this.pack.metadata.species;
     const baseHeight = this.pack.manifest.species?.nativeHeightMeters
       ?? (speciesId === 'italian-cypress' ? 18 : speciesId === 'monterey-cypress' ? 16.5
-        : speciesId === 'valley-oak' ? 17 : speciesId === 'sugar-maple' ? 18.5 : 19.5);
+        : speciesId === 'valley-oak' || speciesId === 'southern-live-oak' ? 17
+          : speciesId === 'sugar-maple' ? 18.5 : speciesId === 'loblolly-pine' ? 23.5 : 19.5);
     const height = baseHeight * (0.94 + identity * 0.035);
     const branches = buildBranchSkeleton(height, identitySeed, speciesId);
     const structure = structuralGeometry({ height, seed: identitySeed, branches, speciesId });
@@ -1360,10 +1540,10 @@ export class GeneratedFoliageForest {
     const visibleFar = storage(new StorageInstancedBufferAttribute(new Uint32Array(records.length), 1, Uint32Array), 'uint', records.length);
     const drawArgsAttr = new IndirectStorageBufferAttribute(new Uint32Array(20), 5);
     const drawArgs = storage(drawArgsAttr, 'uint', 20).toAtomic();
-    const counts = [structure.index.count, foliage.geometry.index.count, farFoliage.index.count, farFoliage.index.count];
+    const counts = [structure.index.count, foliage.geometry.index.count, farFoliage.index.count];
     const clearCompute = Fn(() => {
       for (let word = 0; word < 20; word++) atomicStore(drawArgs.element(uint(word)), uint(0));
-      for (let command = 0; command < 4; command++) atomicStore(drawArgs.element(uint(command * 5)), uint(counts[command]));
+      for (let command = 0; command < counts.length; command++) atomicStore(drawArgs.element(uint(command * 5)), uint(counts[command]));
     })().compute(1);
     const compactCompute = Fn(() => {
       const id = uint(instanceIndex);
@@ -1378,7 +1558,6 @@ export class GeneratedFoliageForest {
       If(inFrustum, () => {
         const allDst = atomicAdd(drawArgs.element(uint(1)), uint(1));
         visibleAll.element(allDst).assign(id);
-        atomicAdd(drawArgs.element(uint(16)), uint(1));
         const distance = this.uCameraPosition.sub(vec3(transform.x, centreY, transform.z)).length().max(1);
         const projectedHeight = float(height).mul(transform.w).mul(this.projectionScale).div(distance);
         If(projectedHeight.lessThan(0.30), () => {
@@ -1404,27 +1583,49 @@ export class GeneratedFoliageForest {
       this.projectionScale, motionHistory, { instanced: true, forceBand: 2, speciesId: this.speciesId,
         currentCameraNode: this.uCameraPosition, previousCameraNode: this.uPreviousCameraPosition,
         ...nodesFor(visibleFar) });
-    const shadowMaterial = foliageMaterial(this.pack.atlas, this.pack.materialMask, environment,
-      this.projectionScale, motionHistory, { instanced: true, forceBand: 2, speciesId: this.speciesId,
-        currentCameraNode: this.uCameraPosition, previousCameraNode: this.uPreviousCameraPosition,
-        ...nodesFor(visibleAll) });
-    const geometries = [structure, foliage.geometry, farFoliage, farFoliage.clone()];
-    const materials = [structureMaterial, nearMaterial, farMaterial, shadowMaterial];
+    const geometries = [structure, foliage.geometry, farFoliage];
+    const materials = [structureMaterial, nearMaterial, farMaterial];
     geometries.forEach((geometry, command) => geometry.setIndirect(drawArgsAttr, command * 20));
     geometries.forEach((geometry, command) => {
       const mesh = new Mesh(geometry, materials[command]);
       mesh.name = `generated-${speciesId}-${['structure', 'local-hierarchy', 'far-parent', 'shadow-parent'][command]}-identity-${identity}`;
       mesh.frustumCulled = false;
-      if (command === 3) {
-        mesh.layers.set(1); mesh.castShadow = true; mesh.receiveShadow = false; this.shadowMeshes.push(mesh);
-      } else {
-        mesh.castShadow = false;
-        mesh.receiveShadow = command !== 3;
-        this.beautyMeshes.push(mesh);
-      }
+      mesh.castShadow = false;
+      // Keep all beauty draws in the shared shadow field. The connected hull
+      // below is the only caster; alpha cards no longer pollute the shadow map.
+      mesh.receiveShadow = command !== 3;
+      this.beautyMeshes.push(mesh);
       this.group.add(mesh); this.meshes.push(mesh);
     });
     this.materials.push(...materials);
+
+    // One connected opaque hull per identity supplies stable directional shadows.
+    // It is intentionally separate from the beauty indirect draws: alpha foliage
+    // cards still own the visible silhouette, while the shadow layer gets a clean
+    // continuous canopy instead of a collection of hard card islands.
+    const shadow = new InstancedMesh(
+      connectedShadowGeometry(speciesId),
+      new MeshBasicNodeMaterial({ color: 0xffffff, side: DoubleSide }),
+      records.length,
+    );
+    shadow.name = `generated-${speciesId}-connected-shadow-identity-${identity}`;
+    shadow.frustumCulled = false;
+    shadow.layers.set(1);
+    shadow.castShadow = true;
+    shadow.receiveShadow = false;
+    const dummy = new Object3D();
+    const width = connectedShadowWidth(speciesId);
+    records.forEach((record, index) => {
+      const scale = record.scale ?? 1;
+      dummy.position.set(record.x, record.y ?? 0, record.z);
+      dummy.rotation.set(0, record.rotY ?? record.rotationY ?? 0, 0);
+      dummy.scale.set(height * width * scale, height * scale, height * width * scale);
+      dummy.updateMatrix();
+      shadow.setMatrixAt(index, dummy.matrix);
+    });
+    shadow.instanceMatrix.needsUpdate = true;
+    this.group.add(shadow); this.meshes.push(shadow); this.shadowMeshes.push(shadow);
+    this.materials.push(shadow.material);
     this.batches.push({ records, height, drawArgsAttr, sourceTransform, sourceYaw, visibleAll, visibleNear, visibleFar,
       clearCompute, compactCompute, triangles: counts.map((value) => value / 3) });
   }

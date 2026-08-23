@@ -129,7 +129,7 @@ test('result camera returns to address through a damped transition', () => {
   assert.ok(camera.position.distanceTo(director.pos) < 0.06);
 });
 
-test('production capture harness exercises generated foliage through flight and return', async () => {
+test('production capture harness exercises the real shot flight and return', async () => {
   const source = await readFile(new URL('../scripts/shot.mjs', import.meta.url), 'utf8');
   assert.match(source, /const shotFlightSequence = game && has\('shot-flight-seq'\)/);
   assert.match(source, /requestedSequenceFrames === true \? 180/,
@@ -138,7 +138,7 @@ test('production capture harness exercises generated foliage through flight and 
     'isolated foliage sweeps must exercise the production viewer camera');
   assert.match(source, /diagnostics: window\.viewer\.treeDiagnostics\(\)/,
     'isolated foliage sweeps must record local hierarchy selection');
-  assert.match(source, /url\.searchParams\.set\('foliageCandidate', String\(foliageCandidate\)\)/);
+  assert.doesNotMatch(source, /foliageCandidate/, 'capture harness must stay on the curated Poly Haven runtime lane');
   assert.match(source, /cameraPosition: window\.golf\.sm\.camera\.position\.toArray\(\)/);
   assert.match(source, /ballPosition: window\.golf\.ball\.position\.toArray\(\)/);
   assert.match(source, /shotFlightSequence \? state\.phase === 'result'/,

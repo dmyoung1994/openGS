@@ -90,7 +90,8 @@ test('canopy suppression changes only stable candidate density, never grass geom
 test('Range shares its exact selected tree records between beauty and grass bake', async () => {
   const source = await rangeSource();
   assert.match(source, /const allTreePlacements = this\._treePlacements\(\)/);
-  assert.match(source, /const treePlacements = this\.foliageAlias[\s\S]*buildRangePerimeterFoliage/);
+  assert.match(source, /const treePlacements = allTreePlacements/,
+    'the curated runtime uses one Poly Haven placement set for both paths');
   assert.match(source, /canopyPlacements: treePlacements/);
   assert.match(source, /this\._buildTreeLine\(treePlacements\)/);
   assert.match(source, /canopyRadius: asset\.bounds\.radius \* placement\.scale/,

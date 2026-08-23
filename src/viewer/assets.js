@@ -2,9 +2,9 @@ import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
 import { buildBunkerMesh } from '../scene/Bunkers.js';
 import { createGolfBallMesh } from '../scene/GolfBall.js';
-import { loadTreePrototype, loadTreeImpostor, buildTreeBeautyLod } from '../scene/Trees.js';
+import { loadTreePrototype, buildTreeBeautyLod0 } from '../scene/Trees.js';
 import { GeneratedFoliageForest, GeneratedFoliageTree } from '../scene/GeneratedFoliageTree.js';
-import { loadFoliageAlias } from '../foliage/FoliagePackResolver.js';
+import { createLocalFoliagePackRegistry, loadFoliageAlias } from '../foliage/FoliagePackResolver.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import {
@@ -17,6 +17,9 @@ import { mix, texture, vec3 } from 'three/tsl';
 
 const viewerGltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const viewerTextureLoader = new TextureLoader();
+const localFoliagePackRegistry = createLocalFoliagePackRegistry(
+  globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__ ?? [],
+);
 import { WaterSurface } from '../scene/WaterSurface.js';
 
 // Asset registry for the isolated viewer (viewer.html).
@@ -133,7 +136,7 @@ function turfPatch(kind, { withGrass = false, camera, renderer, motionHistory, e
 // classifier as Range, with one catalog record and a real terrain contact. This
 // makes close/mid/far residency diagnosable without the course's other foliage
 // obscuring the silhouette. `scripts/shot.mjs --cam/--look` controls exact poses.
-async function firTreePatch({ camera, renderer, motionHistory, environment, treePrefix = 'fir_tree_01', impostorFile = 'fir_sapling_medium_impostor.png', impostorUrl = null, prototypeBase = null, targetHeight = 18.895 }) {
+async function firTreePatch({ camera, renderer, motionHistory, environment, treePrefix = 'fir_tree_01', prototypeBase = null, targetHeight = 18.895 }) {
   const minX = PATCH_X, minZ = -PATCH / 2;
   const cx = minX + PATCH / 2, cz = 0;
   const terrain = new Terrain({
@@ -148,15 +151,8 @@ async function firTreePatch({ camera, renderer, motionHistory, environment, tree
   });
   const prototypeRoot = prototypeBase || `/assets/trees/${treePrefix}`;
   const proto = await loadTreePrototype(`${prototypeRoot}_lod0.glb`);
-  const midProto = await loadTreePrototype(`${prototypeRoot}_lod1.glb`);
-  const impostor = {
-    kind: 'baked-atlas',
-    url: impostorUrl || `/assets/trees/${impostorFile}`,
-    columns: 4, rows: 2, frameSize: 512, azimuthFrames: 8,
-  };
-  const impostorTexture = await loadTreeImpostor(impostor);
   const baseY = terrain.heightAt(cx, cz);
-  const treeBeauty = buildTreeBeautyLod(proto, midProto, impostor, impostorTexture, [{
+  const treeBeauty = buildTreeBeautyLod0(proto, [{
     x: cx, z: cz, y: baseY, rotY: 0, targetHeight,
   }], {
     renderer, camera, motionHistory, environment,
@@ -468,7 +464,7 @@ async function generatedTreePatch({ renderer, camera, environment, motionHistory
     transmissionStrength: boundedQueryNumber('transmission', 1, 0, 2),
   };
   const pack = await loadFoliageAlias(alias, {
-    renderer, textureMode, allowCandidate: true,
+    renderer, textureMode, allowCandidate: true, local: localFoliagePackRegistry,
   });
   const requestedSubject = new URL(window.location.href).searchParams.get('subject') ?? 'tree';
   const subject = ['tree', 'atlas', 'cards', 'mip'].includes(requestedSubject) ? requestedSubject : 'tree';
@@ -546,7 +542,13 @@ async function generatedDouglasFirForestPatch({ renderer, camera, environment, m
   };
 }
 
-async function sourceTreePatch({ renderer }) {
+async function onlineTreeReferencePatch({
+  renderer,
+  file,
+  scale = 1,
+  targetHeight = 12,
+  frameWidth = targetHeight * 0.82,
+}) {
   const minX = PATCH_X, minZ = -PATCH / 2;
   const cx = minX + PATCH / 2, cz = 0;
   const terrain = new Terrain({
@@ -554,21 +556,37 @@ async function sourceTreePatch({ renderer }) {
     spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
     surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
   });
-  const gltf = await viewerGltfLoader.loadAsync('/assets/trees/tree_small_02_lod0.glb');
-  gltf.scene.position.set(cx, terrain.heightAt(cx, cz), cz);
-  gltf.scene.scale.setScalar(2.6);
+  const baseY = terrain.heightAt(cx, cz);
+  const gltf = await viewerGltfLoader.loadAsync(file);
+  gltf.scene.position.set(cx, baseY, cz);
+  gltf.scene.scale.setScalar(scale);
   gltf.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { terrain, objects: [terrain.mesh, gltf.scene], focus: { x: cx, z: cz } };
+  return {
+    terrain, objects: [terrain.mesh, gltf.scene], focus: { x: cx, z: cz },
+    focusY: baseY + targetHeight * 0.48,
+    frameBounds: { center: [cx, baseY + targetHeight * 0.5, cz], size: [frameWidth, targetHeight, frameWidth] },
+  };
+}
+
+async function sourceTreePatch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/tree_small_02_lod0.glb', scale: 2.6,
+    targetHeight: 12, frameWidth: 11,
+  });
 }
 
 async function pineSourcePatch({ renderer }) {
-  const minX = PATCH_X, minZ = -PATCH / 2;
-  const cx = minX + PATCH / 2, cz = 0;
-  const terrain = new Terrain({ bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH }, spacing: 0.6, renderSpacing: 0.6, heightFn: swell, surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer });
-  const gltf = await viewerGltfLoader.loadAsync('/assets/trees/pine_tree_01_lod0.glb');
-  gltf.scene.position.set(cx, terrain.heightAt(cx, cz), cz);
-  gltf.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { terrain, objects: [terrain.mesh, gltf.scene], focus: { x: cx, z: cz } };
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/pine_tree_01_canonical_lod0.glb', scale: 1,
+    targetHeight: 18, frameWidth: 15,
+  });
+}
+
+async function islandTreeSourcePatch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/island_tree_01.glb', scale: 2.5,
+    targetHeight: 12.5, frameWidth: 12.5,
+  });
 }
 
 async function pineTreePatch({ camera, renderer, motionHistory, environment }) {
@@ -579,13 +597,10 @@ async function pineTreePatch({ camera, renderer, motionHistory, environment }) {
     spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
     surfaceFn: () => 'fairway', zones: ZONES.fairway(), motionHistory, renderer,
   });
-  const proto = await loadTreePrototype('/assets/trees/pine_tree_01_lod1.glb');
-  const midProto = await loadTreePrototype('/assets/trees/pine_tree_01_lod1.glb');
-  const impostor = { kind: 'baked-atlas', url: '/assets/trees/pine_tree_01_impostor.png', columns: 4, rows: 2, frameSize: 512, azimuthFrames: 8 };
-  const impostorTexture = await loadTreeImpostor(impostor);
+  const proto = await loadTreePrototype('/assets/trees/pine_tree_01_canonical_lod0.glb');
   const baseY = terrain.heightAt(cx, cz);
   const targetHeight = 14.85;
-  const treeBeauty = buildTreeBeautyLod(proto, midProto, impostor, impostorTexture, [{
+  const treeBeauty = buildTreeBeautyLod0(proto, [{
     x: cx, z: cz, y: baseY, rotY: 0, targetHeight,
   }], {
     renderer, camera, motionHistory, environment,
@@ -647,139 +662,18 @@ function standingTurf(kind, opts = {}) {
 }
 
 export const ASSETS = {
-  'tree candidate: generated Douglas-fir clusters': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.douglas-fir.pnw.v1', height: 19.5, foliageStandoff: 5.25, frameWidth: 10.5,
-  }),
-  'tree candidate: generated Italian cypress': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.italian-cypress.mediterranean.v1', height: 18, foliageStandoff: 2.3, frameWidth: 5.2,
-  }),
-  'tree candidate: generated Monterey cypress': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.monterey-cypress.coastal.v1', height: 16.5, foliageStandoff: 7.2, frameWidth: 15.5,
-  }),
-  'tree candidate: generated valley oak': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.valley-oak.california.v1', height: 17, foliageStandoff: 12.8, frameWidth: 27,
-  }),
-  'tree candidate: generated sugar maple': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.sugar-maple.northeastern.v1', height: 18.5, foliageStandoff: 8.8, frameWidth: 19,
-  }),
-  'tree candidate: generated Douglas-fir far parent': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.douglas-fir.pnw.v1', height: 19.5, foliageStandoff: 5.25, frameWidth: 10.5, forceBand: 2,
-  }),
-  'tree candidate: generated Italian cypress far parent': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.italian-cypress.mediterranean.v1', height: 18, foliageStandoff: 2.3, frameWidth: 5.2, forceBand: 2,
-  }),
-  'tree candidate: generated Monterey cypress far parent': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.monterey-cypress.coastal.v1', height: 16.5, foliageStandoff: 7.2, frameWidth: 15.5, forceBand: 2,
-  }),
-  'tree candidate: generated valley oak far parent': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.valley-oak.california.v1', height: 17, foliageStandoff: 12.8, frameWidth: 27, forceBand: 2,
-  }),
-  'tree candidate: generated sugar maple far parent': (ctx) => generatedTreePatch(ctx, {
-    alias: 'builtin.sugar-maple.northeastern.v1', height: 18.5, foliageStandoff: 8.8, frameWidth: 19, forceBand: 2,
-  }),
-  'tree candidate: generated Douglas-fir perimeter forest': (ctx) => generatedDouglasFirForestPatch(ctx),
   'tree: fir LOD lab': (ctx) => firTreePatch(ctx),
-  'tree candidate: source PBR LOD0': (ctx) => firTreeSourceCandidatePatch({ ...ctx, lod: 0 }),
-  'tree candidate: source PBR LOD1': (ctx) => firTreeSourceCandidatePatch({ ...ctx, lod: 1 }),
-  'tree candidate: conifer v4 LOD0': (ctx) => coniferV4CandidatePatch({ ...ctx, lod: 0 }),
-  'tree candidate: conifer v4 LOD1': (ctx) => coniferV4CandidatePatch({ ...ctx, lod: 1 }),
-  'tree candidate: conifer v4 TreeBeauty': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'conifer_v4',
-    prototypeBase: '/assets/trees_candidates/conifer_v4/conifer_v4',
-    // Deliberately reuse an existing runtime-lit atlas only as the far-band
-    // placeholder; this entry never promotes v4 into the production catalog.
-    impostorFile: 'conifer_v3_impostor.png',
-  }),
-  'tree candidate: conifer v5 TreeBeauty': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'conifer_v5',
-    prototypeBase: '/assets/trees_candidates/conifer_v5/conifer_v5',
-    impostorUrl: '/assets/trees_candidates/conifer_v5/conifer_v5_impostor.png',
-  }),
-  'tree candidate: conifer v6 TreeBeauty': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'conifer_v6',
-    prototypeBase: '/assets/trees_candidates/conifer_v6/conifer_v6',
-    impostorUrl: '/assets/trees_candidates/conifer_v6/conifer_v6_impostor.png',
-  }),
-  'tree candidate: conifer v7 TreeBeauty': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'conifer_v7',
-    prototypeBase: '/assets/trees_candidates/conifer_v7/conifer_v7',
-    impostorUrl: '/assets/trees_candidates/conifer_v7/conifer_v7_impostor.png',
-  }),
-  'tree candidate: conifer v8 TreeBeauty': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'conifer_v8',
-    prototypeBase: '/assets/trees_candidates/conifer_v8/conifer_v8',
-    impostorUrl: '/assets/trees_candidates/conifer_v8/conifer_v8_impostor.png',
-  }),
-  'tree candidate: conifer v9 component foliage': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'conifer_v9',
-    prototypeBase: '/assets/trees_candidates/conifer_v9/conifer_v9',
-    impostorUrl: '/assets/trees_candidates/conifer_v9/conifer_v9_impostor.png',
-    targetHeight: 18.833,
-  }),
-  'tree: conifer volume v2': (ctx) => firTreePatch({ ...ctx, treePrefix: 'conifer_volume_v2', impostorFile: 'conifer_volume_v2_impostor.png' }),
-  'tree: conifer v3 branchlets': (ctx) => firTreePatch({ ...ctx, treePrefix: 'conifer_v3', impostorFile: 'conifer_v3_impostor.png' }),
-  'tree: pine sapling canonical': (ctx) => firTreePatch({ ...ctx, treePrefix: 'pine_sapling_medium_canonical', impostorFile: 'pine_sapling_medium_canonical_impostor.png' }),
   'tree: pine LOD comparator': (ctx) => pineTreePatch(ctx),
   'tree: pine canonical': (ctx) => firTreePatch({
     ...ctx,
     treePrefix: 'pine_tree_01_canonical',
-    impostorFile: 'pine_tree_01_impostor.png',
     targetHeight: 14.85,
-  }),
-  // Production role-split species: trunk / branches / foliage stay separate
-  // primitives so each keeps its own baked tile at authored resolution and
-  // tiling. This is the multi-part TreeBeautyLod path; a combined one-part
-  // prototype is its partCount === 1 case.
-  'tree: blendkit grand fir (role-split)': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'bk_grand_fir',
-    impostorFile: 'bk_grand_fir_impostor.png',
-    targetHeight: 8.109,
-  }),
-  'tree candidate: grand fir v10 preserve area': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'bk_grand_fir_v10',
-    prototypeBase: '/assets/trees_candidates/bk_grand_fir_v10/bk_grand_fir_v10',
-    impostorUrl: '/assets/trees_candidates/bk_grand_fir_v10/bk_grand_fir_v10_impostor.png',
-    targetHeight: 8.115,
-  }),
-  'tree candidate: Douglas fir summer': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'bk_douglas_fir_summer',
-    prototypeBase: '/assets/trees_candidates/bk_douglas_fir_summer/bk_douglas_fir_summer',
-    impostorUrl: '/assets/trees_candidates/bk_douglas_fir_summer/bk_douglas_fir_summer_impostor.png',
-    targetHeight: 25.439,
-  }),
-  'tree candidate: dense conifer at 20m': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'bk_dense_conifer',
-    impostorFile: 'bk_dense_conifer_impostor.png',
-    targetHeight: 20,
-  }),
-  // 29 m Scots pine: an open, high crown whose canopy is a realized
-  // geometry-nodes scatter thinned to budget rather than decimated.
-  'tree: blendkit scots pine (role-split)': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'bk_scots_pine',
-    impostorFile: 'bk_scots_pine_impostor.png',
-    targetHeight: 29.367,
-  }),
-  // Autumn accent candidate. Its foliage colour bake writes nothing, so the
-  // canopy falls back to a flat golden cutout — usable at distance, flat up close.
-  'tree candidate: golden larch': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'bk_golden_larch',
-    impostorFile: 'bk_golden_larch_impostor.png',
-    targetHeight: 39.09,
   }),
   'tree: source broadleaf comparator': (ctx) => sourceTreePatch(ctx),
   'tree: pine source comparator': (ctx) => pineSourcePatch(ctx),
+  'reference: Poly Haven Tree Small 02 (CC0)': (ctx) => sourceTreePatch(ctx),
+  'reference: Poly Haven Island Tree 01 (CC0)': (ctx) => islandTreeSourcePatch(ctx),
+  'reference: Poly Haven Pine Tree 01 (CC0)': (ctx) => pineSourcePatch(ctx),
   'water: pond lab': (ctx) => pondPatch(ctx),
   'turf: fairway': standingTurf('fairway'),
   'turf: green': standingTurf('green'),

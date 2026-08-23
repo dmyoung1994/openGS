@@ -1,0 +1,99 @@
+{
+  "meta": {
+    "name": "Premium Range",
+    "mode": "realistic",
+    "schema": 2,
+    "notes": "Long Augusta-inspired practice range test: a broad immaculate hitting corridor, layered target greens from 40 to 450 yards, warm sand accents, and a dense, staggered Poly Haven perimeter grove."
+  },
+  "catalogVersion": 2,
+  "placementAlgorithmVersion": 1,
+  "biome": "temperate-maritime",
+  "environmentSeed": 1694481937,
+  "bounds": { "minX": -150, "maxX": 150, "minZ": -480, "maxZ": 34 },
+  "tee": { "x": 0, "z": 2, "boxHalfX": 4.2, "z0": -3, "z1": 7 },
+  "corridor": { "c0": 22, "k": 0.055, "rough": 13 },
+  "fringeW": 2.8,
+  "greens": [
+    { "yards": 40, "x": -8, "z": -37, "r": 7, "contour": "tilt" },
+    { "yards": 80, "x": 7, "z": -73, "r": 8, "contour": "punchbowl" },
+    { "yards": 120, "x": -12, "z": -110, "r": 9, "contour": "spine" },
+    { "yards": 165, "x": 14, "z": -151, "r": 10, "contour": "tier" },
+    { "yards": 215, "x": -8, "z": -196, "r": 10, "contour": "crown" },
+    { "yards": 275, "x": 19, "z": -251, "r": 11, "contour": "saddle" },
+    { "yards": 335, "x": -16, "z": -306, "r": 12, "contour": "tilt" },
+    { "yards": 395, "x": 24, "z": -361, "r": 13, "contour": "punchbowl" },
+    { "yards": 450, "x": -22, "z": -411, "r": 13, "contour": "spine" }
+  ],
+  "bunkers": [
+    { "x": 8, "z": -52, "r": 4.5, "depth": 0.8, "pot": false },
+    { "x": -8, "z": -72, "r": 4.8, "depth": 0.9, "pot": false },
+    { "x": -28, "z": -117, "r": 5.2, "depth": 1.0, "pot": false },
+    { "x": 30, "z": -142, "r": 5.4, "depth": 1.0, "pot": false },
+    { "x": 0, "z": -167, "r": 4.6, "depth": 0.7, "pot": true },
+    { "x": 11, "z": -204, "r": 5.4, "depth": 1.0, "pot": false },
+    { "x": 37, "z": -260, "r": 5.8, "depth": 1.1, "pot": false },
+    { "x": 1, "z": -269, "r": 5.0, "depth": 0.8, "pot": false },
+    { "x": -34, "z": -318, "r": 6.0, "depth": 1.1, "pot": false },
+    { "x": 44, "z": -371, "r": 6.2, "depth": 1.2, "pot": false },
+    { "x": -42, "z": -423, "r": 6.5, "depth": 1.2, "pot": false }
+  ],
+  "ponds": [],
+  "environment": {
+    "objectBudget": 40,
+    "placements": [
+      { "id": "polyhaven-island-01-front-left", "assetId": "polyhaven-island-tree-01", "x": -64, "z": -30, "rotationY": 0.42, "scale": 2.8 },
+      { "id": "polyhaven-tree-small-01-front-left", "assetId": "polyhaven-tree-small-02", "x": -78, "z": -30, "rotationY": 5.18, "scale": 2.3 },
+      { "id": "polyhaven-island-01-front-right", "assetId": "polyhaven-island-tree-01", "x": 64, "z": -30, "rotationY": 3.71, "scale": 2.8 },
+      { "id": "polyhaven-tree-small-01-front-right", "assetId": "polyhaven-tree-small-02", "x": 78, "z": -30, "rotationY": 1.96, "scale": 2.3 },
+
+      { "id": "polyhaven-fir-variant-b-02-left", "assetId": "polyhaven-fir-tree-01-variant-b", "x": -74, "z": -70, "rotationY": 1.16, "scale": 1.1 },
+      { "id": "polyhaven-island-02-left", "assetId": "polyhaven-island-tree-01", "x": -88, "z": -70, "rotationY": 4.83, "scale": 2.6 },
+      { "id": "polyhaven-fir-variant-c-02-right", "assetId": "polyhaven-fir-tree-01-variant-c", "x": 74, "z": -70, "rotationY": 4.32, "scale": 1.1 },
+      { "id": "polyhaven-island-02-right", "assetId": "polyhaven-island-tree-01", "x": 88, "z": -70, "rotationY": 2.27, "scale": 2.6 },
+
+      { "id": "polyhaven-tree-small-02-left", "assetId": "polyhaven-tree-small-02", "x": -82, "z": -110, "rotationY": 0.71, "scale": 2.2 },
+      { "id": "polyhaven-fir-01-02-left", "assetId": "polyhaven-fir-tree-01", "x": -98, "z": -110, "rotationY": 2.08, "scale": 1.0 },
+      { "id": "polyhaven-tree-small-02-right", "assetId": "polyhaven-tree-small-02", "x": 82, "z": -110, "rotationY": 3.88, "scale": 2.2 },
+      { "id": "polyhaven-pine-01-02-right", "assetId": "polyhaven-pine-tree-01", "x": 98, "z": -110, "rotationY": 5.24, "scale": 1.0 },
+
+      { "id": "polyhaven-island-03-left", "assetId": "polyhaven-island-tree-01", "x": -90, "z": -150, "rotationY": 1.55, "scale": 2.6 },
+      { "id": "polyhaven-tree-small-03-left", "assetId": "polyhaven-tree-small-02", "x": -108, "z": -150, "rotationY": 4.26, "scale": 2.2 },
+      { "id": "polyhaven-island-03-right", "assetId": "polyhaven-island-tree-01", "x": 90, "z": -150, "rotationY": 4.68, "scale": 2.6 },
+      { "id": "polyhaven-fir-variant-b-03-right", "assetId": "polyhaven-fir-tree-01-variant-b", "x": 108, "z": -150, "rotationY": 0.94, "scale": 1.0 },
+
+      { "id": "polyhaven-fir-variant-c-03-left", "assetId": "polyhaven-fir-tree-01-variant-c", "x": -96, "z": -195, "rotationY": 2.61, "scale": 1.05 },
+      { "id": "polyhaven-pine-03-left", "assetId": "polyhaven-pine-tree-01", "x": -114, "z": -195, "rotationY": 0.78, "scale": 1.0 },
+      { "id": "polyhaven-fir-variant-b-03-mid-right", "assetId": "polyhaven-fir-tree-01-variant-b", "x": 96, "z": -195, "rotationY": 5.63, "scale": 1.05 },
+      { "id": "polyhaven-tree-small-03-right", "assetId": "polyhaven-tree-small-02", "x": 114, "z": -195, "rotationY": 2.44, "scale": 2.2 },
+
+      { "id": "polyhaven-island-04-left", "assetId": "polyhaven-island-tree-01", "x": -102, "z": -240, "rotationY": 3.14, "scale": 2.7 },
+      { "id": "polyhaven-fir-02-left", "assetId": "polyhaven-fir-tree-01", "x": -120, "z": -240, "rotationY": 1.32, "scale": 1.0 },
+      { "id": "polyhaven-island-04-right", "assetId": "polyhaven-island-tree-01", "x": 102, "z": -240, "rotationY": 0.58, "scale": 2.7 },
+      { "id": "polyhaven-pine-04-right", "assetId": "polyhaven-pine-tree-01", "x": 120, "z": -240, "rotationY": 4.17, "scale": 1.0 },
+
+      { "id": "polyhaven-tree-small-04-left", "assetId": "polyhaven-tree-small-02", "x": -108, "z": -285, "rotationY": 5.02, "scale": 2.3 },
+      { "id": "polyhaven-fir-variant-c-04-left", "assetId": "polyhaven-fir-tree-01-variant-c", "x": -126, "z": -285, "rotationY": 2.06, "scale": 1.05 },
+      { "id": "polyhaven-tree-small-04-right", "assetId": "polyhaven-tree-small-02", "x": 108, "z": -285, "rotationY": 1.84, "scale": 2.3 },
+      { "id": "polyhaven-fir-variant-b-04-right", "assetId": "polyhaven-fir-tree-01-variant-b", "x": 126, "z": -285, "rotationY": 4.92, "scale": 1.05 },
+
+      { "id": "polyhaven-island-05-left", "assetId": "polyhaven-island-tree-01", "x": -114, "z": -330, "rotationY": 4.02, "scale": 2.7 },
+      { "id": "polyhaven-pine-05-left", "assetId": "polyhaven-pine-tree-01", "x": -134, "z": -330, "rotationY": 1.08, "scale": 1.0 },
+      { "id": "polyhaven-island-05-right", "assetId": "polyhaven-island-tree-01", "x": 114, "z": -330, "rotationY": 1.02, "scale": 2.7 },
+      { "id": "polyhaven-fir-03-right", "assetId": "polyhaven-fir-tree-01", "x": 134, "z": -330, "rotationY": 4.46, "scale": 1.0 },
+
+      { "id": "polyhaven-fir-variant-b-05-left", "assetId": "polyhaven-fir-tree-01-variant-b", "x": -120, "z": -380, "rotationY": 0.26, "scale": 1.1 },
+      { "id": "polyhaven-tree-small-05-left", "assetId": "polyhaven-tree-small-02", "x": -138, "z": -380, "rotationY": 3.42, "scale": 2.3 },
+      { "id": "polyhaven-fir-variant-c-05-right", "assetId": "polyhaven-fir-tree-01-variant-c", "x": 120, "z": -380, "rotationY": 3.41, "scale": 1.1 },
+      { "id": "polyhaven-island-06-right", "assetId": "polyhaven-island-tree-01", "x": 138, "z": -380, "rotationY": 5.76, "scale": 2.8 },
+
+      { "id": "polyhaven-island-06-left", "assetId": "polyhaven-island-tree-01", "x": -128, "z": -430, "rotationY": 1.91, "scale": 2.8 },
+      { "id": "polyhaven-pine-06-left", "assetId": "polyhaven-pine-tree-01", "x": -142, "z": -430, "rotationY": 4.73, "scale": 1.0 },
+      { "id": "polyhaven-island-07-right", "assetId": "polyhaven-island-tree-01", "x": 128, "z": -430, "rotationY": 4.91, "scale": 2.8 },
+      { "id": "polyhaven-fir-04-right", "assetId": "polyhaven-fir-tree-01", "x": 142, "z": -430, "rotationY": 2.35, "scale": 1.05 }
+    ],
+    "scatter": [],
+    "assembly": [],
+    "edgeDressing": [],
+    "exclusions": []
+  }
+}
