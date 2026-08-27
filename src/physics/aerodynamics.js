@@ -1,4 +1,4 @@
-// Aerodynamics for the default modern, three-piece urethane ball.
+// Aerodynamics for a contemporary urethane golf ball.
 //
 // Provenance (not a hand tuned carry fit): USGA/R&A, "Determination of the
 // Aerodynamic Behaviour of Golf Balls for Iron Trajectories", Appendix C of
@@ -37,32 +37,30 @@ export const AERO_COEFFICIENT_TABLE = Object.freeze([
 
 export const AIR_VISCOSITY = 1.7894e-5; // kg/(m*s), 15 °C reference
 
-// One deliberately named ball rather than an anonymous global carry multiplier.
-// The published 2006 iron-flight fit remains the inspectable baseline below. Modern
-// low-spin driver flight needs more lift in the small-spin-parameter/high-Re corner;
-// this constrained correction approaches a smooth modern dimpled-ball curve there
-// and fades completely before iron/wedge spin parameters. It never extrapolates the
-// source table or changes the source API.
-export const MODERN_TOUR_AERO_PROFILE = Object.freeze({
-  id: 'modern-tour-urethane-v1',
-  source: AERO_SOURCE.id,
-  calibration: Object.freeze({
-    liftBase: 0.045,
-    liftSpinSlope: 1.1,
-    launchLiftBoost: 0.018,
-    launchLiftReynoldsStart: 160_000,
-    launchLiftReynoldsEnd: 195_000,
-    dragBase: 0.16,
-    dragScale: 0.10,
-    spinBlendStart: 0.12,
-    spinBlendEnd: 0.24,
-    reynoldsBlendStart: 70_000,
-    reynoldsBlendEnd: 160_000,
-  }),
+// Ferguson (2023), University of Waterloo, section 3.4, equation (3.15):
+// https://hdl.handle.net/10012/19337
+//
+// These coefficients were identified from 1,040 outdoor shots made with 2021
+// Titleist Pro V1 balls. GCQuad measured each complete launch state, FlightScope
+// X3 tracked the resulting flight, wind stayed below 1.3 m/s, and the shots span
+// lob wedge through driver (spin ratios 0.02..0.75). The held-out 20% validation
+// set produced 2.74 yd carry, 1.68 yd offline, and 1.28 yd apex mean absolute
+// errors. This replaces the old driver-corner correction with one function of
+// ball state. Club identity is neither accepted nor inspected by this profile.
+export const CONTEMPORARY_URETHANE_AERO_PROFILE = Object.freeze({
+  id: 'ferguson-2021-pro-v1-universal-v1',
+  source: 'https://hdl.handle.net/10012/19337',
+  observedSpinRatio: Object.freeze([0.02, 0.75]),
+  // A zero-spin continuation is well behaved. Above the observed envelope we
+  // hold the boundary value instead of extrapolating a quadratic indefinitely.
+  integrationSpinRatio: Object.freeze([0, 0.75]),
+  drag: Object.freeze([0.1304, 0.9287, -0.8259]),
+  lift: Object.freeze([0.0504, 1.2031, -1.1490]),
+  spinMomentSlope: 0.01,
 });
 
 export const AERO_PROFILES = Object.freeze({
-  modernTour: MODERN_TOUR_AERO_PROFILE,
+  contemporaryUrethane: CONTEMPORARY_URETHANE_AERO_PROFILE,
 });
 
 function finite(name, value) {
@@ -119,42 +117,26 @@ export function aerodynamicCoefficients(out, Re, theta) {
 // unsupported query, while integration remains total and bounded.  Because the
 // aerodynamic force is proportional to speed squared, its absolute contribution
 // still tends smoothly to zero during the terminal low-speed continuation.
-export function flightAerodynamicCoefficients(out, Re, theta, profile = MODERN_TOUR_AERO_PROFILE) {
+export function flightAerodynamicCoefficients(out, Re, theta, profile = CONTEMPORARY_URETHANE_AERO_PROFILE) {
   finite('Reynolds number', Re);
   finite('spin ratio', theta);
+  if (Re < 0 || theta < 0) throw new RangeError('Reynolds number and spin ratio must be >= 0');
+  if (profile?.id === CONTEMPORARY_URETHANE_AERO_PROFILE.id) {
+    const [minimum, maximum] = profile.integrationSpinRatio;
+    const boundedTheta = Math.min(maximum, Math.max(minimum, theta));
+    const thetaSquared = boundedTheta * boundedTheta;
+    out.cd = profile.drag[0] + profile.drag[1] * boundedTheta + profile.drag[2] * thetaSquared;
+    out.cl = profile.lift[0] + profile.lift[1] * boundedTheta + profile.lift[2] * thetaSquared;
+    return out;
+  }
+
   const reAxis = AERO_SOURCE.reynolds;
   const spinAxis = AERO_SOURCE.spinRatio;
   const boundedRe = Math.min(reAxis[reAxis.length - 1], Math.max(reAxis[0], Re));
   const boundedTheta = Math.min(spinAxis[spinAxis.length - 1], Math.max(spinAxis[0], theta));
   aerodynamicCoefficients(out, boundedRe, boundedTheta);
   if (profile == null || profile === AERO_SOURCE || profile.id === AERO_SOURCE.id) return out;
-  if (profile.id !== MODERN_TOUR_AERO_PROFILE.id) throw new RangeError(`unsupported aerodynamic profile "${profile.id}"`);
-
-  const c = profile.calibration;
-  const spinWeight = 1 - smootherstep(c.spinBlendStart, c.spinBlendEnd, boundedTheta);
-  const speedWeight = smootherstep(c.reynoldsBlendStart, c.reynoldsBlendEnd, boundedRe);
-  const weight = spinWeight * speedWeight;
-  const spinPower = Math.pow(Math.max(0, boundedTheta), 0.4);
-  // A spinning dimpled ball's high-Re launch regime is not represented by the
-  // source iron fit. Preserve the short, lift-dominant phase that makes a low-
-  // launch/high-spin driver begin flat and then visibly climb. The boost is a
-  // state-dependent Reynolds transition, not a time- or yardage-based force,
-  // and fades out before the middle of the trajectory.
-  const launchLift = c.launchLiftBoost * smootherstep(
-    c.launchLiftReynoldsStart,
-    c.launchLiftReynoldsEnd,
-    boundedRe,
-  );
-  const modernLift = c.liftBase + c.liftSpinSlope * boundedTheta + launchLift;
-  const modernDrag = c.dragBase + c.dragScale * spinPower;
-  out.cl += (modernLift - out.cl) * weight;
-  out.cd += (modernDrag - out.cd) * weight;
-  return out;
-}
-
-function smootherstep(edge0, edge1, value) {
-  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
-  return t * t * t * (t * (t * 6 - 15) + 10);
+  throw new RangeError(`unsupported aerodynamic profile "${profile?.id}"`);
 }
 
 export function liftCoefficient(Re, theta) {
@@ -171,7 +153,7 @@ const _coefficients = { cl: 0, cd: 0 };
 // ω × v gives the signed Magnus direction without a separate fixed spin axis.
 export function coefficientSnapshot(out, relativeVelocity, angularVelocity, rho, { radius }, {
   viscosity = AIR_VISCOSITY,
-  profile = MODERN_TOUR_AERO_PROFILE,
+  profile = CONTEMPORARY_URETHANE_AERO_PROFILE,
 } = {}) {
   const speed = relativeVelocity.length();
   if (speed < 1e-6) return Object.assign(out, { speed, reynolds: 0, spinRatio: 0, cl: 0, cd: 0 });

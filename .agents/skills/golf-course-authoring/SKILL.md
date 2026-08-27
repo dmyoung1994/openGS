@@ -16,7 +16,7 @@ Build the course as playable terrain, not a painted illustration.
 4. Read `references/realistic-design.md` for realistic work, `references/spectacle-design.md` for spectacle work, and both for hybrid work.
 5. Read `references/hazard-design.md` in full before creating, moving, resizing, or removing any hazard. Also read `references/bunker-design.md` before bunker geometry, placement, or sand-material work.
 6. Read `references/green-design.md` in full before creating, resizing, contouring, or revising a green or its surrounds.
-7. When operating through an agent, use the course-engine MCP tools or the in-app builder described in `references/engine.md` (`get_course`, `classify_point`, `validate_course`, `set_course`). NOTE: this engine has no vegetation/rock/prop catalog — the tree line is procedural — so `environment-kit.md` and `agent-environment-commands.md` describe a capability this engine does not expose; do not attempt catalog placement here.
+7. When operating through an agent, use the course-engine MCP tools or the in-app builder described in `references/engine.md` (`get_course`, `classify_point`, `classify_biome`, `validate_course`, `set_course`). The engine exposes catalog-backed environment records; use `golf-environment-vibe` for dressing. Route biome, coastline, ecological-region, beach, and course-edge transition requests through `golf-biome-transitions`.
 8. Read `references/visual-fidelity.md` before changing terrain rendering, surface materials, lighting, atmosphere, sky, or visual-detail systems.
 9. Preserve metre scale, height-field continuity, physics surface IDs, tee/cup reachability, and deterministic results.
 10. Prefer editable vector features for shaped hazards. Derive render and physics grids from those features.

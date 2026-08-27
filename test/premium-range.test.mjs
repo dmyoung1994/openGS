@@ -17,17 +17,17 @@ test('Premium Range is a separate long-range Augusta geometry test', () => {
   assert.deepEqual(first.greens.map(({ yards }) => yards), [40, 80, 120, 165, 215, 275, 335, 395, 450]);
   assert.equal(first.bunkers.length, 11);
   assert.equal(first.ponds.length, 0);
-  assert.equal(first.environment.objectBudget, 40);
-  assert.equal(first.environment.objectCount, 40);
+  assert.equal(first.environment.objectBudget, 280);
+  assert.equal(first.environment.objectCount, 252);
   assert.equal(first.environment.placements.length, 40);
+  assert.equal(first.environment.scatter.reduce((sum, record) => sum + record.count, 0), 180);
+  assert.equal(first.environment.assembly.reduce((sum, record) => sum + record.count, 0), 32);
   assert.deepEqual([...new Set(first.environment.placements.map(({ assetId }) => assetId))].sort(), [
-    'polyhaven-fir-tree-01',
-    'polyhaven-fir-tree-01-variant-b',
-    'polyhaven-fir-tree-01-variant-c',
     'polyhaven-island-tree-01',
-    'polyhaven-pine-tree-01',
-    'polyhaven-tree-small-02',
+    'polyhaven-island-tree-02',
+    'polyhaven-tree-small-02-hero',
   ]);
+  assert.ok(first.environment.assembly.some(({ assetIds }) => assetIds.includes('polyhaven-island-tree-02')));
   assert.equal(first.corridor.c0, 22);
   assert.equal(first.corridor.k, 0.055);
 });
@@ -35,8 +35,8 @@ test('Premium Range is a separate long-range Augusta geometry test', () => {
 test('Premium Range uses the new Poly Haven tree kit rather than legacy runtime packs', async () => {
   const catalog = JSON.parse(await readFile(new URL('../public/assets/environment/catalog.json', import.meta.url), 'utf8'));
   const premiumAssets = new Set(normalizeCourse(structuredClone(premiumCourse)).environment.placements.map(({ assetId }) => assetId));
-  assert.ok(premiumAssets.has('polyhaven-fir-tree-01'));
-  assert.ok(premiumAssets.has('polyhaven-pine-tree-01'));
+  assert.ok(premiumAssets.has('polyhaven-island-tree-02'));
+  assert.ok(premiumAssets.has('polyhaven-tree-small-02-hero'));
   for (const assetId of premiumAssets) {
     const asset = catalog.assets.find((candidate) => candidate.id === assetId);
     assert.ok(asset, `${assetId} must exist in the runtime catalog`);

@@ -1,32 +1,55 @@
 import {
-  BufferGeometry, Color, DataTexture, Float32BufferAttribute, Group, Mesh, Uint32BufferAttribute,
+  BufferGeometry, Color, DataTexture, DoubleSide, Float32BufferAttribute, Group, Mesh, Uint32BufferAttribute,
   LinearMipmapLinearFilter, RepeatWrapping, SRGBColorSpace, TextureLoader,
 } from 'three';
-import { MeshStandardNodeMaterial } from 'three/webgpu';
+import { MeshBasicNodeMaterial, MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   attribute, cameraPosition, float, mix, mx_noise_float, normalGeometry, normalWorld, positionGeometry, positionWorld,
-  smoothstep, texture, transformNormalToView, varying, vec2, vec3, vec4, vertexColor,
+  oneMinus, smoothstep, texture, transformNormalToView, varying, vec2, vec3, vec4, vertexColor,
 } from 'three/tsl';
 import { Noise } from '../util/noise.js';
 import { createRng, deriveSeed } from '../util/random.js';
 import { NORTH_CASCADES_DEM } from '../terrain/northCascadesDem.js';
 import { disposeWebGPUGeometries } from './WebGPUResourceDisposal.js';
+import { acquireWaterDetailTexture, releaseWaterDetailTexture, sampleWaterDetail } from './WaterDetail.js';
+import {
+  acquireCoastSandTextures, COAST_SAND_SPECULAR_INTENSITY, coastTextureBlendWeights,
+  releaseCoastSandTextures,
+  sampleCoastSand,
+} from './CoastSandDetail.js';
+import { getBiomeDefinition } from '../course/BiomeRegistry.js';
 
 const _backdropTextureLoader = new TextureLoader();
+
+// The maritime course is a coastal site. A short authored apron carries the
+// playable boundary down to the waterline, then one continuous ocean owns the
+// skyline. The old 440 m procedural hill ring made every camera look inland and
+// exposed its coarse 18 m colour grid whenever the broadcast camera rose.
+const MARITIME_COAST_OUTER = 148;
+const MARITIME_OCEAN_NEAR_OUTER = 132;
+const MARITIME_OCEAN_INNER = MARITIME_OCEAN_NEAR_OUTER;
+const MARITIME_OCEAN_OUTER = 5200;
+const MARITIME_COAST_SPACING = 3.5;
+const MARITIME_OCEAN_NEAR_SPACING = 4;
+const MARITIME_OCEAN_SPACING = 96;
 
 // Render-only world continuation outside the authoritative physics terrain.
 // A shared height sampler owns every patch and distance band, so seams cannot form.
 // The playable heightfield remains the only collision/surface source.
 export class BackdropTerrain {
-  constructor({ terrain, bounds, seed, biome = 'temperate-maritime', environment = null, renderer = null }) {
+  constructor({ terrain, bounds, seed, biome = 'temperate-maritime', biomeField = null, environment = null, renderer = null }) {
     this.group = new Group();
     this.group.name = `${biome}-procedural-world`;
     this.biome = biome;
     this.seed = seed >>> 0;
     this.environment = environment;
     this.renderer = renderer;
+    this.biomeField = biomeField;
+    this.group.userData.biomeTransitionField = biomeField;
 
-    if (biome === 'temperate-alpine') this._buildAlpine(terrain, bounds);
+    const definition = getBiomeDefinition(biome);
+    if (!definition) throw new Error(`BackdropTerrain requires a registered biome: ${biome}`);
+    if (definition.backdrop === 'alpine') this._buildAlpine(terrain, bounds);
     else this._buildMaritime(terrain, bounds);
   }
 
@@ -125,16 +148,81 @@ export class BackdropTerrain {
 
   _buildMaritime(terrain, bounds) {
     const noise = new Noise(this.seed ^ 0x7a31c4e9);
-    const extent = 440;
-    const sample = (x, z) => sampleMaritime(terrain, bounds, noise, x, z, extent);
-    const material = worldMaterial('distant-temperate-maritime-ground', 'temperate-maritime');
-    this.assetsReady = Promise.resolve();
-    for (const patch of ringPatches(bounds, 0, extent)) {
-      const mesh = new Mesh(buildPatch(...patch, 18, sample), material);
-      mesh.name = 'maritime-distant-terrain';
+    const seaLevel = maritimeSeaLevel(terrain, bounds);
+    const sample = maritimeCoastSampler(terrain, bounds, noise, seaLevel, this.biomeField);
+    this.group.userData.backdropSource = 'maritime-coast-ocean';
+    this.group.userData.authoringSampler = sample;
+    this.group.userData.seaLevel = seaLevel;
+    this.group.userData.oceanHorizon = true;
+
+    const oceanDetailAsset = acquireWaterDetailTexture();
+    const oceanDetail = oceanDetailAsset.texture;
+    this._oceanDetailTexture = oceanDetail;
+
+    const coastSandAsset = acquireCoastSandTextures();
+    const { albedoRoughness: sandAlbedoRoughness, normal: sandNormal } = coastSandAsset.textures;
+    this._coastSandTextures = coastSandAsset.textures;
+    this.assetsReady = Promise.all([oceanDetailAsset.ready, coastSandAsset.ready]);
+
+    const coastMaterial = worldMaterial(
+      'maritime-coastal-apron', 'temperate-maritime', {
+        environment: this.environment,
+        coastalTransitions: this.biomeField?.hasTransitions === true,
+        bounds,
+        sandAlbedoRoughness, sandNormal,
+      },
+    );
+    // The apron intentionally overlaps the clipmap by 12 m. Bias only this
+    // continuation away from the camera so the authoritative terrain wins every
+    // shared depth sample; otherwise alternating clipmap/apron triangles leave a
+    // one-pixel serrated seam even after their colors and normals agree.
+    coastMaterial.polygonOffset = true;
+    coastMaterial.polygonOffsetFactor = 1;
+    coastMaterial.polygonOffsetUnits = 1;
+    // Overlap the playable edge with the exact same height authority. The old
+    // edge-to-edge ring left two independently rasterized meshes meeting on one
+    // line; at a grazing broadcast angle that line could lose coverage and expose
+    // the sky. The apron reaches below sea level before it ends, so the ocean can
+    // overlap it without a missing vertical cliff face or a coplanar z-fight.
+    for (const patch of ringPatches(bounds, -MARITIME_JOIN_OVERLAP, MARITIME_COAST_OUTER)) {
+      const mesh = new Mesh(buildPatch(...patch, MARITIME_COAST_SPACING, sample), coastMaterial);
+      mesh.name = 'maritime-coastal-apron';
       mesh.receiveShadow = false;
       mesh.castShadow = false;
       mesh.renderOrder = -2;
+      this.group.add(mesh);
+    }
+
+    const oceanSample = maritimeOceanSampler(seaLevel, this.biomeField);
+    const oceanMaterial = maritimeOceanMaterial({
+      environment: this.environment, detailTexture: oceanDetail, bounds, seaLevel,
+    });
+    const hasVisibleOcean = (patch) => {
+      if (!this.biomeField?.hasTransitions) return true;
+      const x = (patch[0] + patch[1]) * 0.5, z = (patch[2] + patch[3]) * 0.5;
+      const weights = this.biomeField.sample(x, z).weights;
+      return weights.shallowShelf + weights.deepOcean > 0.01;
+    };
+    const nearOceanPatches = ringPatches(bounds, 0, MARITIME_OCEAN_NEAR_OUTER)
+      .filter(hasVisibleOcean);
+    for (const patch of nearOceanPatches) {
+      const mesh = new Mesh(buildPatch(
+        ...patch, MARITIME_OCEAN_NEAR_SPACING, oceanSample,
+      ), oceanMaterial);
+      mesh.name = 'maritime-ocean-near-shore';
+      mesh.receiveShadow = false;
+      mesh.castShadow = false;
+      mesh.renderOrder = -3;
+      this.group.add(mesh);
+    }
+    const oceanPatches = ringPatches(bounds, MARITIME_OCEAN_INNER, MARITIME_OCEAN_OUTER)
+      .filter(hasVisibleOcean);
+    for (const patch of oceanPatches) {
+      const mesh = new Mesh(buildPatch(...patch, MARITIME_OCEAN_SPACING, oceanSample), oceanMaterial);
+      mesh.name = 'maritime-ocean-horizon';
+      mesh.receiveShadow = false;
+      mesh.castShadow = false;
+      mesh.renderOrder = -3;
       this.group.add(mesh);
     }
   }
@@ -150,6 +238,8 @@ export class BackdropTerrain {
     else for (const geometry of geometries) geometry.dispose();
     for (const material of materials) material.dispose();
     for (const texture of this._rockTextures || []) texture.dispose();
+    if (this._coastSandTextures) releaseCoastSandTextures(this._coastSandTextures);
+    if (this._oceanDetailTexture) releaseWaterDetailTexture(this._oceanDetailTexture);
     this.group.clear();
     this.renderer = null;
   }
@@ -990,24 +1080,208 @@ function alpineSampler(terrain, bounds, seed, composition) {
   return sampler;
 }
 
-function sampleMaritime(terrain, bounds, noise, x, z, extent) {
+export function maritimeSeaLevel(terrain, bounds, samplesPerEdge = 64) {
+  const heights = [];
+  for (let index = 0; index <= samplesPerEdge; index += 1) {
+    const t = index / samplesPerEdge;
+    const x = bounds.minX + (bounds.maxX - bounds.minX) * t;
+    const z = bounds.minZ + (bounds.maxZ - bounds.minZ) * t;
+    heights.push(
+      terrain.heightAt(x, bounds.minZ), terrain.heightAt(x, bounds.maxZ),
+      terrain.heightAt(bounds.minX, z), terrain.heightAt(bounds.maxX, z),
+    );
+  }
+  // Keep the whole maintained course dry while giving the boundary enough fall
+  // to read as a real coastal shelf. The sea is visual-only; gameplay continues
+  // to use the authoritative terrain and authored pond collision.
+  return Math.min(...heights) - 2.2;
+}
+
+// Authoring/diagnostic entry point for the same continuous sampler used by the
+// rendered maritime apron. This remains render-only: terrain.heightAt continues
+// to be the sole gameplay/collision height authority.
+export function sampleMaritimeWorld({ terrain, bounds, seed, biomeField = null, x, z }) {
+  const noise = new Noise((seed >>> 0) ^ 0x7a31c4e9);
+  const seaLevel = maritimeSeaLevel(terrain, bounds);
+  return maritimeCoastSampler(terrain, bounds, noise, seaLevel, biomeField)(x, z);
+}
+
+const MARITIME_TRANSITION_COLORS = Object.freeze({
+  primary: new Color(0x637b4e),
+  strandGrass: new Color(0x87915e),
+  dune: new Color(0xaea47d),
+  drySand: new Color(0xd0bd91),
+  // Wet sand is visibly compact and darker than the dry beach, but it must
+  // still retain warm substrate colour from broadcast/high-oblique cameras;
+  // the former near-charcoal value read as a black moat around the course.
+  wetSand: new Color(0xb09b78),
+  shallowShelf: new Color(0x768477),
+  deepOcean: new Color(0x294a52),
+  alpine: new Color(0x637b4e),
+});
+
+function maritimeTransitionColor(weights) {
+  const color = new Color(0, 0, 0);
+  for (const [name, source] of Object.entries(MARITIME_TRANSITION_COLORS)) {
+    const weight = weights[name] || 0;
+    color.r += source.r * weight;
+    color.g += source.g * weight;
+    color.b += source.b * weight;
+  }
+  return color;
+}
+
+function maritimeCoastSampler(terrain, bounds, noise, seaLevel, biomeField = null) {
+  const sample = (x, z, heightOnly = false) => {
   const cx = clamp(x, bounds.minX, bounds.maxX);
   const cz = clamp(z, bounds.minZ, bounds.maxZ);
   const distance = Math.hypot(x - cx, z - cz);
-  const blend = smootherstep(0, 150, distance);
-  const far = clamp(distance / extent, 0, 1);
   const edgeHeight = terrain.heightAt(cx, cz);
-  // Augusta-style parkland enclosure: low, warm berms and a restrained hedge
-  // horizon. The old maritime profile was a dark, almost planar wall under the
-  // blue sky; its relief and palette now stay subordinate to the playable turf.
-  const broad = noise.fbm(x * 0.0031, z * 0.0031, { octaves: 4 }) * (5 + 6 * far);
-  const ridge = noise.ridged(x * 0.0018, z * 0.0022, { octaves: 3 }) * (4 + 9 * far);
-  const backLift = z < bounds.minZ ? smootherstep(40, extent * 0.8, bounds.minZ - z) * 5 : 0;
-  const height = edgeHeight * (1 - blend) + (broad + ridge - 3 + backLift) * blend;
-  const color = new Color(0x526840).lerp(new Color(0x8a966c), 0.30 + far * 0.46);
-  color.multiplyScalar(0.98 + noise.noise2(x * 0.018, z * 0.018) * 0.045);
-  return { height, color, rock: far * 0.25, snow: 0, scree: far * 0.12 };
+  // Continue the actual boundary slope into the backdrop before handing off to
+  // the coastal fall. Using a clamped boundary height alone makes the apron
+  // normal flat while the playable terrain still has grade.
+  const slopeStep = 4;
+  const edgeSlopeX = (
+    terrain.heightAt(clamp(cx + slopeStep, bounds.minX, bounds.maxX), cz)
+    - terrain.heightAt(clamp(cx - slopeStep, bounds.minX, bounds.maxX), cz)
+  ) / (slopeStep * 2);
+  const edgeSlopeZ = (
+    terrain.heightAt(cx, clamp(cz + slopeStep, bounds.minZ, bounds.maxZ))
+    - terrain.heightAt(cx, clamp(cz - slopeStep, bounds.minZ, bounds.maxZ))
+  ) / (slopeStep * 2);
+  const edgeContinuation = edgeHeight + edgeSlopeX * (x - cx) + edgeSlopeZ * (z - cz);
+  // Vary the dry shelf width in world space so the shoreline cannot inherit the
+  // course rectangle. Broad coves and headlands remain deterministic and the
+  // outer apron always finishes submerged beneath the ocean mesh.
+  const downrangeHeadland = z < bounds.minZ
+    ? Math.exp(-0.5 * (x / 72) ** 2) * 54
+    : 0;
+  const coastWidth = 82
+    + noise.fbm(x * 0.0072, z * 0.0064, { octaves: 3 }) * 24
+    + Math.sin(x * 0.014 - z * 0.004) * 11
+    + downrangeHeadland;
+  const shore = smootherstep(5, coastWidth, distance);
+  const shelfBreakup = noise.fbm(x * 0.018, z * 0.018, { octaves: 3 })
+    * 0.34 * (1 - shore);
+  const submergedShelf = seaLevel - 0.85;
+  const transition = biomeField?.hasTransitions ? biomeField.sample(x, z).weights : null;
+  const waterWeight = transition
+    ? clamp(transition.wetSand * 0.25 + transition.shallowShelf + transition.deepOcean, 0, 1)
+      * smootherstep(0, 6, distance)
+    : shore;
+  // The overlap inside the course exists only to close raster coverage. Keep all
+  // added relief exactly zero there and at the authored edge, then ease into a
+  // modest, oblique dune field outside it. The zero-value/zero-slope fade makes
+  // the visual continuation meet authoritative terrain without a ridge or normal
+  // discontinuity, while the semantic dune weight keeps relief out of dry/wet
+  // sand and water bands.
+  const coastReliefFade = transition ? smootherstep(0, 4.5, distance) : 1;
+  const duneAlong = x * 0.788 + z * 0.616;
+  const duneAcross = z * 0.788 - x * 0.616;
+  const duneRidges = noise.ridged(duneAlong * 0.030, duneAcross * 0.014, {
+    octaves: 3, lacunarity: 1.91, gain: 0.48,
+  });
+  const duneWisps = noise.fbm(
+    duneAlong * 0.071 + duneAcross * 0.009,
+    duneAcross * 0.026 - duneAlong * 0.006,
+    { octaves: 2, lacunarity: 2.17, gain: 0.43 },
+  );
+  const duneRelief = transition
+    ? transition.dune * coastReliefFade
+      * (0.38 + smootherstep(0.18, 0.88, duneRidges) * 0.54 + duneWisps * 0.10)
+    : 0;
+  // Preserve the pre-transition shelf breakup exactly when semantic transitions
+  // are absent. With a transition active it shares the same edge fade as dunes,
+  // closing the previously visible sub-metre seam at the playable boundary.
+  const shelfRelief = shelfBreakup * (1 - waterWeight)
+    * (transition ? coastReliefFade : 1);
+  const height = edgeContinuation * (1 - waterWeight) + submergedShelf * waterWeight
+    + shelfRelief + duneRelief * (1 - waterWeight);
+  if (heightOnly) return height;
+  const coastProgress = clamp(distance / Math.max(1, coastWidth), 0, 1);
+  const dryCoast = transition
+    ? clamp(transition.dune * 0.46 + transition.drySand + transition.wetSand, 0, 1)
+    : smootherstep(0.18, 0.92, coastProgress);
+  const color = transition
+    ? maritimeTransitionColor(transition)
+    : new Color(0x637b4e).lerp(new Color(0xaa9a76), dryCoast * 0.82);
+  color.multiplyScalar(1.02 + noise.noise2(x * 0.035, z * 0.035) * 0.025);
+  return {
+    height, color, duneRelief,
+    // Reuse the existing backdrop attribute streams rather than adding another
+    // material/geometry path: rock carries dune substrate, scree carries dry
+    // sand, wash carries wet sand, and the otherwise-unused maritime snow channel
+    // carries shallow shelf substrate. This keeps the photoscan continuous until
+    // the separately blended ocean surface takes visual ownership.
+    rock: transition ? transition.dune : dryCoast * 0.22,
+    snow: transition ? transition.shallowShelf : 0,
+    scree: transition ? transition.drySand : dryCoast * 0.16,
+    cliff: smootherstep(0.38, 0.76, coastProgress)
+      * (1 - smootherstep(0.76, 0.98, coastProgress)) * 0.14,
+    treeline: transition ? clamp(transition.primary + transition.strandGrass + transition.dune * 0.55, 0, 1) : 0,
+    wash: transition ? transition.wetSand : 0,
+  };
+  };
+  sample.heightAt = (x, z) => sample(x, z, true);
+  // Match the playable clipmap's local derivative at the shared edge. Alpine
+  // kilometre-scale shells deliberately use the 64 m default below, but applying
+  // that span to a 3.5 m beach apron averaged the whole dune shoulder into one
+  // different normal and exposed the mesh handoff as a lighting line.
+  sample.normalStep = terrain.renderSpacing || 0.6;
+  sample.normalAt = (x, z) => {
+    const step = sample.normalStep;
+    const coastX = sample.heightAt(x - step, z) - sample.heightAt(x + step, z);
+    const coastZ = sample.heightAt(x, z - step) - sample.heightAt(x, z + step);
+    const coastLength = Math.hypot(coastX, step * 2, coastZ);
+    const coast = [coastX / coastLength, step * 2 / coastLength, coastZ / coastLength];
+    const cx = clamp(x, bounds.minX, bounds.maxX);
+    const cz = clamp(z, bounds.minZ, bounds.maxZ);
+    const edge = terrain.normalAt ? terrain.normalAt(cx, cz) : (() => {
+      const ex = terrain.heightAt(cx - step, cz) - terrain.heightAt(cx + step, cz);
+      const ez = terrain.heightAt(cx, cz - step) - terrain.heightAt(cx, cz + step);
+      const length = Math.hypot(ex, step * 2, ez);
+      return { x: ex / length, y: step * 2 / length, z: ez / length };
+    })();
+    const distance = Math.hypot(x - cx, z - cz);
+    // The apron and playable clipmap overlap for 12 m. Match the authoritative
+    // terrain normal exactly throughout the shared edge, then hand off to the
+    // descending coast over a second physical band. Without this normal ownership
+    // rule, the two meshes could share albedo and roughness yet catch different
+    // proportions of the warm key and cool sky on the very first exterior pixel.
+    const coastWeight = smootherstep(3.5, 15.5, distance);
+    const nx = edge.x * (1 - coastWeight) + coast[0] * coastWeight;
+    const ny = edge.y * (1 - coastWeight) + coast[1] * coastWeight;
+    const nz = edge.z * (1 - coastWeight) + coast[2] * coastWeight;
+    const inverseLength = 1 / Math.hypot(nx, ny, nz);
+    return [nx * inverseLength, ny * inverseLength, nz * inverseLength];
+  };
+  return sample;
 }
+
+function maritimeOceanSampler(seaLevel, biomeField = null) {
+  const color = new Color(0x0a3347);
+  const heightAt = (x, z) => {
+    if (!biomeField?.hasTransitions) return seaLevel;
+    const weights = biomeField.sample(x, z).weights;
+    const marineWeight = clamp(
+      weights.wetSand * 0.12 + weights.shallowShelf + weights.deepOcean,
+      0, 1,
+    );
+    // Keep the same water surface below dry substrate, then let it emerge
+    // continuously through the semantic shelf. A fine near-shore mesh samples
+    // this authority; the coarse horizon ring begins only after the blend.
+    const emergence = smootherstep(0.02, 0.38, marineWeight);
+    return seaLevel - (1 - emergence) * 3.2;
+  };
+  const sample = (x, z) => ({ height: heightAt(x, z), color, rock: 0, snow: 0, scree: 0 });
+  sample.heightAt = heightAt;
+  sample.bakesVertexColor = false;
+  return sample;
+}
+
+// The continuation and playable terrain share this much plan-view coverage so
+// their rasterized edge is a real overlap rather than a one-pixel adjacency.
+const MARITIME_JOIN_OVERLAP = 12;
 
 // The baked square covers the outer alpine rings (about 7.6 km across). Clamp
 // rather than repeat at its edge: repetition would make a visible tiled horizon
@@ -1368,6 +1642,11 @@ class AtmosphericTerrainMaterial extends MeshStandardNodeMaterial {
   setupOutput(builder, outputNode) {
     if (!this.terrainEnvironment) return super.setupOutput(builder, outputNode);
     const toCamera = cameraPosition.sub(positionWorld);
+    // The shared atmospheric helper normalizes this direction. Clamp the distance
+    // away from the camera-origin singularity as well; this matters on the near
+    // edge of the shell and on grazing views where an interpolated world position
+    // can otherwise produce a one-frame direction spike.
+    const atmosphericDistance = toCamera.length().max(0.5);
     // The shell's authored faces sit behind a deliberately deep valley. Apply the
     // same chromatic transmittance as every other environment-lit surface, after
     // lighting, so geology is not privately graded by this material.
@@ -1375,7 +1654,6 @@ class AtmosphericTerrainMaterial extends MeshStandardNodeMaterial {
     // atmosphere cheat that left the shell out of sync with the shared sky,
     // water, and foliage transmittance and made the massif read as a pasted
     // blue-gray card. Every consumer now traverses the same physical path.
-    const atmosphericDistance = toCamera.length();
     return vec4(
       this.terrainEnvironment.aerialPerspective(outputNode.rgb, toCamera, atmosphericDistance),
       outputNode.a,
@@ -1383,15 +1661,173 @@ class AtmosphericTerrainMaterial extends MeshStandardNodeMaterial {
   }
 }
 
+// The playable terrain is a physical node material. The near coastal continuation
+// must use the same lighting model or a shared albedo/roughness sample still changes
+// value exactly at mesh ownership. Atmosphere fades in only after the overlap, so the
+// edge is identical to the playable material and the distant apron still joins the
+// ocean/horizon through the shared environment.
+class AtmosphericCoastMaterial extends MeshPhysicalNodeMaterial {
+  setupOutput(builder, outputNode) {
+    if (!this.terrainEnvironment || !this.coastBounds) {
+      return super.setupOutput(builder, outputNode);
+    }
+    const bounds = this.coastBounds;
+    const outsideX = positionWorld.x.sub(bounds.maxX)
+      .max(float(bounds.minX).sub(positionWorld.x)).max(0);
+    const outsideZ = positionWorld.z.sub(bounds.maxZ)
+      .max(float(bounds.minZ).sub(positionWorld.z)).max(0);
+    const edgeDistance = outsideX.max(outsideZ);
+    const atmosphereWeight = smoothstep(8, 42, edgeDistance);
+    const toCamera = cameraPosition.sub(positionWorld);
+    const atmosphericDistance = toCamera.length().max(0.5);
+    const atmospheric = this.terrainEnvironment.aerialPerspective(
+      outputNode.rgb, toCamera, atmosphericDistance,
+    );
+    return vec4(mix(outputNode.rgb, atmospheric, atmosphereWeight), outputNode.a);
+  }
+}
+
+class AtmosphericOceanMaterial extends MeshBasicNodeMaterial {
+  setupOutput(builder, outputNode) {
+    if (!this.oceanEnvironment) return super.setupOutput(builder, outputNode);
+    const toCamera = cameraPosition.sub(positionWorld);
+    const atmosphericDistance = toCamera.length().max(0.5);
+    return vec4(
+      this.oceanEnvironment.aerialPerspective(outputNode.rgb, toCamera, atmosphericDistance),
+      outputNode.a,
+    );
+  }
+}
+
+function maritimeOceanMaterial({ environment, detailTexture, bounds }) {
+  const material = new AtmosphericOceanMaterial({
+    color: 0xffffff,
+    side: DoubleSide,
+    transparent: false,
+    depthWrite: true,
+    depthTest: true,
+  });
+  material.oceanEnvironment = environment;
+  material.fog = false;
+
+  const time = environment?.time ?? float(0);
+  const vertexXZ = vec2(positionGeometry.x, positionGeometry.z);
+  const calmDirection = vec2(0.86, 0.51);
+  const windVector = environment?.baseWind?.xz ?? calmDirection;
+  const windSpeed = windVector.length();
+  const windDirection = mix(
+    calmDirection,
+    windVector.div(windSpeed.max(0.2)),
+    smoothstep(0.02, 0.20, windSpeed),
+  ).normalize();
+  const crossDirection = vec2(windDirection.y.negate(), windDirection.x);
+  const swellAmplitude = windSpeed.mul(0.018).add(0.16).clamp(0.16, 0.48);
+  const vertexPhaseA = vertexXZ.dot(windDirection).mul(0.024).sub(time.mul(0.42));
+  const vertexPhaseB = vertexXZ.dot(crossDirection.mul(0.82).add(windDirection.mul(0.18)).normalize())
+    .mul(0.039).sub(time.mul(0.58)).add(2.1);
+  const vertexPhaseC = vertexXZ.dot(vec2(-0.38, 0.925)).mul(0.071)
+    .sub(time.mul(0.74)).add(4.4);
+  const vertexHeight = vertexPhaseA.sin().mul(swellAmplitude)
+    .add(vertexPhaseB.sin().mul(swellAmplitude.mul(0.42)))
+    .add(vertexPhaseC.sin().mul(swellAmplitude.mul(0.16)));
+  const vertexOutsideX = positionGeometry.x.sub(bounds.maxX)
+    .max(float(bounds.minX).sub(positionGeometry.x)).max(0);
+  const vertexOutsideZ = positionGeometry.z.sub(bounds.maxZ)
+    .max(float(bounds.minZ).sub(positionGeometry.z)).max(0);
+  const vertexOffshoreDistance = vertexOutsideX.max(vertexOutsideZ);
+  // The fine shelf and coarse horizon meshes meet at 132 m. Flatten geometric
+  // swell through that LOD handoff so independently tessellated edges share the
+  // exact same plane; fragment normals retain the continuous water response.
+  const vertexWaveVisibility = oneMinus(smoothstep(104, 120, vertexOffshoreDistance))
+    .max(smoothstep(146, 162, vertexOffshoreDistance));
+  material.positionNode = vec3(
+    positionGeometry.x,
+    positionGeometry.y.add(vertexHeight.mul(vertexWaveVisibility)),
+    positionGeometry.z,
+  );
+
+  const worldXZ = vec2(positionWorld.x, positionWorld.z);
+  const phaseA = worldXZ.dot(windDirection).mul(0.024).sub(time.mul(0.42));
+  const directionB = crossDirection.mul(0.82).add(windDirection.mul(0.18)).normalize();
+  const phaseB = worldXZ.dot(directionB).mul(0.039).sub(time.mul(0.58)).add(2.1);
+  const directionC = vec2(-0.38, 0.925);
+  const phaseC = worldXZ.dot(directionC).mul(0.071).sub(time.mul(0.74)).add(4.4);
+  let slope = windDirection.mul(phaseA.cos().mul(swellAmplitude).mul(0.024));
+  slope = slope.add(directionB.mul(phaseB.cos().mul(swellAmplitude).mul(0.42 * 0.039)));
+  slope = slope.add(directionC.mul(phaseC.cos().mul(swellAmplitude).mul(0.16 * 0.071)));
+
+  // The shared neutral detail field is sampled at two rotated physical scales.
+  // Explicit derivative-selected mips keep the multi-kilometre surface stable at
+  // grazing angles; the ocean never turns into repeating high-frequency glitter.
+  const detail = sampleWaterDetail(detailTexture, worldXZ, {
+    broadScale: 0.048,
+    fineScale: 0.31,
+    broadFade: [1.2, 8.0],
+    fineFade: [0.12, 1.5],
+    broadAmplitude: 0.10,
+    fineAmplitude: 0.055,
+  });
+  const footprint = detail.footprint;
+  slope = slope.add(detail.slope);
+  const worldNormal = vec3(slope.x.negate(), 1, slope.y.negate()).normalize();
+  material.normalNode = transformNormalToView(worldNormal);
+
+  const outsideX = positionWorld.x.sub(bounds.maxX)
+    .max(float(bounds.minX).sub(positionWorld.x)).max(0);
+  const outsideZ = positionWorld.z.sub(bounds.maxZ)
+    .max(float(bounds.minZ).sub(positionWorld.z)).max(0);
+  const offshoreDistance = outsideX.max(outsideZ);
+  const deepWater = smoothstep(40, 450, offshoreDistance);
+  const detailValue = detail.sediment;
+  const shelfColor = vec3(0.018, 0.130, 0.150);
+  const oceanColor = vec3(0.006, 0.055, 0.095);
+  const body = mix(shelfColor, oceanColor, deepWater)
+    .mul(detailValue.sub(0.5).mul(0.07).add(0.98));
+
+  const toCamera = cameraPosition.sub(positionWorld).normalize();
+  const viewDotNormal = worldNormal.dot(toCamera).max(0);
+  const reflectedDirection = toCamera.negate().reflect(worldNormal).normalize();
+  const sky = environment
+    ? environment.skyRadiance(reflectedDirection, { includeSun: false }).clamp(0, 1.4)
+    : vec3(0.20, 0.36, 0.52);
+  const fresnel = float(0.022).add(oneMinus(viewDotNormal).pow(5).mul(0.72)).clamp(0.022, 0.76);
+  const reflection = sky.mul(fresnel);
+  const sunAlignment = environment
+    ? reflectedDirection.dot(environment.sunDirection.normalize()).clamp(0, 1)
+    : float(0);
+  const sunGlint = environment
+    ? smoothstep(0.985, 0.9997, sunAlignment).pow(3)
+      .mul(environment.sunColor)
+      .mul(environment.sunIlluminanceScale.max(0).pow(0.35))
+      .mul(0.24)
+    : vec3(0);
+  const whitecap = smoothstep(7.0, 12.5, windSpeed)
+    .mul(smoothstep(0.80, 0.96, detail.crest))
+    .mul(detail.broadVisibility).mul(0.10);
+  material.colorNode = body.mul(oneMinus(fresnel.mul(0.42)))
+    .add(reflection).add(sunGlint).add(vec3(0.50, 0.62, 0.63).mul(whitecap));
+  material.name = 'maritime-ocean-atmospheric-water';
+  material.needsUpdate = true;
+  return material;
+}
+
 function worldMaterial(name, biome, {
   environment = null, snowline = 400, bounds = null,
-  rockTexture = null, rockNormalTexture = null,
+  rockTexture = null, rockNormalTexture = null, coastalTransitions = false,
+  sandAlbedoRoughness = null, sandNormal = null,
 } = {}) {
-  const alpine = biome === 'temperate-alpine';
+  const alpine = getBiomeDefinition(biome)?.backdrop === 'alpine';
   // The maritime continuation still bakes a cheap per-vertex albedo; only the
   // alpine shell classifies per pixel, because only it is a mountain.
-  const material = new AtmosphericTerrainMaterial({
-    color: 0xffffff, vertexColors: !alpine, roughness: 0.94, metalness: 0,
+  const MaterialClass = !alpine && coastalTransitions
+    ? AtmosphericCoastMaterial
+    : AtmosphericTerrainMaterial;
+  const material = new MaterialClass({
+    // worldMaterial consumes vertexColor() explicitly in its maritime base. Leaving
+    // the built-in flag enabled multiplies that same baked colour a second time after
+    // colorNode resolution, which turned the exterior half of one shared sand scan
+    // brown at the terrain/backdrop ownership line.
+    color: 0xffffff, vertexColors: false, roughness: 0.94, metalness: 0,
     // Band A/B are now one watertight ring plus a bounded ordered overlap; a
     // material-wide polygon offset would perturb both surfaces independently at
     // kilometre depth and can reintroduce sub-pixel join specks.
@@ -1401,18 +1837,78 @@ function worldMaterial(name, biome, {
     material.terrainEnvironment = environment;
     material.fog = false;
   }
+  if (material instanceof AtmosphericCoastMaterial) material.coastBounds = bounds;
   const world = positionWorld;
   const geology = attribute('backdropGeology', 'vec4');
   const seed = alpine ? 17.31 : 29.17;
 
   if (!alpine) {
-    // Maritime: unchanged low-cost response. One broad lithology field over the
-    // baked vertex colour is all this band has ever needed.
+    // Maritime: keep the same low-cost PBR path, but do not let the 18 m vertex
+    // grid become a single broad colour card at the hedge horizon. The material
+    // owns a restrained 520 m / 120 m / 24 m frequency hierarchy; each finer band
+    // is derivative- and grazing-aware so it enriches the parkland enclosure
+    // without becoming screen-space noise.
     const lithology = mx_noise_float(vec3(world.x.mul(0.0041), world.z.mul(0.0037), seed))
       .mul(0.5).add(0.5);
+    const maritimeMacro = mx_noise_float(vec3(
+      world.x.mul(1 / 520), world.z.mul(1 / 520), seed + 2.0,
+    )).mul(0.5).add(0.5);
+    const maritimeMeso = mx_noise_float(vec3(
+      world.x.mul(1 / 120), world.y.mul(1 / 180), world.z.mul(1 / 120).add(seed + 19.0),
+    )).mul(0.5).add(0.5);
+    const maritimeFine = mx_noise_float(vec3(
+      world.x.mul(1 / 24), world.y.mul(1 / 30), world.z.mul(1 / 24).add(seed + 37.0),
+    )).mul(0.5).add(0.5);
+    const maritimeFootprint = world.x.fwidth().abs()
+      .max(world.y.fwidth().abs()).max(world.z.fwidth().abs()).max(0.04);
+    const maritimeToCamera = cameraPosition.sub(world);
+    const maritimeViewCosine = normalWorld.dot(maritimeToCamera.normalize()).abs().clamp(0, 1);
+    const maritimeGrazing = oneMinus(smoothstep(0.12, 0.72, maritimeViewCosine));
+    const maritimeStableFootprint = maritimeFootprint
+      .mul(float(1).add(maritimeGrazing.mul(0.85))).min(128);
+    const maritimeMesoVisibility = float(0.58).add(
+      float(0.42).mul(oneMinus(smoothstep(10, 52, maritimeStableFootprint))),
+    );
+    const maritimeFineVisibility = float(0.05).add(
+      float(0.55).mul(oneMinus(smoothstep(0.5, 2.2, maritimeStableFootprint)))
+        .mul(smoothstep(0.16, 0.76, maritimeViewCosine)),
+    );
     const slope = float(1.0).sub(smoothstep(0.38, 0.86, normalWorld.y));
-    material.colorNode = vertexColor().mul(lithology.sub(0.5).mul(0.14).add(1.0));
-    material.roughnessNode = mix(float(0.98), float(0.86), slope.mul(0.4).add(geology.x.mul(0.3)));
+    const maritimeValue = lithology.sub(0.5).mul(0.14).add(1.0)
+      .add(maritimeMacro.sub(0.5).mul(0.10))
+      .add(maritimeMeso.sub(0.5).mul(0.07).mul(maritimeMesoVisibility))
+      .add(maritimeFine.sub(0.5).mul(0.025).mul(maritimeFineVisibility));
+    const maritimeBaseColor = vertexColor().mul(maritimeValue);
+    material.colorNode = maritimeBaseColor;
+    const maritimeRoughnessVariation = maritimeMacro.sub(0.5).mul(0.05)
+      .add(maritimeMeso.sub(0.5).mul(0.025).mul(maritimeMesoVisibility));
+    let maritimeRoughness = mix(float(0.98), float(0.86),
+      slope.mul(0.4).add(geology.x.mul(0.3)))
+      .sub(maritimeRoughnessVariation).clamp(0.78, 0.99);
+    if (coastalTransitions && sandAlbedoRoughness && sandNormal) {
+      const duneSandGate = geology.x.clamp(0, 1);
+      const shallowShelfGate = geology.y.clamp(0, 1);
+      const drySandGate = geology.z.clamp(0, 1);
+      const wetSandGate = attribute('backdropCover', 'vec4').w.clamp(0, 1);
+      const coastWorldXZ = vec2(world.x, world.z);
+      const coastWeights = coastTextureBlendWeights({
+        dune: duneSandGate, drySand: drySandGate, wetSand: wetSandGate,
+        shallowShelf: shallowShelfGate,
+      }, coastWorldXZ);
+      const coastSand = sampleCoastSand({
+        albedoRoughness: sandAlbedoRoughness, normal: sandNormal,
+      }, coastWorldXZ, coastWeights);
+      material.colorNode = mix(maritimeBaseColor, coastSand.color, coastWeights.beachWeight);
+      maritimeRoughness = mix(maritimeRoughness, coastSand.roughness, coastWeights.beachWeight);
+      const beachWorldNormal = normalWorld.add(vec3(
+        coastSand.slope.x, 0.0, coastSand.slope.y,
+      ).mul(0.46)).normalize();
+      material.normalNode = transformNormalToView(
+        mix(normalWorld, beachWorldNormal, coastWeights.beachWeight).normalize(),
+      );
+      material.specularIntensityNode = float(COAST_SAND_SPECULAR_INTENSITY);
+    }
+    material.roughnessNode = maritimeRoughness;
     material.name = name;
     return material;
   }
@@ -1595,28 +2091,37 @@ function worldMaterial(name, biome, {
   const projectionWeight = normalWorld.abs().sub(0.18).max(0.0).pow(vec3(4.0));
   const viewDistance = cameraPosition.sub(world).length();
   const worldFootprint = world.x.fwidth().abs()
-    .max(world.y.fwidth().abs()).max(world.z.fwidth().abs());
+    .max(world.y.fwidth().abs()).max(world.z.fwidth().abs()).max(0.04);
+  // At a grazing angle one screen pixel spans more world metres than the largest
+  // component of the interpolated position derivative suggests. Inflate the
+  // footprint by the view-normal foreshortening and clamp it before it reaches
+  // the frequency handoff. This keeps the 41 m/8.5 m fields from shimmering on
+  // distant faces while preserving the 520 m/120 m landform hierarchy.
+  const surfaceToCamera = cameraPosition.sub(world).normalize();
+  const viewCosine = normalWorld.dot(surfaceToCamera).abs().clamp(0.0, 1.0);
+  const grazing = oneMinus(smoothstep(0.12, 0.72, viewCosine));
+  const stableFootprint = worldFootprint.mul(float(1.0).add(grazing.mul(0.85))).min(128.0);
+  const grazingStability = smoothstep(0.16, 0.76, viewCosine);
   // Derivative-aware octave gates keep fine relief stable as a pixel covers more
-  // ground. Distance is a second conservative handoff: the near wall keeps its
-  // mineral grain, while the 2–3 km ribbon spends ALU on only skyline-scale ribs.
-  // The broad meso field is true 3D (including Y), so retain a small far-field
-  // contribution instead of fading it to a constant 0.5 on the distant ribbon.
-  // That constant was the source of the smooth blue-gray wall: only the
-  // projection-selected fine field remained, and its long side runs read as
-  // vertical columns. A floor keeps correlated geology without adding a field.
-  const mesoVisibility = float(0.72).max(float(1.0).sub(smoothstep(8.0, 28.0, worldFootprint)));
-  // Keep a restrained 41 m bedding/rib signal on the far face.  The former
-  // handoff went all the way to zero once a pixel covered ~2.4 m, leaving the
-  // distant massif with only one broad meso octave and a single airbrushed
-  // value.  A small floor is still derivative-safe (the field is already
-  // evaluated above) and gives distant buttresses a coherent mineral grain
-  // without asking the fragment stage for another octave.
-  const fineVisibility = float(0.24).add(
-    float(0.76).mul(float(1.0).sub(smoothstep(0.34, 2.40, worldFootprint)))
+  // ground. Distance and grazing angle are second handoffs: the near wall keeps
+  // its mineral grain, while the 2–3 km ribbon spends ALU on only skyline-scale
+  // ribs. The broad meso field remains present at distance so the wall never
+  // collapses into one airbrushed value.
+  const mesoVisibility = float(0.56).add(
+    float(0.44).mul(float(1.0).sub(smoothstep(10.0, 52.0, stableFootprint))),
+  );
+  // Keep a restrained 41 m bedding/rib signal on the far face, but fade it toward
+  // a conservative floor when a grazing pixel spans several metres. The fade is
+  // continuous in footprint, view angle, and distance; it cannot pop between
+  // shader frequency bands as the camera skims the shell.
+  const fineVisibility = float(0.04).add(
+    float(0.78).mul(float(1.0).sub(smoothstep(0.34, 2.40, stableFootprint)))
+      .mul(float(0.36).add(grazingStability.mul(0.64)))
       .mul(float(1.0).sub(smoothstep(3000.0, 4500.0, viewDistance))),
   );
-  const grainVisibility = float(1.0).sub(smoothstep(0.08, 0.72, worldFootprint))
-    .mul(float(1.0).sub(smoothstep(520.0, 1650.0, viewDistance)));
+  const grainVisibility = float(1.0).sub(smoothstep(0.08, 0.72, stableFootprint))
+    .mul(float(1.0).sub(smoothstep(520.0, 1650.0, viewDistance)))
+    .mul(grazingStability);
   // Keep the normal fields at the same physical wavelengths as the GPU vertex
   // relief so a ridge cannot silhouette one way and light another.
   const fine = biplanarField(world, normalWorld, 1 / 41, seed + 53.0, 2.5, projectionWeight);
@@ -1878,22 +2383,29 @@ function buildPatch(minX, maxX, minZ, maxZ, spacing, sample, grid = null) {
       // physical derivative span also keeps lighting stable across LOD bands.
       // Match the far ribbon's physical normal span so the two shell bands share
       // one matte daylight response instead of a visible normal-frequency seam.
-      const normalStep = 64;
+      const normalStep = sample.normalStep || 64;
       // Height-only taps follow the identical sampler and derivative span, but
       // skip the vertex colour/geology work that is not consumed by a normal.
       // Maritime samplers have no specialized path and retain the old behavior.
       const sampleHeight = sample.heightAt || ((sx, sz) => sample(sx, sz).height);
-      const left = sampleHeight(x - normalStep, z);
-      const right = sampleHeight(x + normalStep, z);
-      const near = sampleHeight(x, z - normalStep);
-      const far = sampleHeight(x, z + normalStep);
-      const nxWorld = left - right;
-      const nyWorld = normalStep * 2;
-      const nzWorld = near - far;
-      const inverseLength = 1 / Math.hypot(nxWorld, nyWorld, nzWorld);
-      normals[vertex * 3] = nxWorld * inverseLength;
-      normals[vertex * 3 + 1] = nyWorld * inverseLength;
-      normals[vertex * 3 + 2] = nzWorld * inverseLength;
+      const authoredNormal = sample.normalAt?.(x, z);
+      if (authoredNormal) {
+        normals[vertex * 3] = authoredNormal[0];
+        normals[vertex * 3 + 1] = authoredNormal[1];
+        normals[vertex * 3 + 2] = authoredNormal[2];
+      } else {
+        const left = sampleHeight(x - normalStep, z);
+        const right = sampleHeight(x + normalStep, z);
+        const near = sampleHeight(x, z - normalStep);
+        const far = sampleHeight(x, z + normalStep);
+        const nxWorld = left - right;
+        const nyWorld = normalStep * 2;
+        const nzWorld = near - far;
+        const inverseLength = 1 / Math.hypot(nxWorld, nyWorld, nzWorld);
+        normals[vertex * 3] = nxWorld * inverseLength;
+        normals[vertex * 3 + 1] = nyWorld * inverseLength;
+        normals[vertex * 3 + 2] = nzWorld * inverseLength;
+      }
       vertex += 1;
     }
   }

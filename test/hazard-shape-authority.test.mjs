@@ -16,7 +16,7 @@ test('Range compiles one rounded hazard authority before every terrain consumer'
   assert.match(rangeSource, /this\.ponds = course\.ponds\.map[\s\S]*?roundedHazardFeature\(feature, \{ kind: 'pond', index \}\)/);
   assert.match(rangeSource, /sands: this\.bunkers\.map[\s\S]*?shape: b\.shape/,
     'terrain render mask/minimap must receive the compiled bunker outline');
-  assert.match(rangeSource, /b\.pot \? \{ shape: b\.shape, inset: b\.r \* 0\.28 \} : \{ shape: b\._sandShape \}/,
+  assert.match(rangeSource, /b\.pot \? \{ shape: b\.shape, inset: b\.r \* 0\.28, pot: true \} : \{ shape: b\._sandShape \}/,
     'regular render sand must use the compiled irregular inner contour');
   assert.match(rangeSource, /waters: this\.ponds\.map[\s\S]*?shape: p\.shape/,
     'terrain render mask/minimap must receive the compiled pond outline');

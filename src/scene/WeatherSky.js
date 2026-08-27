@@ -81,7 +81,10 @@ function normaliseWorkload(workload) {
     fail('id must be high, balanced, or conservative.');
   }
   // Tiers compile the same graph. These are fixed budget constants only: no tier
-  // selects a different renderer, cloud representation, or asset.
+  // selects a different renderer, cloud representation, or asset. The values are
+  // deliberately copied into the graph below instead of being diagnostics-only:
+  // ray steps, sun probes, and carrier detail all change the amount of work while
+  // preserving the same world-space density/transport equations.
   return Object.freeze({
     id: workload.id,
     internalScale: finite(workload.internalScale, 'internalScale', MIN_INTERNAL_SCALE, MAX_INTERNAL_SCALE),
@@ -141,15 +144,17 @@ export function cloudsAreEnabled(clouds) {
 
 export const WEATHER_SKY_WORKLOADS = Object.freeze({
   // One low-resolution target performs a global AABB/slab march. The history node
-  // ping-pongs that same target before the full-resolution scene TRAA.
+  // ping-pongs that same target before the full-resolution scene TRAA. Resolution
+  // stays shared here because CloudTemporalNode owns the target size; tier scaling
+  // comes from the actual ray/probe/detail budget below and remains deterministic.
   high: Object.freeze({
-    id: 'high', internalScale: CLOUD_TARGET_SCALE, raySteps: 16, lightTransportSamples: 1, lightProbeSteps: 8, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'high', internalScale: CLOUD_TARGET_SCALE, raySteps: 16, lightTransportSamples: 1, lightProbeSteps: 8, noiseOctaves: 4, jitterPeriod: 64,
   }),
   balanced: Object.freeze({
-    id: 'balanced', internalScale: CLOUD_TARGET_SCALE, raySteps: 16, lightTransportSamples: 1, lightProbeSteps: 8, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'balanced', internalScale: CLOUD_TARGET_SCALE, raySteps: 12, lightTransportSamples: 1, lightProbeSteps: 6, noiseOctaves: 3, jitterPeriod: 48,
   }),
   conservative: Object.freeze({
-    id: 'conservative', internalScale: CLOUD_TARGET_SCALE, raySteps: 16, lightTransportSamples: 1, lightProbeSteps: 8, noiseOctaves: 2, jitterPeriod: 64,
+    id: 'conservative', internalScale: CLOUD_TARGET_SCALE, raySteps: 8, lightTransportSamples: 1, lightProbeSteps: 4, noiseOctaves: 2, jitterPeriod: 32,
   }),
 });
 
@@ -450,19 +455,24 @@ export class WeatherSky {
   // R/A are one joint GPU carrier. The threshold is materially above zero and was
   // calibrated to the initialized field's interior product (~0.1), so empty voxels
   // remain empty without a coverage floor or a near-zero remap.
-  _cloudDensityFromVolume(volume, normalizedHeight, clouds, detail = true) {
+  _cloudDensityFromVolume(
+    volume, normalizedHeight, clouds, detail = true, octaves = this.workload.noiseOctaves,
+  ) {
     const rawCarrier = volume.x.mul(volume.w).clamp(0, 1);
     const coverageThreshold = float(0.08).add(oneMinus(clouds.x.clamp(0, 1)).mul(0.06));
     const baseCarrier = smoothstep(coverageThreshold, coverageThreshold.add(0.18), rawCarrier);
     const vertical = this._heightGradient(normalizedHeight, volume);
     const detailSignal = volume.y.mul(0.58).add(volume.z.mul(0.42));
+    const resolvedOctaves = Math.max(MIN_NOISE_OCTAVES,
+      Math.min(MAX_NOISE_OCTAVES, Number.isFinite(octaves) ? octaves : MIN_NOISE_OCTAVES));
+    const detailBudget = float(resolvedOctaves / MAX_NOISE_OCTAVES);
     const erosion = smoothstep(0.20, 0.78, volume.z);
     // Only the carrier margin is allowed to move. Dense interiors have a saturated
     // baseCarrier and therefore zero edgeWindow, preserving their core extinction;
     // sparse parcels inherit bounded detail/erosion breakup at the boundary.
     const edgeWindow = oneMinus(smoothstep(0.56, 0.94, baseCarrier));
     const thresholdShift = detailSignal.sub(0.5).mul(0.080)
-      .add(erosion.mul(0.105)).mul(edgeWindow);
+      .add(erosion.mul(0.105)).mul(edgeWindow).mul(detailBudget);
     const shiftedThreshold = coverageThreshold.add(thresholdShift);
     const carrier = smoothstep(shiftedThreshold, shiftedThreshold.add(0.18), rawCarrier);
     // The carrier controls parcel occupancy; this second bounded field controls
@@ -472,7 +482,7 @@ export class WeatherSky {
     const fineShape = smoothstep(
       0.44, 0.61,
       volume.y.mul(0.62).add(oneMinus(volume.z).mul(0.38)),
-    );
+    ).mul(detailBudget);
     const solidCore = smoothstep(0.84, 0.98, baseCarrier);
     const carvedShape = max(solidCore, fineShape.mul(float(0.38).add(baseCarrier.mul(0.62))));
     const variation = detail
@@ -483,11 +493,10 @@ export class WeatherSky {
 
   _cloudDensity(worldPosition, time, wind = null, advectionTime = null,
     octaves = this.workload.noiseOctaves, detail = true) {
-    void octaves;
     const clouds = this.environment.clouds;
     const normalizedHeight = worldPosition.y.sub(clouds.z).div(clouds.w.max(1));
     const volume = this._cloudVolumeSample(worldPosition, time, wind, advectionTime);
-    return this._cloudDensityFromVolume(volume, normalizedHeight, clouds, detail);
+    return this._cloudDensityFromVolume(volume, normalizedHeight, clouds, detail, octaves);
   }
 
   _buildBackgroundNode() {
@@ -642,17 +651,30 @@ export class WeatherSky {
               const sunPath = cloudTop.sub(position.y)
                 .div(sunDirection.y.max(0.15)).clamp(240, 1400);
               const sunProbeDistance = sunPath.mul(0.45).min(600);
-              const sunProbePosition = position.add(sunDirection.mul(sunProbeDistance));
-              const sunProbe = this._cloudVolumeSample(
-                sunProbePosition, time, wind, advectionTime,
-              );
-              const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
-              const neighborDensity = this._cloudDensityFromVolume(
-                sunProbe, probeHeight, clouds, false,
-              );
-              pairedSunTransmittance.assign(
-                exp(neighborDensity.mul(sunPath).mul(SUN_EXTINCTION).negate()),
-              );
+              // Sample the same bounded physical sun path at a tier-specific
+              // number of positions. High keeps the silver lining coherent on
+              // broad crowns; lower tiers retain the same Beer path and simply
+              // use fewer quadrature points.
+              const pairedSunOpticalDepth = float(0).toVar();
+              Loop(this.workload.lightProbeSteps, ({ i: probeIndex }) => {
+                const probeFraction = float(probeIndex).add(0.5)
+                  .div(this.workload.lightProbeSteps);
+                const sunProbePosition = position.add(
+                  sunDirection.mul(sunProbeDistance.mul(probeFraction)),
+                );
+                const sunProbe = this._cloudVolumeSample(
+                  sunProbePosition, time, wind, advectionTime,
+                );
+                const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
+                const neighborDensity = this._cloudDensityFromVolume(
+                  sunProbe, probeHeight, clouds, false,
+                );
+                pairedSunOpticalDepth.addAssign(
+                  neighborDensity.mul(sunPath).mul(SUN_EXTINCTION)
+                    .div(this.workload.lightProbeSteps),
+                );
+              });
+              pairedSunTransmittance.assign(exp(pairedSunOpticalDepth.negate()));
             });
               const viewDepth = sampleDistance.sub(rayEntry).div(rayLength.max(1)).clamp(0, 1);
               const crown = smoothstep(0.18, 0.78, normalizedHeight);

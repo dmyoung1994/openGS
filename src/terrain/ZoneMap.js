@@ -70,6 +70,8 @@ export function buildZoneMap(zones, bounds) {
   // the CPU, so the fragment shader pays one filtered lookup and no bank-specific
   // noise evaluations across the whole terrain.
   const water = new Float32Array(w * h);
+  const potOuter = new Float32Array(w * h);
+  const potOuterData = new Uint16Array(w * h);
   const waterData = new Uint16Array(w * h * 4);
   const bankNoise = new Noise(0x6b616e6b);
 
@@ -97,10 +99,14 @@ export function buildZoneMap(zones, bounds) {
         }
       }
       let sand = -Infinity;
+      let potOuterSD = -Infinity;
       for (const entry of sandEntries) {
-        if (canImproveNearest(sand, entry.bounds, dwx, dwz)) {
+        if (canImproveNearest(sand, entry.bounds, dwx, dwz)
+          || (entry.feature.pot && canImproveNearest(potOuterSD, entry.bounds, dwx, dwz))) {
           const s = entry.feature;
-          sand = Math.max(sand, compiledSignedDistance(entry, dwx, dwz) - (s.inset || 0));
+          const outerDistance = compiledSignedDistance(entry, dwx, dwz);
+          sand = Math.max(sand, outerDistance - (s.inset || 0));
+          if (s.pot) potOuterSD = Math.max(potOuterSD, outerDistance);
         }
       }
       let waterSD = -Infinity;
@@ -111,6 +117,7 @@ export function buildZoneMap(zones, bounds) {
       }
       if (green === -Infinity) green = -1e3;
       if (sand === -Infinity) sand = -1e3;
+      if (potOuterSD === -Infinity) potOuterSD = -1e3;
       if (waterSD === -Infinity) waterSD = -1e3;
 
       const teeSD = tee ? boxSD(dwx, dwz, tee.x, tee.z0, tee.z1) : -1e3;
@@ -123,10 +130,11 @@ export function buildZoneMap(zones, bounds) {
       data[k + 2] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, sand)));
       data[k + 3] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, teeSD)));
       water[j * w + i] = waterSD;
+      potOuter[j * w + i] = potOuterSD;
+      potOuterData[j * w + i] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, potOuterSD)));
       const bankWidthNoise = bankNoise.noise2(wx * 0.082, dwz * 0.057) * 0.5 + 0.5;
       const broadMottle = bankNoise.noise2(wx * 0.30, dwz * 0.30) * 0.5 + 0.5;
       const mineralPatch = bankNoise.noise2(wx * 1.22, dwz * 1.22) * 0.5 + 0.5;
-      const grassIntrusion = bankNoise.noise2(wx * 0.18, dwz * 0.18) * 0.5 + 0.5;
       const wk = (j * w + i) * 4;
       waterData[wk] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, waterSD)));
       // Keep broad wash and exposed mineral patches in one filtered channel. The
@@ -134,7 +142,10 @@ export function buildZoneMap(zones, bounds) {
       // supplies that final micro-scale variation in the material below.
       waterData[wk + 1] = DataUtils.toHalfFloat(Math.max(0, Math.min(1, bankWidthNoise)));
       waterData[wk + 2] = DataUtils.toHalfFloat(Math.max(0, Math.min(1, broadMottle * 0.70 + mineralPatch * 0.30)));
-      waterData[wk + 3] = DataUtils.toHalfFloat(Math.max(0, Math.min(1, grassIntrusion)));
+      // A is the pot-bunker outer SDF. Folding it into this already-sampled zone
+      // companion retires a whole fragment sampler while preserving the exact
+      // analytic patch authority and half-float distance precision.
+      waterData[wk + 3] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, potOuterSD)));
     }
   }
 
@@ -153,7 +164,8 @@ export function buildZoneMap(zones, bounds) {
   waterTexture.needsUpdate = true;
 
   return {
-    texture: tex, waterTexture, width: w, height: h, data, water, waterData,
+    texture: tex, waterTexture, width: w, height: h,
+    data, water, waterData, potOuter, potOuterData,
     bounds, texelsPerM: TEXELS_PER_M,
   };
 }

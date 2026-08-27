@@ -6,11 +6,10 @@ import test from 'node:test';
 const manifest = JSON.parse(await readFile(new URL('../public/assets/environment/catalog.json', import.meta.url), 'utf8'));
 const required = [
   'polyhaven-tree-small-02',
+  'polyhaven-tree-small-02-hero',
+  'polyhaven-island-tree-02',
   'polyhaven-island-tree-01',
-  'polyhaven-fir-tree-01',
-  'polyhaven-fir-tree-01-variant-b',
-  'polyhaven-fir-tree-01-variant-c',
-  'polyhaven-pine-tree-01',
+  'blendkit-palm-tree-medium-dense',
 ];
 
 function localUrl(assetUrl) {
@@ -21,46 +20,36 @@ function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-test('runtime tree catalog is Poly Haven-only and exposes the new source kit', () => {
+test('runtime tree catalog exposes the reviewed CC0 source kit', () => {
   const assets = manifest.assets.filter(({ category }) => category === 'tree');
-  assert.deepEqual(assets.map(({ id }) => id), [
-    'polyhaven-tree-small-02',
-    'polyhaven-island-tree-01',
-    'polyhaven-fir-tree-01',
-    'polyhaven-fir-tree-01-variant-b',
-    'polyhaven-fir-tree-01-variant-c',
-    'polyhaven-pine-tree-01',
-  ]);
+  assert.deepEqual(assets.map(({ id }) => id), required);
   for (const asset of assets) {
     assert.equal(asset.license.spdx, 'CC0-1.0');
-    assert.match(asset.license.sourceUrl, /^https:\/\/polyhaven\.com\/a\//);
   }
-  assert.doesNotMatch(JSON.stringify(manifest), /blenderkit|conifer_v8|polyhaven-fir-sapling-medium/i);
+  assert.match(assets.at(-1).license.sourceUrl, /^https:\/\/www\.blendkit\.com\/asset-gallery-detail\//);
+  assert.doesNotMatch(JSON.stringify(manifest), /conifer_v8|polyhaven-fir-sapling-medium/i);
 });
 
-test('new Fir and Pine derivatives match their catalog hashes', async () => {
-  for (const id of ['polyhaven-fir-tree-01', 'polyhaven-fir-tree-01-variant-b', 'polyhaven-fir-tree-01-variant-c', 'polyhaven-pine-tree-01']) {
+test('promoted broadleaf derivatives match their catalog hashes', async () => {
+  for (const id of ['polyhaven-tree-small-02-hero', 'polyhaven-island-tree-02', 'polyhaven-island-tree-01']) {
     const asset = manifest.assets.find((candidate) => candidate.id === id);
     assert.ok(asset, `${id} is present`);
-    for (const lod of asset.lods) {
-      const bytes = await readFile(localUrl(lod.url));
-      assert.equal(hash(bytes), lod.sha256, `${id} LOD${lod.level} hash`);
-    }
-    if (asset.impostor.kind === 'baked-atlas') {
-      const bytes = await readFile(localUrl(asset.impostor.url));
-      assert.equal(hash(bytes), asset.impostor.sha256, `${id} impostor hash`);
+    const lod0 = asset.lods.find(({ level }) => level === 0);
+    const bytes = await readFile(localUrl(lod0.url));
+    assert.equal(hash(bytes), lod0.sha256, `${id} LOD0 hash`);
+    for (const alphaMap of asset.alphaMaps) {
+      const alphaBytes = await readFile(localUrl(alphaMap.url));
+      assert.equal(hash(alphaBytes), alphaMap.sha256, `${id} ${alphaMap.material} alpha hash`);
     }
   }
 });
 
-test('Fir variants remain direct Poly Haven source silhouettes instead of generated tree packs', async () => {
-  for (const [id, variant] of [['polyhaven-fir-tree-01-variant-b', 'b'], ['polyhaven-fir-tree-01-variant-c', 'c']]) {
-    const asset = manifest.assets.find((candidate) => candidate.id === id);
-    const bytes = await readFile(localUrl(asset.lods[0].url));
-    const jsonLength = bytes.readUInt32LE(12);
-    const document = JSON.parse(bytes.toString('utf8', 20, 20 + jsonLength));
-    assert.equal(document.extras.sourceAsset, 'fir_tree_01');
-    assert.equal(document.extras.sourceVariant, variant);
-    assert.equal(asset.impostor.kind, 'none');
+test('promoted palm LODs match their catalog hashes', async () => {
+  const asset = manifest.assets.find(({ id }) => id === 'blendkit-palm-tree-medium-dense');
+  assert.ok(asset);
+  assert.equal(asset.lods.length, 2);
+  for (const lod of asset.lods) {
+    const bytes = await readFile(localUrl(lod.url));
+    assert.equal(hash(bytes), lod.sha256, `palm LOD${lod.level} hash`);
   }
 });

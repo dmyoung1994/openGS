@@ -27,6 +27,26 @@ test('CC0 environment catalog validates the shipped runtime tree record', () => 
   assert.deepEqual([...BUILTIN_ENVIRONMENT_ASSET_IDS], catalog.assets.map((asset) => asset.id));
 });
 
+test('catalog identifies the authored medium grass as the dune-compatible form', () => {
+  const catalog = validateEnvironmentCatalog(manifest);
+  const grass = getCatalogAsset(catalog, 'polyhaven-grass-medium-02');
+  const fern = getCatalogAsset(catalog, 'polyhaven-fern-02');
+  assert.equal(grass.category, 'groundcover');
+  assert.ok(grass.transitionHabitats.includes('strand-grass'));
+  assert.ok(grass.transitionHabitats.includes('coastal-dune'));
+  assert.ok(!fern.transitionHabitats.includes('coastal-dune'));
+});
+
+test('catalog requires explicit registered transition habitats for vegetation', () => {
+  const missing = structuredClone(manifest);
+  delete missing.assets.find((asset) => asset.id === 'polyhaven-grass-medium-02').transitionHabitats;
+  assert.throws(() => validateEnvironmentCatalog(missing), /transitionHabitats must declare/);
+
+  const invented = structuredClone(manifest);
+  invented.assets.find((asset) => asset.id === 'polyhaven-grass-medium-02').transitionHabitats.push('generic-beach');
+  assert.throws(() => validateEnvironmentCatalog(invented), /not a registered transition habitat/);
+});
+
 test('catalog lookup is stable when manifest records are reordered', () => {
   const second = structuredClone(manifest.assets[0]);
   second.id = 'polyhaven-tree-small-test';

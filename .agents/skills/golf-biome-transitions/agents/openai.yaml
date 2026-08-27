@@ -1,0 +1,4 @@
+interface:
+  display_name: "Golf Biome Transitions"
+  short_description: "Author deterministic golf biome ecotones"
+  default_prompt: "Use $golf-biome-transitions to design a natural resort coastline transition for this course."

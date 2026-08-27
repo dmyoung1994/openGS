@@ -91,8 +91,8 @@ test('address camera starts directly behind the ball looking down-range', () => 
   camera.updateMatrixWorld();
   camera.updateProjectionMatrix();
   const projectedBall = ball.clone().project(camera);
-  assert.ok(projectedBall.y > -0.88 && projectedBall.y < -0.45,
-    `ball must begin visible in the lower frame, got NDC y=${projectedBall.y}`);
+  assert.ok(projectedBall.y > -0.65 && projectedBall.y < -0.35,
+    `ball must begin visible above the address control, got NDC y=${projectedBall.y}`);
 });
 
 test('result camera returns to address through a damped transition', () => {
@@ -127,6 +127,46 @@ test('result camera returns to address through a damped transition', () => {
   for (let i = 0; i < 330; i++) director.update(1 / 60, ball);
   assert.equal(director.phase, 'address');
   assert.ok(camera.position.distanceTo(director.pos) < 0.06);
+});
+
+test('result orbit retains a low wide course-and-horizon composition', () => {
+  const camera = new PerspectiveCamera();
+  const director = new CameraDirector(camera);
+  const ball = makeBall();
+  ball.position.set(2, 0.021, -150);
+  ball.velocity.set(0, 0, 0);
+  director.onRest(ball);
+  director.update(1, ball);
+
+  const horizontal = Math.hypot(
+    director.pos.x - ball.position.x,
+    director.pos.z - ball.position.z,
+  );
+  assert.ok(horizontal >= 12, `result orbit should reveal course context, got ${horizontal.toFixed(2)} m`);
+  assert.ok(director.pos.y - director.look.y <= 1.6,
+    'result view must stay near-horizontal instead of looking steeply down at turf');
+
+  const firstAngle = director._resultAngle;
+  director.update(10, ball);
+  assert.ok(director._resultAngle - firstAngle < 0.3,
+    'the ten-second result hold must drift gently rather than orbit around the ball');
+});
+
+test('landing camera settles near golfer height while retaining lateral arc separation', () => {
+  const camera = new PerspectiveCamera();
+  const director = new CameraDirector(camera);
+  const ball = makeBall();
+  director.setAddress(ball.position, new Vector3(0, 0, -1));
+  director.onLaunch(ball);
+  ball.position.set(0, 0.8, -155);
+  ball.velocity.set(0, -26, -38);
+  director.update(1, ball);
+
+  assert.equal(director.phase, 'descent');
+  assert.ok(director.pos.y < 4,
+    `landing target should preserve the horizon instead of looking down from ${director.pos.y.toFixed(2)} m`);
+  assert.ok(Math.abs(director.pos.x - ball.position.x) >= 6.5,
+    'landing view must remain off the velocity axis so the real tracer arc stays legible');
 });
 
 test('production capture harness exercises the real shot flight and return', async () => {

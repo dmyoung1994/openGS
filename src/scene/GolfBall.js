@@ -1,7 +1,9 @@
 import {
   Mesh, MeshPhysicalNodeMaterial, BufferGeometry, Vector2, TextureLoader, ClampToEdgeWrapping,
+  MathUtils,
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { ballPresentationScale } from './BallPresentation.js';
 
 const _tex = new TextureLoader();
 const _loader = new GLTFLoader();
@@ -10,6 +12,7 @@ const NORMAL_MAP_URL = '/assets/ball/golfball_nor.png';
 const GLB_URL = '/assets/ball/golfball.glb';
 let _normalAsset = null;
 let _geometryAssetPromise = null;
+const _drawingBufferSize = new Vector2();
 
 // ---------------------------------------------------------------------------
 // Golf ball mesh (WebGPU / TSL via MeshPhysicalNodeMaterial).
@@ -111,6 +114,23 @@ export function createGolfBallMesh({ isDisposed = () => false } = {}) {
   const mesh = new Mesh(new BufferGeometry(), mat);
   mesh.visible = false;
   mesh.castShadow = true;
+  mesh.onBeforeRender = (renderer, scene, camera) => {
+    void scene;
+    // Shadow cameras render the regulation silhouette. The visibility assist is
+    // exclusively a presentation-camera treatment and must never enlarge the
+    // ball's physical-looking cast shadow.
+    if (!camera.isPerspectiveCamera) {
+      mesh.scale.setScalar(1);
+      return;
+    }
+    renderer.getDrawingBufferSize(_drawingBufferSize);
+    const scale = ballPresentationScale({
+      distance: camera.position.distanceTo(mesh.position),
+      verticalFovRadians: MathUtils.degToRad(camera.fov || 40),
+      viewportHeight: _drawingBufferSize.y,
+    });
+    mesh.scale.setScalar(scale);
+  };
   mesh.userData.assetsReady = Promise.all([
     normal.ready,
     loadBallGeometry(mesh, isDisposed),

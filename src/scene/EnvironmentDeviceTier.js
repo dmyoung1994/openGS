@@ -44,6 +44,18 @@ export const ENVIRONMENT_DEVICE_TIERS = Object.freeze({
   }),
 });
 
+// Visual quality modes are a policy layered above the existing environment
+// workload tiers.  Keeping this vocabulary here lets browser bootstrap code and
+// the adaptive controller agree on the mode names without changing the shape or
+// meaning of the renderer-facing tier objects above.
+export const VISUAL_QUALITY_MODES = Object.freeze([
+  'auto',
+  'battery',
+  'balanced',
+  'quality',
+  'ultra',
+]);
+
 const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
 
 // Pure policy: browser integration snapshots adapter/device limits and navigator
@@ -84,6 +96,44 @@ export function selectEnvironmentDeviceTier({ limits = {}, adapterLimits, device
   if (balancedGpu && balancedHints) return ENVIRONMENT_DEVICE_TIERS.balanced;
   return ENVIRONMENT_DEVICE_TIERS.conservative;
 }
+
+// Auto starts from the capability-derived environment tier, then uses the
+// optional CPU/memory hints to decide whether the high tier has enough headroom
+// for the Ultra policy. Chromium deliberately quantizes and caps deviceMemory at
+// 8 GiB, so a 16 GiB threshold can never identify a normal Chrome desktop. A
+// high core count separates that capped desktop signal from current phones while
+// the high WebGPU limits remain the primary GPU capability gate. Privacy-restricted
+// hints deliberately do not promote a device to Ultra.
+export function selectInitialVisualQualityMode({
+  tier,
+  environmentTier,
+  limits = {},
+  adapterLimits,
+  deviceLimits,
+  hardwareConcurrency,
+  deviceMemoryGiB,
+} = {}) {
+  const resolvedTier = tier ?? environmentTier ?? selectEnvironmentDeviceTier({
+    limits,
+    adapterLimits,
+    deviceLimits,
+    hardwareConcurrency,
+    deviceMemoryGiB,
+  });
+  const tierId = typeof resolvedTier === 'string' ? resolvedTier : resolvedTier?.id;
+  const cores = finite(hardwareConcurrency);
+  const memoryGiB = finite(deviceMemoryGiB);
+
+  if (tierId === 'high' && cores >= 12 && memoryGiB >= 8) return 'ultra';
+  if (tierId === 'high') return 'quality';
+  if (tierId === 'balanced') return 'balanced';
+  return 'battery';
+}
+
+// Readable alias for callers that do not need to distinguish this from the
+// existing renderer-tier selector.  Both names intentionally return a mode
+// string, never a renderer-facing tier object.
+export const selectVisualQualityMode = selectInitialVisualQualityMode;
 
 export function environmentTierSnapshot(tier) {
   if (!tier || !ENVIRONMENT_DEVICE_TIERS[tier.id]) throw new Error('Environment device tier is required.');

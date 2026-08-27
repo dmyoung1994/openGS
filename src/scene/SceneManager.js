@@ -1,7 +1,7 @@
 import {
   Scene, PerspectiveCamera, FogExp2, Color, Vector3,
   NeutralToneMapping, PCFSoftShadowMap,
-  Matrix4, Quaternion,
+  Matrix4, Quaternion, Vector2,
 } from 'three';
 import { PMREMGenerator, RenderPipeline, Renderer, StandardNodeLibrary } from 'three/webgpu';
 import {
@@ -14,6 +14,224 @@ import { StrictWebGPUBackend } from './StrictWebGPUBackend.js';
 import { WeatherSky, WEATHER_SKY_WORKLOADS, cloudsAreEnabled } from './WeatherSky.js';
 import { disposeWebGPUSceneBackground } from './WebGPUResourceDisposal.js';
 
+const WEATHER_SKY_WORKLOAD_FIELDS = Object.freeze([
+  'id',
+  'internalScale',
+  'raySteps',
+  'lightTransportSamples',
+  'lightProbeSteps',
+  'noiseOctaves',
+  'jitterPeriod',
+]);
+
+function resolveWeatherSkyWorkload(workload) {
+  const id = typeof workload === 'string' ? workload : workload?.id;
+  const canonical = typeof id === 'string' ? WEATHER_SKY_WORKLOADS[id] : null;
+  if (!canonical) {
+    throw new RangeError('WeatherSky workload must be high, balanced, or conservative.');
+  }
+
+  // Accept a diagnostic/workload snapshot as a convenience, but only when every
+  // fixed budget matches the authoritative entry. The returned object is always
+  // the canonical frozen workload, so this API cannot introduce a new renderer
+  // representation or an unbounded shader budget.
+  if (typeof workload !== 'string') {
+    for (const field of WEATHER_SKY_WORKLOAD_FIELDS) {
+      if (workload[field] !== canonical[field]) {
+        throw new RangeError(
+          `WeatherSky workload ${id} must match the fixed ${id} workload budgets.`,
+        );
+      }
+    }
+  }
+  return canonical;
+}
+
+export const DYNAMIC_RESOLUTION_MIN_SCALE = 0.5;
+export const DYNAMIC_RESOLUTION_MAX_SCALE = 1;
+
+// PMREM is an indirect-light cache. The visible sky and direct sun follow the
+// environment uniforms every revision, but the 64px convolution does not need
+// to be recaptured for every two-second timeline sample. These thresholds are
+// intentionally measured from the last successful capture so small daylight
+// changes accumulate instead of being discarded.
+export const DAYLIGHT_PMREM_SUN_ANGLE_THRESHOLD_RADIANS = 0.5 * Math.PI / 180;
+export const DAYLIGHT_PMREM_ATMOSPHERIC_THRESHOLD = 0.04;
+export const DAYLIGHT_PMREM_RADIANCE_THRESHOLD = 0.04;
+export const DAYLIGHT_PMREM_MAX_INTERVAL_MS = 15_000;
+
+const DAYLIGHT_PMREM_ATMOSPHERE_SCALES = Object.freeze([4, 4, 0.01, 1]);
+
+function daylightPmremVector(value) {
+  return {
+    x: Number(value?.x ?? 0),
+    y: Number(value?.y ?? 0),
+    z: Number(value?.z ?? 0),
+  };
+}
+
+function daylightPmremVectorDelta(a, b) {
+  return Math.max(
+    Math.abs(a.x - b.x),
+    Math.abs(a.y - b.y),
+    Math.abs(a.z - b.z),
+  );
+}
+
+function daylightPmremVectorAngle(a, b) {
+  const aLength = Math.hypot(a.x, a.y, a.z);
+  const bLength = Math.hypot(b.x, b.y, b.z);
+  if (aLength <= 1e-8 || bLength <= 1e-8) return Infinity;
+  const dot = (a.x * b.x + a.y * b.y + a.z * b.z) / (aLength * bLength);
+  return Math.acos(Math.min(1, Math.max(-1, dot)));
+}
+
+function daylightPmremScaledDelta(current, previous, scale) {
+  return Math.abs(current - previous) / Math.max(Math.abs(scale), 1e-8);
+}
+
+// Keep this snapshot renderer-independent so tests and diagnostics can reason
+// about the PMREM schedule without constructing a GPU node graph.
+export function readDaylightPmremState(environment) {
+  if (!environment) return null;
+  const atmosphere = environment.atmosphere?.value;
+  return {
+    direction: daylightPmremVector(environment.sunDirection?.value),
+    sunIlluminanceScale: Number(environment.sunIlluminanceScale?.value ?? 0),
+    sunColor: daylightPmremVector(environment.sunColor?.value),
+    atmosphere: [
+      Number(atmosphere?.x ?? 0),
+      Number(atmosphere?.y ?? 0),
+      Number(atmosphere?.z ?? 0),
+      Number(atmosphere?.w ?? 0),
+    ],
+    horizonColor: daylightPmremVector(environment.horizonColor?.value),
+    zenithColor: daylightPmremVector(environment.zenithColor?.value),
+  };
+}
+
+export function measureDaylightPmremChange(previous, current, {
+  lastCaptureAt = null,
+  now = null,
+} = {}) {
+  if (!previous || !current) {
+    return {
+      sunAngleRadians: Infinity,
+      atmosphericDelta: Infinity,
+      radianceDelta: Infinity,
+      elapsedMs: Infinity,
+    };
+  }
+
+  const atmosphericDelta = Math.max(
+    ...current.atmosphere.map((value, index) => daylightPmremScaledDelta(
+      value, previous.atmosphere[index], DAYLIGHT_PMREM_ATMOSPHERE_SCALES[index],
+    )),
+    daylightPmremVectorDelta(current.horizonColor, previous.horizonColor),
+    daylightPmremVectorDelta(current.zenithColor, previous.zenithColor),
+  );
+  const radianceDelta = Math.max(
+    daylightPmremScaledDelta(
+      current.sunIlluminanceScale,
+      previous.sunIlluminanceScale,
+      Math.max(1, Math.abs(previous.sunIlluminanceScale)),
+    ),
+    daylightPmremVectorDelta(current.sunColor, previous.sunColor),
+  );
+  const elapsedMs = Number.isFinite(lastCaptureAt) && Number.isFinite(now)
+    ? Math.max(0, now - lastCaptureAt)
+    : Infinity;
+
+  return {
+    sunAngleRadians: daylightPmremVectorAngle(current.direction, previous.direction),
+    atmosphericDelta,
+    radianceDelta,
+    elapsedMs,
+  };
+}
+
+export function resolveDaylightPmremUpdate({
+  previous = null,
+  current,
+  lastCaptureAt = null,
+  now = null,
+  force = false,
+} = {}) {
+  const change = measureDaylightPmremChange(previous, current, { lastCaptureAt, now });
+  if (force) {
+    return { ...change, shouldRebuild: true, reason: 'explicit' };
+  }
+  if (!previous || !Number.isFinite(lastCaptureAt)) {
+    return { ...change, shouldRebuild: true, reason: 'initial' };
+  }
+
+  const reasons = [];
+  if (change.sunAngleRadians >= DAYLIGHT_PMREM_SUN_ANGLE_THRESHOLD_RADIANS) {
+    reasons.push('sun-angle');
+  }
+  if (change.atmosphericDelta >= DAYLIGHT_PMREM_ATMOSPHERIC_THRESHOLD) {
+    reasons.push('atmosphere');
+  }
+  if (change.radianceDelta >= DAYLIGHT_PMREM_RADIANCE_THRESHOLD) {
+    reasons.push('radiance');
+  }
+  if (change.elapsedMs >= DAYLIGHT_PMREM_MAX_INTERVAL_MS) {
+    reasons.push('max-interval');
+  }
+
+  return {
+    ...change,
+    shouldRebuild: reasons.length > 0,
+    reason: reasons[0] ?? 'below-threshold',
+  };
+}
+
+// Three r185 has a public render-pipeline output, but its TRAANode history is
+// tied to the source pass dimensions. Keep the controller-facing policy pure so
+// a future output-resolution temporal reconstruction can consume the same state
+// without changing how caps are selected.
+export function normalizeRenderResolution({ outputPixelCap = null, internalRenderScale = 1 } = {}) {
+  const scale = Number(internalRenderScale);
+  if (!Number.isFinite(scale)
+    || scale < DYNAMIC_RESOLUTION_MIN_SCALE
+    || scale > DYNAMIC_RESOLUTION_MAX_SCALE) {
+    throw new RangeError(
+      `internalRenderScale must be between ${DYNAMIC_RESOLUTION_MIN_SCALE} and ${DYNAMIC_RESOLUTION_MAX_SCALE}.`,
+    );
+  }
+
+  if (outputPixelCap === null || outputPixelCap === undefined) {
+    return Object.freeze({ outputPixelCap: null, internalRenderScale: scale });
+  }
+
+  const cap = Number(outputPixelCap);
+  if (!Number.isFinite(cap) || cap < 1) {
+    throw new RangeError('outputPixelCap must be null or a finite positive pixel count.');
+  }
+  return Object.freeze({ outputPixelCap: Math.floor(cap), internalRenderScale: scale });
+}
+
+export function calculateOutputPixelRatio({
+  width,
+  height,
+  devicePixelRatio = 1,
+  tierPixelRatioCap = 2,
+  outputPixelCap = null,
+} = {}) {
+  const cssWidth = Math.max(1, Number.isFinite(width) ? width : 1);
+  const cssHeight = Math.max(1, Number.isFinite(height) ? height : 1);
+  const dpr = Math.max(1, Number.isFinite(devicePixelRatio) ? devicePixelRatio : 1);
+  const tierCap = Math.max(1, Number.isFinite(tierPixelRatioCap) ? tierPixelRatioCap : 2);
+  const maximumRatio = Math.min(dpr, tierCap);
+  if (outputPixelCap === null || outputPixelCap === undefined) return maximumRatio;
+
+  const cap = Math.max(1, Number(outputPixelCap));
+  const capRatio = Math.sqrt(cap / (cssWidth * cssHeight));
+  // A 0.5 floor avoids unusable 1px-wide output on small windows while making
+  // the diagnostic explicit when a very small cap cannot be met exactly.
+  return Math.min(maximumRatio, Math.max(0.5, capRatio));
+}
+
 // Owns the WebGPU renderer, scene, camera, HDRI environment, and the frame loop.
 // Migrated from WebGLRenderer + EffectComposer to WebGPURenderer so the grass can
 // be generated/animated in real compute shaders (TSL). Post-processing (bloom +
@@ -22,6 +240,12 @@ import { disposeWebGPUSceneBackground } from './WebGPUResourceDisposal.js';
 export class SceneManager {
   constructor(container) {
     this.container = container;
+    this._renderResolution = {
+      outputPixelCap: null,
+      internalRenderScale: 1,
+      revision: 0,
+    };
+    this._drawingBufferSize = new Vector2();
     // The browser viewport is the sole CSS-size authority. Renderer.setSize's
     // default style mutation can make canvas.clientWidth briefly disagree with
     // window.innerWidth, feeding a resize event back into this handler and
@@ -30,7 +254,7 @@ export class SceneManager {
     this._viewportState = {
       width: Math.max(1, Math.round(window.innerWidth)),
       height: Math.max(1, Math.round(window.innerHeight)),
-      pixelRatio: this._clampPixelRatio(window.devicePixelRatio, 2),
+      pixelRatio: this._outputPixelRatio(window.innerWidth, window.innerHeight),
     };
     this._viewportRevision = 1;
     // WebGPURenderer silently installs a WebGL2 fallback. That is useful for a general
@@ -96,11 +320,18 @@ export class SceneManager {
     this._cameraMoving = false;
 
     this.weatherSky = null;
+    this._weatherSkyGraphRevision = 0;
+    this._weatherSkyWorkloadSwitchCount = 0;
+    this._lastWeatherSkyWorkloadSwitch = null;
     this._environmentBindings = null;
     this.skyManifest = null;
     this._environmentUnsubscribe = null;
     this._daylightPmremTarget = null;
     this._daylightPmremRevision = -1;
+    this._daylightPmremLastCaptureAt = null;
+    this._daylightPmremLastCaptureState = null;
+    this._daylightPmremLastDecision = null;
+    this._daylightPmremSuppressedUpdates = 0;
     this._sceneDaylightRevision = -1;
 
     this.environmentTier = null;
@@ -118,6 +349,13 @@ export class SceneManager {
     this._renderingPaused = false;
     window.addEventListener('resize', () => this._onResize());
   }
+
+  // Public read-only pacing state for systems that consume presentation timing.
+  // A paused diagnostic frame is still rendered through the production graph,
+  // but it is not part of the live animation cadence and must not train adaptive
+  // quality. Simulation freezing is deliberately separate: a stationary camera
+  // or paused shot still presents real frames whose GPU pressure matters.
+  get renderingPaused() { return this._renderingPaused; }
 
   // Node post-processing: subtle bloom on genuine highlights, a saturation lift
   // and a soft vignette. The renderer's Neutral tone-map + sRGB output are applied
@@ -140,7 +378,12 @@ export class SceneManager {
     const scenePass = pass(this.scene, this.camera, { samples: 0 });
     scenePass.name = 'Scene MRT';
     scenePass.setMRT(mrt({ output, velocity }));
+    // PassNode exposes resolutionScale internally in r185. Keep this assignment
+    // local to the Scene MRT: the final RenderPipeline remains the output-size
+    // presentation surface, while color/velocity/depth share one source size.
+    scenePass._resolutionScale = this._renderResolution?.internalRenderScale ?? 1;
     this._scenePass = scenePass;
+    this._syncScenePassResolution();
     const color = scenePass.getTextureNode();
     const depth = scenePass.getTextureNode('depth');
     const vel = scenePass.getTextureNode('velocity');
@@ -152,14 +395,16 @@ export class SceneManager {
       // current cloud ray and resolves/reprojects history into the same target.
       // There is no intermediate current-sky render target or readback path.
       this._cloudTemporal = new CloudTemporalNode(
-        this.weatherSky, this.camera, this.weatherSky.workload.internalScale,
+        this.weatherSky,
+        this.camera,
+        this.weatherSky.workload.internalScale * (this._renderResolution?.internalRenderScale ?? 1),
         depth,
       );
       cloudLayer = this._cloudTemporal.getTextureNode();
       cloudSourceLayer = this._cloudTemporal.getSourceMetadataNode();
       // Scene beauty owns the analytic daylight sky. The quarter-resolution cloud
-      // pass remains depth-clamped world transport and is composed once in the
-      // existing final pass, outside TRAA's expensive neighborhood reconstruction.
+      // pass remains depth-clamped world transport and is composed once after TRAA,
+      // outside TRAA's expensive neighborhood reconstruction.
       this.scene.backgroundNode = this.weatherSky.clearBackgroundNode;
     } else {
       // Clear weather allocates and submits no cloud pass or cloud history target.
@@ -175,10 +420,11 @@ export class SceneManager {
     // Keep normal motion/disocclusion handling, but avoid that documented square/
     // shimmer trade-off in the production golf-environment path.
     aa.useSubpixelCorrection = false;
-    // The cloud raymarch owns a deterministic subpixel phase. Keep camera projection
-    // jitter off for cloudy weather; CloudTemporalNode reprojects the low-res target
-    // using the actual camera matrices and rejects disoccluded opacity changes.
-    aa.cameraJitterEnabled = this.weatherSky?.cloudsEnabled ? false : true;
+    // Stationary opaque geometry always needs projection sample diversity. Cloud
+    // transport records the actual current/previous camera matrices, including
+    // this bounded Halton offset, so it reprojects the same jittered scene/depth
+    // sample rather than forcing trunks and alpha-cut foliage onto one pixel grid.
+    aa.cameraJitterEnabled = true;
     this._traa = aa;
     // Grounding is authored by real directional shadows, sky irradiance, material
     // normals, terrain alignment, and physical burial. The former screen-space AO
@@ -200,40 +446,46 @@ export class SceneManager {
       const finiteGeometry = this.renderer.reversedDepthBuffer
         ? depthValue.greaterThan(0.000001)
         : depthValue.lessThan(0.999999);
-      const selectedTexel = sampleUv.mul(lowSize).floor().toVar();
-      const selectedMetric = float(1e9).toVar();
-      const selectedFound = float(0).toVar();
-      const compatibleCount = float(0).toVar();
-      for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-        const texel = base.add(vec2(x, y)).clamp(vec2(0), lowSize.sub(1));
-        const sourceFinite = cloudSourceLayer.load(texel).r.greaterThan(0.5);
-        const compatible = sourceFinite.notEqual(finiteGeometry).not();
-        const metric = vec2(x, y).sub(fraction).length();
-        If(compatible.and(metric.lessThan(selectedMetric)), () => {
-          selectedTexel.assign(texel);
-          selectedMetric.assign(metric);
-          selectedFound.assign(1);
-        });
-        If(compatible, () => { compatibleCount.addAssign(1); });
-      }
-      const pointTransport = cloudLayer.load(sampleUv.mul(lowSize).floor());
-      const edgeTransport = selectedFound.greaterThan(0.5)
-        .select(cloudLayer.load(selectedTexel), pointTransport);
-      return compatibleCount.greaterThan(3.5)
-        .select(cloudLayer.sample(sampleUv), edgeTransport);
+      // One native gather classifies the same 2x2 bilinear footprint that the
+      // former four metadata loads tested individually. Almost every output pixel
+      // is wholly sky or wholly geometry, so keep the normal path to one gather +
+      // one filtered transport sample. Only actual depth silhouettes enter the
+      // exact nearest-compatible search and issue point loads.
+      const gatheredFinite = cloudSourceLayer.sample(sampleUv).gather(0).greaterThan(0.5);
+      const gatheredCompatible = gatheredFinite.notEqual(finiteGeometry).not();
+      const allCompatible = gatheredCompatible.x.and(gatheredCompatible.y)
+        .and(gatheredCompatible.z).and(gatheredCompatible.w);
+      const transport = cloudLayer.sample(sampleUv).toVar();
+      If(allCompatible.not(), () => {
+        const selectedTexel = sampleUv.mul(lowSize).floor().toVar();
+        const selectedMetric = float(1e9).toVar();
+        const selectedFound = float(0).toVar();
+        for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+          const texel = base.add(vec2(x, y)).clamp(vec2(0), lowSize.sub(1));
+          const sourceFinite = cloudSourceLayer.load(texel).r.greaterThan(0.5);
+          const compatible = sourceFinite.notEqual(finiteGeometry).not();
+          const metric = vec2(x, y).sub(fraction).length();
+          If(compatible.and(metric.lessThan(selectedMetric)), () => {
+            selectedTexel.assign(texel);
+            selectedMetric.assign(metric);
+            selectedFound.assign(1);
+          });
+        }
+        const pointTransport = cloudLayer.load(sampleUv.mul(lowSize).floor());
+        transport.assign(selectedFound.greaterThan(0.5)
+          .select(cloudLayer.load(selectedTexel), pointTransport));
+      });
+      return transport;
     })() : null;
     const rgb = cloudTransport
       ? resolvedScene.mul(cloudTransport.a).add(cloudTransport.rgb)
       : resolvedScene;
-    // Neutral and the shared daylight state own the final palette and shoulder. The
-    // former luminance-keyed split tone plus vignette was a cosmetic full-screen
-    // grade after TRAA, duplicated contrast work, and could manufacture hue edges
-    // from otherwise smooth turf gradients.
 
     // RenderPipeline is the current Three.js API. The former PostProcessing alias
     // emits a warning on every startup despite using the same implementation.
     this.postProcessing = new RenderPipeline(this.renderer);
     this.postProcessing.outputNode = rgb;
+    this._weatherSkyGraphRevision = (this._weatherSkyGraphRevision ?? 0) + 1;
   }
 
   configureWeather(environment, skyManifest = this.skyManifest) {
@@ -244,6 +496,10 @@ export class SceneManager {
     this._daylightPmremTarget = null;
     this.scene.environment = null;
     this._daylightPmremRevision = -1;
+    this._daylightPmremLastCaptureAt = null;
+    this._daylightPmremLastCaptureState = null;
+    this._daylightPmremLastDecision = null;
+    this._daylightPmremSuppressedUpdates = 0;
     this.weatherSky?.dispose();
     this.weatherSky = new WeatherSky(this.renderer, environment, workload, skyManifest);
     this.scene.background = null;
@@ -256,6 +512,80 @@ export class SceneManager {
     this._environmentUnsubscribe = environment.onChange(applyDaylight);
     this._setupPost();
     this.invalidateTemporalHistory('weather-sky graph');
+  }
+
+  // Rebuild the weather graph only at an explicit workload boundary. Every
+  // workload uses the same strict WebGPU volumetric representation; the fixed
+  // entry only changes ray/probe/noise budgets. There is intentionally no call
+  // path from _renderFrame, so presentation never churns graph ownership.
+  setWeatherSkyWorkload(workload) {
+    const nextWorkload = resolveWeatherSkyWorkload(workload);
+    if (!this.weatherSky || !this._environmentBindings) {
+      throw new Error('WeatherSky workload requires configured weather.');
+    }
+
+    const previous = this.weatherSky;
+    const previousWorkloadId = previous.workload.id;
+    if (previousWorkloadId === nextWorkload.id) {
+      return {
+        changed: false,
+        reason: 'unchanged',
+        previousWorkloadId,
+        workloadId: previousWorkloadId,
+        diagnostics: this.readWeatherSkyDiagnostics(),
+      };
+    }
+
+    // Construct the replacement before changing ownership. A constructor or
+    // workload validation failure therefore leaves the current graph intact.
+    const next = new WeatherSky(
+      this.renderer,
+      this._environmentBindings,
+      nextWorkload,
+      this.skyManifest,
+    );
+    next.setTemporalFrame(0);
+
+    this.weatherSky = next;
+    this.scene.backgroundNode = next.usesVolumetricClouds ? null : next.backgroundNode;
+    previous.dispose();
+    this._setupPost();
+    this.invalidateTemporalHistory(`weather-sky workload: ${previousWorkloadId} -> ${nextWorkload.id}`);
+
+    this._weatherSkyWorkloadSwitchCount = (this._weatherSkyWorkloadSwitchCount ?? 0) + 1;
+    this._lastWeatherSkyWorkloadSwitch = {
+      from: previousWorkloadId,
+      to: nextWorkload.id,
+      graphRevision: this._weatherSkyGraphRevision ?? null,
+    };
+
+    return {
+      changed: true,
+      reason: 'workload-changed',
+      previousWorkloadId,
+      workloadId: nextWorkload.id,
+      diagnostics: this.readWeatherSkyDiagnostics(),
+    };
+  }
+
+  readWeatherSkyDiagnostics() {
+    const sky = this.weatherSky;
+    const workload = sky?.workload ?? null;
+    return {
+      workloadId: workload?.id ?? null,
+      workload: workload ? { ...workload } : null,
+      representation: sky
+        ? (sky.usesVolumetricClouds ? 'gpu-volume-raymarch' : 'analytic-background')
+        : null,
+      usesVolumetricClouds: sky?.usesVolumetricClouds === true,
+      cloudsEnabled: sky?.cloudsEnabled === true,
+      temporalFrame: Number.isInteger(sky?.temporalFrame) ? sky.temporalFrame : null,
+      graphRevision: this._weatherSkyGraphRevision ?? 0,
+      workloadSwitchCount: this._weatherSkyWorkloadSwitchCount ?? 0,
+      lastWorkloadSwitch: this._lastWeatherSkyWorkloadSwitch
+        ? { ...this._lastWeatherSkyWorkloadSwitch }
+        : null,
+    };
   }
 
   // Authored cloud coverage is a live Conditions control. Edits inside the enabled
@@ -321,16 +651,48 @@ export class SceneManager {
     // This is the same shared HDR/analytic source captured below; only its renderer-relative
     // return is calibrated here, and it follows the authored illuminance scale.
     this.scene.environmentIntensity = 0.34 * Math.sqrt(Math.max(0, environment.sunIlluminanceScale.value));
-    this._rebuildDaylightPmrem();
+    const now = this._daylightPmremNow();
+    const current = readDaylightPmremState(environment);
+    const decision = resolveDaylightPmremUpdate({
+      previous: this._daylightPmremLastCaptureState,
+      current,
+      lastCaptureAt: this._daylightPmremLastCaptureAt,
+      now,
+    });
+    this._daylightPmremLastDecision = decision;
+    if (decision.shouldRebuild) {
+      const rebuilt = this._rebuildDaylightPmrem({ now, reason: decision.reason });
+      if (!rebuilt) this._daylightPmremLastDecision = { ...decision, deferred: true };
+    } else {
+      this._daylightPmremSuppressedUpdates += 1;
+    }
   }
 
-  _rebuildDaylightPmrem() {
+  _daylightPmremNow() {
+    return globalThis.performance?.now?.() ?? Date.now();
+  }
+
+  _recordDaylightPmremCapture(environment, now, reason) {
+    this._daylightPmremLastCaptureAt = now;
+    this._daylightPmremLastCaptureState = readDaylightPmremState(environment);
+    this._daylightPmremLastDecision = {
+      ...this._daylightPmremLastDecision,
+      shouldRebuild: true,
+      reason,
+      deferred: false,
+    };
+    this._daylightPmremSuppressedUpdates = 0;
+  }
+
+  _rebuildDaylightPmrem({ force = false, now = this._daylightPmremNow(), reason = 'unspecified' } = {}) {
     const environment = this._environmentBindings;
-    if (!this.weatherSky || this._daylightPmremRevision === environment.daylightRevision) return;
+    if (!environment || !this.weatherSky || (!force && this._daylightPmremRevision === environment.daylightRevision)) {
+      return false;
+    }
     // HDRLoader returns its texture handle synchronously, but the Radiance pixels
     // arrive later. Never ask PMREMGenerator to convolve that placeholder image;
     // startup explicitly calls rebuildDaylightPmrem() after weatherSky.ready.
-    if (this.skyManifest && !this.weatherSky.skyTextureLoaded) return;
+    if (this.skyManifest && !this.weatherSky.skyTextureLoaded) return false;
     // Three r185's WebGPU PMREMGenerator can capture a Scene.backgroundNode after
     // renderer.init(). A compact 64px cube is sufficient for matte turf, bark, rock,
     // and water while keeping this weather-change-only operation inexpensive.
@@ -354,11 +716,13 @@ export class SceneManager {
     this._daylightPmremRevision = environment.daylightRevision;
     this.scene.environment = next.texture;
     previous?.dispose();
+    this._recordDaylightPmremCapture(environment, now, reason);
+    return true;
   }
 
   rebuildDaylightPmrem() {
     this._daylightPmremRevision = -1;
-    this._rebuildDaylightPmrem();
+    this._rebuildDaylightPmrem({ force: true, reason: 'explicit', now: this._daylightPmremNow() });
   }
 
   // Call this at discontinuities in camera/scene state. Do not substitute zero
@@ -373,15 +737,67 @@ export class SceneManager {
     // depth silhouettes and paints canopy-shaped streaks over sky and trunks even
     // after the full-resolution TRAA target has been cleared.
     this._cloudTemporal?.reset();
-    this._traa.reset();
-    this._lastTemporalInvalidation = { reason, frame: this.renderer.info.frame };
+    this._traa?.reset(reason);
+    this._lastTemporalInvalidation = { reason, frame: this.renderer.info?.frame ?? null };
+  }
+
+  // Update the source render resolution without rebuilding the post graph. The
+  // public contract is deliberately independent of device tier selection so a
+  // future controller can make this decision from measured GPU timings.
+  setRenderResolution(options = {}) {
+    const current = this._renderResolution ?? {
+      outputPixelCap: null,
+      internalRenderScale: 1,
+      revision: 0,
+    };
+    const next = normalizeRenderResolution({
+      outputPixelCap: options.outputPixelCap === undefined
+        ? current.outputPixelCap : options.outputPixelCap,
+      internalRenderScale: options.internalRenderScale === undefined
+        ? current.internalRenderScale : options.internalRenderScale,
+    });
+    const outputChanged = next.outputPixelCap !== current.outputPixelCap;
+    const scaleChanged = next.internalRenderScale !== current.internalRenderScale;
+    if (!outputChanged && !scaleChanged) return this.readRenderResolutionDiagnostics();
+
+    this._renderResolution = {
+      ...next,
+      revision: (current.revision ?? 0) + 1,
+    };
+    if (this._scenePass) this._scenePass._resolutionScale = next.internalRenderScale;
+    const cloudScaleChanged = this._cloudTemporal?.setResolutionScale?.(
+      (this.weatherSky?.workload?.internalScale ?? 0.25) * next.internalRenderScale,
+    ) === true;
+
+    // A cap can change the output drawing buffer without changing CSS layout.
+    // Apply it through the same viewport authority used by resize, then resize
+    // only the existing MRT source target. TRAA/cloud history are invalidated,
+    // not replaced by a second post graph.
+    const viewportChanged = this._applyViewport(this._readViewport(), { invalidate: false });
+    const sourceChanged = this._syncScenePassResolution();
+    if (viewportChanged || sourceChanged || scaleChanged || cloudScaleChanged) {
+      const changes = [
+        outputChanged ? 'output-pixel-cap' : null,
+        scaleChanged ? 'internal-render-scale' : null,
+      ].filter(Boolean).join(', ');
+      this.invalidateTemporalHistory(`dynamic resolution: ${changes}`);
+    }
+    return this.readRenderResolutionDiagnostics();
+  }
+
+  setOutputPixelCap(outputPixelCap) {
+    return this.setRenderResolution({ outputPixelCap });
+  }
+
+  setInternalRenderScale(internalRenderScale) {
+    return this.setRenderResolution({ internalRenderScale });
   }
 
   onUpdate(fn) { this._updates.push(fn); return this; }
 
   _pixelRatio() {
     if (!this.environmentTier) throw new Error('SceneManager pixel ratio requires a resolved environment device tier.');
-    return this._clampPixelRatio(window.devicePixelRatio, this.environmentTier.pixelRatioCap);
+    return this._outputPixelRatio(window.innerWidth, window.innerHeight);
   }
 
   _clampPixelRatio(value, cap) {
@@ -392,8 +808,53 @@ export class SceneManager {
     return {
       width: Math.max(1, Math.round(window.innerWidth)),
       height: Math.max(1, Math.round(window.innerHeight)),
-      pixelRatio: this._clampPixelRatio(window.devicePixelRatio, this.environmentTier?.pixelRatioCap ?? 2),
+      pixelRatio: this._outputPixelRatio(window.innerWidth, window.innerHeight),
     };
+  }
+
+  _outputPixelRatio(width, height) {
+    const state = this._renderResolution ?? { outputPixelCap: null };
+    return calculateOutputPixelRatio({
+      width,
+      height,
+      devicePixelRatio: window.devicePixelRatio,
+      tierPixelRatioCap: this.environmentTier?.pixelRatioCap ?? 2,
+      outputPixelCap: state.outputPixelCap,
+    });
+  }
+
+  _readDrawingBufferSize() {
+    if (typeof this.renderer?.getDrawingBufferSize === 'function') {
+      const size = this.renderer.getDrawingBufferSize(this._drawingBufferSize ??= new Vector2());
+      return {
+        width: Math.max(1, Math.round(size.width)),
+        height: Math.max(1, Math.round(size.height)),
+      };
+    }
+    const canvas = this.renderer?.domElement;
+    if (canvas) {
+      return {
+        width: Math.max(1, Math.round(canvas.width || 1)),
+        height: Math.max(1, Math.round(canvas.height || 1)),
+      };
+    }
+    const viewport = this._viewportState ?? { width: 1, height: 1, pixelRatio: 1 };
+    return {
+      width: Math.max(1, Math.round(viewport.width * viewport.pixelRatio)),
+      height: Math.max(1, Math.round(viewport.height * viewport.pixelRatio)),
+    };
+  }
+
+  _syncScenePassResolution() {
+    const scenePass = this._scenePass;
+    if (!scenePass || typeof scenePass.setSize !== 'function') return false;
+    const target = scenePass.renderTarget;
+    const before = target ? [target.width, target.height] : null;
+    scenePass._resolutionScale = this._renderResolution?.internalRenderScale ?? 1;
+    const size = this._readDrawingBufferSize();
+    scenePass.setSize(size.width, size.height);
+    const after = scenePass.renderTarget ? [scenePass.renderTarget.width, scenePass.renderTarget.height] : null;
+    return before?.[0] !== after?.[0] || before?.[1] !== after?.[1];
   }
 
   _applyViewport(viewport, { invalidate = true } = {}) {
@@ -408,8 +869,89 @@ export class SceneManager {
     // Keep CSS owned by the fixed app layout; a renderer backing-store update
     // cannot create a clientWidth resize loop.
     this.renderer.setSize(viewport.width, viewport.height, false);
+    this._syncScenePassResolution();
     if (invalidate) this.invalidateTemporalHistory('render-size change');
     return true;
+  }
+
+  readRenderResolutionDiagnostics() {
+    const state = this._renderResolution ?? {
+      outputPixelCap: null,
+      internalRenderScale: 1,
+      revision: 0,
+    };
+    const canvas = this.renderer?.domElement;
+    const outputWidth = Math.max(1, Math.round(canvas?.width || 1));
+    const outputHeight = Math.max(1, Math.round(canvas?.height || 1));
+    const outputPixels = outputWidth * outputHeight;
+    const sceneTarget = this._scenePass?.renderTarget ?? null;
+    const sceneWidth = sceneTarget?.width ?? null;
+    const sceneHeight = sceneTarget?.height ?? null;
+    const expectedWidth = Math.max(1, Math.floor(outputWidth * state.internalRenderScale));
+    const expectedHeight = Math.max(1, Math.floor(outputHeight * state.internalRenderScale));
+    return {
+      revision: state.revision,
+      outputPixelCap: state.outputPixelCap,
+      internalRenderScale: state.internalRenderScale,
+      output: {
+        width: outputWidth,
+        height: outputHeight,
+        pixels: outputPixels,
+        pixelRatio: this._viewportState?.pixelRatio ?? null,
+        capSatisfied: state.outputPixelCap === null || outputPixels <= state.outputPixelCap,
+      },
+      internal: {
+        width: sceneWidth,
+        height: sceneHeight,
+        expectedWidth,
+        expectedHeight,
+        sourceScaleActive: sceneWidth === expectedWidth && sceneHeight === expectedHeight,
+      },
+      temporal: this._traa?.readDiagnostics?.() ?? null,
+      cloud: this._cloudTemporal?.readDiagnostics?.() ?? null,
+      temporalUpscale: {
+        enabled: false,
+        mode: 'dynamic-resolution-spatial-upsample',
+        reason: 'Three r185 TRAA history remains source-resolution; output-resolution temporal reconstruction is not enabled.',
+        presentation: 'RenderPipeline samples the resolved internal texture at output resolution.',
+      },
+    };
+  }
+
+  readDaylightPmremDiagnostics() {
+    const current = readDaylightPmremState(this._environmentBindings);
+    const change = measureDaylightPmremChange(
+      this._daylightPmremLastCaptureState,
+      current,
+      {
+        lastCaptureAt: this._daylightPmremLastCaptureAt,
+        now: this._daylightPmremNow(),
+      },
+    );
+    const finiteOrNull = (value) => Number.isFinite(value) ? value : null;
+    return {
+      capturedRevision: this._daylightPmremRevision,
+      pendingRevision: this._environmentBindings?.daylightRevision ?? null,
+      lastCaptureAt: finiteOrNull(this._daylightPmremLastCaptureAt),
+      maxIntervalMs: DAYLIGHT_PMREM_MAX_INTERVAL_MS,
+      sunAngleThresholdRadians: DAYLIGHT_PMREM_SUN_ANGLE_THRESHOLD_RADIANS,
+      atmosphericThreshold: DAYLIGHT_PMREM_ATMOSPHERIC_THRESHOLD,
+      radianceThreshold: DAYLIGHT_PMREM_RADIANCE_THRESHOLD,
+      suppressedUpdates: this._daylightPmremSuppressedUpdates ?? 0,
+      pending: Boolean(
+        this._environmentBindings
+        && this._daylightPmremRevision !== this._environmentBindings.daylightRevision,
+      ),
+      deltas: {
+        sunAngleRadians: finiteOrNull(change.sunAngleRadians),
+        atmospheric: finiteOrNull(change.atmosphericDelta),
+        radiance: finiteOrNull(change.radianceDelta),
+        elapsedMs: finiteOrNull(change.elapsedMs),
+      },
+      lastDecision: this._daylightPmremLastDecision
+        ? { ...this._daylightPmremLastDecision }
+        : null,
+    };
   }
 
   readViewportDiagnostics() {
@@ -432,6 +974,8 @@ export class SceneManager {
         temporalResolve: targetSize(this._traa?._resolveRenderTarget),
         bloom: targetSize(this._bloomPass?._target),
       },
+      renderResolution: this.readRenderResolutionDiagnostics(),
+      daylightPmrem: this.readDaylightPmremDiagnostics(),
       // TRAA deliberately changes the sub-pixel offset every frame while the
       // pipeline renders. It must be cleared before control returns here. Ignore
       // the remembered (but disabled) jitter tuple so stable-frame comparisons do
@@ -503,11 +1047,10 @@ export class SceneManager {
     if (this.weatherSky) this.weatherSky.setTemporalFrame(this.weatherSky.temporalFrame + 1);
     this._beginMotionFrame();
     // A moving broadcast camera already supplies real sub-pixel sample diversity.
-    // Keep cloudy projection exact; the low-resolution sky graph owns its own
-    // deterministic phase and CloudTemporalNode carries the camera reprojection.
+    // At rest, retain the bounded Halton sequence in clear and cloudy weather;
+    // CloudTemporalNode captures those actual matrices for its own reprojection.
     if (this._traa) {
-      this._traa.cameraJitterEnabled = this.weatherSky?.cloudsEnabled
-        ? false : !this._cameraMoving;
+      this._traa.cameraJitterEnabled = !this._cameraMoving;
     }
     this.postProcessing.render();
   }
@@ -525,15 +1068,26 @@ export class SceneManager {
     this._renderingPaused = true;
   }
 
-  renderSingleFrame() {
+  renderSingleFrame(deltaSeconds = null) {
     if (!this._ready) throw new Error('Cannot render a diagnostic frame before WebGPU initialization');
     if (!this._renderingPaused) throw new Error('renderSingleFrame requires pauseRendering()');
+    const now = performance.now();
+    if (deltaSeconds !== null) {
+      const fixedDelta = Number(deltaSeconds);
+      if (!Number.isFinite(fixedDelta) || fixedDelta < 0 || fixedDelta > 0.1) {
+        throw new RangeError('renderSingleFrame deltaSeconds must be between 0 and 0.1 seconds.');
+      }
+      // Offline capture advances the same production update/render graph on an
+      // exact editorial timebase. Wall-clock screenshot and encode latency must
+      // never leak into physics, wind, camera damping, or temporal sampling.
+      this._lastFrameTime = now - fixedDelta * 1000;
+    }
     if (this.renderer.info.autoReset === true) this.renderer.info.reset();
     this.renderer._nodes.nodeFrame.update();
     this.renderer.info.frame = this.renderer._nodes.nodeFrame.frameId;
     this.renderer._inspector.begin();
     try {
-      this._renderFrame(performance.now());
+      this._renderFrame(now);
     } finally {
       this.renderer._inspector.finish();
     }

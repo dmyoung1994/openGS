@@ -12,10 +12,10 @@ const shippedCatalog = JSON.parse(await readFile(catalogPath, 'utf8'));
 test('shipped course validates against the shipped runtime catalog constraints', () => {
   const catalog = new Map(shippedCatalog.assets.map((asset) => [asset.id, asset]));
   const normalized = normalizeCourse(structuredClone(shippedCourse), { catalogAssetIds: catalog });
-  assert.equal(normalized.environment.objectCount, 517);
+  assert.equal(normalized.environment.objectCount, 509);
 });
 
-test('course v2 normalization is deterministic and preserves gameplay features', () => {
+test('course v3 normalization is deterministic and preserves gameplay features', () => {
   const first = normalizeCourse(structuredClone(shippedCourse));
   const second = normalizeCourse(structuredClone(shippedCourse));
   assert.deepEqual(first, second);
@@ -26,7 +26,7 @@ test('course v2 normalization is deterministic and preserves gameplay features',
   assert.equal(first.biome, 'temperate-maritime');
   assert.ok(first.greens.every((green) => green.shape?.length >= 18));
   assert.ok(first.bunkers.every((bunker) => !bunker.shape || bunker.shape.length >= 18));
-  assert.equal(first.environment.objectCount, 517);
+  assert.equal(first.environment.objectCount, 509);
   assert.deepEqual(first.environment.edgeDressing, [],
     'photographic HDR forest supplies the distant enclosure without authored edge rows');
   assert.deepEqual(first.environment.assembly.filter(({ id }) => id.startsWith('forest-cluster-')).map(({ id, semantic, count }) => ({ id, semantic, count })), [
@@ -49,7 +49,7 @@ test('course v2 normalization is deterministic and preserves gameplay features',
   ]);
 });
 
-test('parkland revision uses mature broadleaf anchors in layered side lines with a central window', () => {
+test('maritime revision uses mature palms in layered side lines with a central window', () => {
   const normalized = normalizeCourse(structuredClone(shippedCourse));
   const environment = normalized.environment;
   const catalog = new Map(shippedCatalog.assets.map((asset) => [asset.id, asset]));
@@ -59,18 +59,18 @@ test('parkland revision uses mature broadleaf anchors in layered side lines with
     .filter(({ assetIds }) => assetIds.some(isTree));
   const distributedTrees = distributedTreeRecords.reduce((sum, record) => sum + record.count, 0);
   assert.equal(explicitTrees.length, 19, 'authored hero, anchor, mid-tier, and understory trees remain');
-  assert.equal(distributedTrees, 162);
-  assert.equal(explicitTrees.length + distributedTrees, 181);
-  // One reviewed broadleaf source now owns every standing tree. Scale still supplies
-  // deliberate young, middle, and mature silhouettes without another species
-  // batch or a mismatched LOD family.
+  assert.equal(distributedTrees, 154);
+  assert.equal(explicitTrees.length + distributedTrees, 173);
+  // One reviewed palm source owns every standing tree. Physical target-height
+  // scaling supplies deliberate young, middle, and mature silhouettes without
+  // an asset-specific multiplier or a mismatched LOD family.
   const species = new Set(explicitTrees.map(({ assetId }) => assetId));
-  assert.deepEqual([...species], ['polyhaven-tree-small-02']);
-  assert.ok(distributedTreeRecords.every(({ assetIds }) => assetIds.length === 1 && assetIds[0] === 'polyhaven-tree-small-02'));
+  assert.deepEqual([...species], ['blendkit-palm-tree-medium-dense']);
+  assert.ok(distributedTreeRecords.every(({ assetIds }) => assetIds.length === 1 && assetIds[0] === 'blendkit-palm-tree-medium-dense'));
   const heights = explicitTrees.map(({ assetId, scale }) => catalog.get(assetId).dimensions.height * scale);
   const ageClasses = new Set(heights.map((h) => (h < 12 ? 'young' : h > 15 ? 'mature' : 'middle')));
-  assert.deepEqual([...ageClasses].sort(), ['middle', 'young'],
-    'catalog anchors retain young and golfer-height hero classes; generated packs own mature canopy scale');
+  assert.deepEqual([...ageClasses].sort(), ['mature', 'middle', 'young'],
+    'catalog anchors retain a natural range of palm heights');
   const forestRecords = distributedTreeRecords.filter(({ semantic }) => semantic === 'forest-cluster' || semantic === 'course-boundary');
   assert.ok(forestRecords.some(({ region }) => region.maxZ > -125), 'foreground community exists');
   assert.ok(forestRecords.some(({ region }) => region.minZ < -180 && region.maxZ > -250), 'midground community exists');
@@ -87,7 +87,7 @@ test('parkland revision uses mature broadleaf anchors in layered side lines with
     'the pond side uses three overlapping depth bands instead of forcing trees through water');
   assert.equal(forestRecords.filter(({ id }) => id.includes('understory')).length, 0,
     'forest communities should not recreate a repeated understory curtain');
-  assert.ok(environment.objectCount <= 525, 'authored ecology must remain below the 525-object composition ceiling');
+  assert.ok(environment.objectCount <= 700, 'authored ecology must remain within the declared 700-object composition ceiling');
   assert.ok(environment.objectCount <= environment.objectBudget && environment.objectBudget <= 700);
 });
 

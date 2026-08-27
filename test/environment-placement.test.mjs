@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveEnvironmentPlacements } from '../src/environment/EnvironmentPlacement.js';
+import {
+  environmentHabitatSuitability, resolveEnvironmentPlacements,
+} from '../src/environment/EnvironmentPlacement.js';
 
 const asset = Object.freeze({
   id: 'tree-a', dimensions: { height: 10 }, bounds: { radius: 2, baseY: 0 },
@@ -123,4 +125,83 @@ test('fallen deadwood may occupy the under-canopy habitat without intersecting t
   };
 
   assert.equal(resolveEnvironmentPlacements(habitatCourse, habitatCatalog, terrain).length, 2);
+});
+
+test('only catalog-compatible vegetation survives the strand and dune ecotone', () => {
+  const duneGrass = {
+    category: 'groundcover',
+    transitionHabitats: ['managed-course', 'strand-grass', 'coastal-dune'],
+  };
+  const fern = {
+    category: 'groundcover',
+    transitionHabitats: ['managed-course', 'montane-forest'],
+  };
+  const dune = {
+    transitionId: 'resort-edge',
+    habitat: 'coastal-dune',
+    weights: { primary: 0, strandGrass: 0.12, dune: 0.88, drySand: 0, wetSand: 0, shallowShelf: 0, deepOcean: 0, alpine: 0 },
+  };
+  const strand = {
+    transitionId: 'resort-edge',
+    habitat: 'strand-grass',
+    weights: { primary: 0.05, strandGrass: 0.95, dune: 0, drySand: 0, wetSand: 0, shallowShelf: 0, deepOcean: 0, alpine: 0 },
+  };
+
+  assert.equal(environmentHabitatSuitability(duneGrass, dune).allowed, true);
+  assert.equal(environmentHabitatSuitability(duneGrass, strand).allowed, true);
+  assert.equal(environmentHabitatSuitability(fern, dune).allowed, false);
+  assert.equal(environmentHabitatSuitability(fern, strand).allowed, false);
+  assert.ok(Math.abs(environmentHabitatSuitability(duneGrass, dune).vegetationWeight - 0.604) < 1e-12);
+});
+
+test('dry beach, intertidal, shelf, and ocean weights retire environment vegetation', () => {
+  const duneGrass = {
+    category: 'groundcover',
+    transitionHabitats: ['managed-course', 'strand-grass', 'coastal-dune'],
+  };
+  for (const habitat of ['dry-beach', 'intertidal', 'marine-shelf', 'deep-ocean']) {
+    const channel = ({
+      'dry-beach': 'drySand', intertidal: 'wetSand',
+      'marine-shelf': 'shallowShelf', 'deep-ocean': 'deepOcean',
+    })[habitat];
+    const weights = {
+      primary: 0, strandGrass: 0, dune: 0, drySand: 0,
+      wetSand: 0, shallowShelf: 0, deepOcean: 0, alpine: 0,
+    };
+    weights[channel] = 1;
+    assert.deepEqual(
+      environmentHabitatSuitability(duneGrass, { transitionId: 'resort-edge', habitat, weights }),
+      { allowed: false, vegetationWeight: 0 },
+      habitat,
+    );
+  }
+});
+
+test('resolver deterministically compacts a catalog grass clump into its authored dune habitat', () => {
+  const grass = Object.freeze({
+    id: 'dune-grass', category: 'groundcover', dimensions: { height: 0.405 },
+    bounds: { radius: 1.35, baseY: -0.006 }, biomes: ['temperate-maritime'],
+    grounding: { burialFraction: 0.035 }, placement: { minSpacing: 2.2, maxSlopeDegrees: 34 },
+    transitionHabitats: ['managed-course', 'strand-grass', 'coastal-dune'],
+  });
+  const duneCatalog = { byId: new Map([['dune-grass', grass]]) };
+  const duneCourse = {
+    environmentSeed: 991, biome: 'temperate-maritime',
+    environment: {
+      objectCount: 1,
+      placements: [{ id: 'dune-clump', assetId: 'dune-grass', x: -108, z: -80, rotationY: 0.7, scale: 1.4 }],
+      scatter: [], assembly: [], edgeDressing: [],
+    },
+  };
+  const duneClassification = {
+    transitionId: 'resort-edge', habitat: 'coastal-dune',
+    weights: { primary: 0, strandGrass: 0.1, dune: 0.9, drySand: 0, wetSand: 0, shallowShelf: 0, deepOcean: 0, alpine: 0 },
+  };
+  const biomeField = { sample: () => duneClassification };
+  const first = resolveEnvironmentPlacements(duneCourse, duneCatalog, terrain, biomeField);
+  const second = resolveEnvironmentPlacements(duneCourse, duneCatalog, terrain, biomeField);
+
+  assert.deepEqual(first, second);
+  assert.equal(first[0].habitat, 'coastal-dune');
+  assert.ok(Math.abs(first[0].vegetationWeight - 0.595) < 1e-12);
 });

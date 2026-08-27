@@ -82,7 +82,9 @@ export async function buildEnvironmentProps({ catalog, placements, environmentSe
         scale.setScalar(placement.scale);
         matrix.compose(position, quaternion, scale);
         mesh.setMatrixAt(index, matrix);
-        mesh.setColorAt(index, placementTint(tint, asset.category, environmentSeed, placement.sourceId));
+        mesh.setColorAt(index, placementTint(
+          tint, asset.category, environmentSeed, placement.sourceId, placement.habitat,
+        ));
       });
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -155,10 +157,19 @@ function prepareMaterial(source, category, name) {
   return material;
 }
 
-function placementTint(target, category, seed, sourceId) {
+export function placementTint(target, category, seed, sourceId, habitat = null) {
   const random = createRng(deriveSeed(seed, `${sourceId}:prop-tint`));
   const brightness = 0.95 + random() * 0.07;
   if (category === 'groundcover' || category === 'shrub' || category === 'tree') {
+    // Instance colour multiplies the source base-colour texture, preserving the
+    // licensed scan's authored material while shifting dune grass toward the dry,
+    // sun-bleached straw character that distinguishes it from managed rough.
+    if (habitat === 'coastal-dune') {
+      return target.setRGB(brightness, brightness * 0.93, brightness * 0.69);
+    }
+    if (habitat === 'strand-grass') {
+      return target.setRGB(brightness * 0.91, brightness * 0.97, brightness * 0.76);
+    }
     return target.setRGB(brightness * (0.965 + random() * 0.025), brightness, brightness * (0.93 + random() * 0.035));
   }
   if (category === 'rock') {

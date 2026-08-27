@@ -6,7 +6,7 @@ const MAX_ATTEMPTS_PER_OBJECT = 256;
 // Resolve semantic authoring records into immutable, renderer-ready placements.
 // Every requested object must be placed or the build fails; silently shortening a
 // scatter would make authored presence dependent on terrain or algorithm accidents.
-export function resolveEnvironmentPlacements(course, catalog, terrain) {
+export function resolveEnvironmentPlacements(course, catalog, terrain, biomeField = terrain?._biomeField) {
   if (!course?.environment || !catalog?.byId || !terrain?.heightAt || !terrain?.normalAt) {
     throw new Error('Environment placement requires strict course, catalog, and terrain inputs.');
   }
@@ -16,6 +16,9 @@ export function resolveEnvironmentPlacements(course, catalog, terrain) {
   const append = (assetId, x, z, rotationY, scale, sourceId, authoredMinSpacing = 0) => {
     const asset = getCatalogAsset(catalog, assetId);
     if (!asset.biomes.includes(course.biome)) return false;
+    const biomeClassification = biomeField?.sample?.(x, z) ?? null;
+    const suitability = environmentHabitatSuitability(asset, biomeClassification);
+    if (!suitability.allowed) return false;
     const normal = terrain.normalAt(x, z);
     const slope = Math.acos(Math.min(1, Math.max(-1, normal.y))) * 180 / Math.PI;
     if (slope > asset.placement.maxSlopeDegrees) return false;
@@ -44,6 +47,8 @@ export function resolveEnvironmentPlacements(course, catalog, terrain) {
       normalZ: surfaceNormal.z,
       burialFraction: grounding.burialFraction,
       targetHeight: asset.dimensions.height * scale,
+      habitat: biomeClassification?.habitat ?? null,
+      vegetationWeight: suitability.vegetationWeight,
     });
     result.push(placement);
     occupied.push({ x, z, minSpacing, assetId, category: asset.category, radius });
@@ -85,6 +90,34 @@ export function resolveEnvironmentPlacements(course, catalog, terrain) {
   return Object.freeze(result);
 }
 
+// Catalog vegetation opts into semantic transition habitats. This keeps a fern or
+// tree that is valid for the primary maritime biome from silently surviving into a
+// dune merely because both bands share the same broad biome ID. Substrate remains
+// authoritative: no decorative asset can bridge dry sand into the intertidal or
+// water bands. Non-vegetation retains the existing substrate gate so authored rocks
+// and deadwood cannot accidentally be placed under the generated ocean either.
+export function environmentHabitatSuitability(asset, biomeClassification) {
+  const weights = biomeClassification?.weights ?? null;
+  if (!weights) return Object.freeze({ allowed: true, vegetationWeight: 1 });
+  const substrateWeight = (weights.drySand ?? 0) + (weights.wetSand ?? 0)
+    + (weights.shallowShelf ?? 0) + (weights.deepOcean ?? 0);
+  if (substrateWeight > 0.18) {
+    return Object.freeze({ allowed: false, vegetationWeight: 0 });
+  }
+  const vegetationWeight = Math.min(1, Math.max(0,
+    (weights.primary ?? 0) + (weights.strandGrass ?? 0)
+      + (weights.dune ?? 0) * 0.55 + (weights.alpine ?? 0),
+  ));
+  const vegetation = asset.category === 'tree' || asset.category === 'shrub'
+    || asset.category === 'groundcover';
+  const habitat = biomeClassification.habitat;
+  if (vegetation && biomeClassification.transitionId && habitat !== 'managed-course'
+    && !asset.transitionHabitats?.includes(habitat)) {
+    return Object.freeze({ allowed: false, vegetationWeight });
+  }
+  return Object.freeze({ allowed: vegetationWeight > 0.12, vegetationWeight });
+}
+
 function distributedScale(record, asset, random, placed) {
   if (record.kind === 'assembly' && asset.category === 'rock') {
     // Outcrops need a hierarchy: one dominant face, a pair of supporting masses,
@@ -97,13 +130,28 @@ function distributedScale(record, asset, random, placed) {
     return 0.88 + random() * 0.62;
   }
   if (asset.category === 'groundcover' || asset.category === 'shrub') {
+    // Native grass clumps are authored at different ecological scales: a fine
+    // Bermuda tuft is intentionally low, while a medium rough clump and fern
+    // need enough vertical presence to read from a golfer-height camera. Keep
+    // that authored distinction deterministic instead of flattening every
+    // groundcover asset into the same nursery-scale scatter.
+    const nativeHeight = asset.dimensions?.height ?? 0;
+    if (asset.category === 'groundcover' && nativeHeight >= 0.3) return 1.15 + random() * 0.80;
+    if (asset.category === 'groundcover' && nativeHeight >= 0.12) return 1.30 + random() * 0.80;
     return 0.76 + random() * 0.44;
   }
   if (asset.category === 'tree') {
-    // A forest wall needs age structure, not a row of cloned nursery stock.
-    // Preserve the authored species while spanning young edge trees through
-    // mature canopy dominants; this changes scale only, never placement count.
-    return 0.66 + random() * 0.72;
+    // Tree source assets vary from 4 m saplings to 15 m mature palms. Scale to
+    // physical target heights rather than multiplying every source by the same
+    // factor; otherwise changing species can silently create 60–100 m trees.
+    // Keep the first anchor tallest, then taper through supports and fill.
+    const nativeHeight = Math.max(0.1, asset.dimensions?.height ?? 1);
+    if (record.kind === 'assembly') {
+      if (placed === 0) return (20 + random() * 4) / nativeHeight;
+      if (placed < 3) return (17 + random() * 4) / nativeHeight;
+      return (13 + random() * 5) / nativeHeight;
+    }
+    return (10 + random() * 7) / nativeHeight;
   }
   return 0.78 + random() * 0.44;
 }
@@ -190,7 +238,11 @@ function requiredPairSpacing(current, prior) {
   const isTreeDeadwoodPair = (current.asset.category === 'tree' && prior.category === 'deadwood')
     || (current.asset.category === 'deadwood' && prior.category === 'tree');
   if (isTreeDeadwoodPair) return Math.max(1.5, combinedRadius * 0.25);
-  if (current.asset.category === 'tree' || prior.category === 'tree') return combinedRadius * 0.62;
+  // Mature canopy crowns are allowed to overlap at the edges of a community;
+  // clear the trunks, not every leaf tip. The old 0.62 crown rule was authored
+  // for small nursery-scale trees and rejects the larger Augusta perimeter trees
+  // before they can be placed.
+  if (current.asset.category === 'tree' || prior.category === 'tree') return Math.max(3, combinedRadius * 0.30);
   return combinedRadius * 0.42;
 }
 

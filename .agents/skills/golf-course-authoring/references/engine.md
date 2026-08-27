@@ -34,6 +34,7 @@ automatically — you do not set it.
   "catalogVersion": 2,
   "placementAlgorithmVersion": 1,
   "biome": "temperate-maritime",
+  "biomeTransitions": [],
   "environmentSeed": 1128746828,
   "bounds": { "minX": -110, "maxX": 110, "minZ": -340, "maxZ": 30 },
   "tee":    { "x": 0, "z": 2, "boxHalfX": 3.2, "z0": -2, "z1": 6 },
@@ -95,6 +96,10 @@ the declared aliases and fails closed on an undeclared species.
    scripts/course-mcp.mjs` (or `codex mcp add …`). Writes land on `course.json`,
    which live-reloads the running sim.
 
+Schema v3 requires `meta.schema: 3` and `biomeTransitions` (use `[]` when no
+transition is intended). For transition records and registered profiles, read
+`../../golf-biome-transitions/references/engine-contract.md`.
+
 ### MCP tools (course-engine)
 
 - `describe_schema` — the schema + contour vocabulary (this file, condensed).
@@ -103,6 +108,8 @@ the declared aliases and fails closed on an undeclared species.
   rough/deepRough/sand/water), the fairway half-width at that z, and nearby
   features. **Use this to place features precisely** (it replaces the prior engine's
   `inspect_region`).
+- `classify_biome {x,z}` — semantic transition owner, habitat, profile weights,
+  and primary/target biome at a point; it does not replace gameplay classification.
 - `validate_course {course?}` — normalize + design sanity checks (bounds, feature
   overlaps, undersized "pots"); returns warnings. Does not write.
 - `set_course {course}` — validate then write the full course. This is the

@@ -1,45 +1,211 @@
 import {
-  DataTexture, DoubleSide, FloatType, LinearFilter, LinearMipmapLinearFilter,
-  Mesh, RedFormat, Shape, ShapeGeometry,
-  ClampToEdgeWrapping, RepeatWrapping, TextureLoader, Vector4,
+  ClampToEdgeWrapping, DataTexture, DoubleSide, FloatType, LinearFilter,
+  Matrix4, Mesh, RedFormat, RGBAFormat,
+  Shape, ShapeGeometry, UnsignedByteType, Vector4,
 } from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import {
-  cameraPosition, exp, float, mix, oneMinus, positionGeometry,
-  positionWorld, smoothstep, texture, transformNormalToView,
-  uniform, vec2, vec3,
+  atan, cameraPosition, exp, float, mix, oneMinus,
+  positionGeometry, positionWorld, smoothstep, texture,
+  transformNormalToView, uniform, vec2, vec3, vec4,
 } from 'three/tsl';
 import { EnvironmentGpuBindings } from '../environment/EnvironmentGpuBindings.js';
 import { roundedHazardFeature, signedDistanceToFeature } from '../course/featureGeometry.js';
+import {
+  acquireWaterDetailTexture, configureWaterDetailTexture,
+  releaseWaterDetailTexture, sampleWaterDetail,
+} from './WaterDetail.js';
 
 // Keep a few collision ripples in the material without allocating anything in the
 // render loop. A pond is normally quiet, but a ball entry should leave a legible,
 // finite wave packet for a short time.
 const IMPACT_SLOTS = 4;
-const _textureLoader = new TextureLoader();
-let _detailTexture = null;
-let _detailReady = null;
 
-function loadWaterDetail() {
-  if (_detailTexture) return { texture: _detailTexture, ready: _detailReady };
-  let resolveReady, rejectReady;
-  _detailReady = new Promise((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  _detailTexture = _textureLoader.load(
-    '/assets/textures/water_detail_rgba.png',
-    () => resolveReady(),
-    undefined,
-    (error) => rejectReady(error || new Error('Required water detail texture failed to load.')),
+const TWO_PI = Math.PI * 2;
+const IDENTITY_MATRIX = Object.freeze([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+]);
+
+// WaterSurface never creates or owns the scene reflection pass. These profiles
+// describe the contract that an external pass must satisfy before it hands its
+// textures to the water material. The values are deliberately serializable so
+// the renderer quality controller can use the same policy on desktop and mobile.
+export const WATER_REFLECTION_PROFILES = Object.freeze({
+  ultra: Object.freeze({
+    mode: 'ultra', source: 'planar', resolutionScale: 0.50,
+    updateIntervalFrames: 1, temporalWeight: 0.86, maxHistoryFrames: 3,
+    localProbeWeight: 0, maxLuminance: 8,
+  }),
+  quality: Object.freeze({
+    mode: 'quality', source: 'planar', resolutionScale: 0.25,
+    updateIntervalFrames: 2, temporalWeight: 0.78, maxHistoryFrames: 4,
+    localProbeWeight: 0, maxLuminance: 6,
+  }),
+  mobile: Object.freeze({
+    mode: 'mobile', source: 'analytic-local-probe', resolutionScale: 0,
+    updateIntervalFrames: 0, temporalWeight: 0, maxHistoryFrames: 0,
+    localProbeWeight: 0.62, maxLuminance: 4,
+  }),
+  analytic: Object.freeze({
+    mode: 'analytic', source: 'analytic-sky', resolutionScale: 0,
+    updateIntervalFrames: 0, temporalWeight: 0, maxHistoryFrames: 0,
+    localProbeWeight: 0, maxLuminance: 4,
+  }),
+});
+
+export const WATER_REFLECTION_MODES = Object.freeze(Object.keys(WATER_REFLECTION_PROFILES));
+
+const REFLECTION_MODE_ALIASES = Object.freeze({
+  'local-probe': 'mobile',
+  'analytic-sky': 'analytic',
+  'half-resolution': 'ultra',
+  'quarter-resolution': 'quality',
+});
+
+const _fallbackReflectionTexture = new DataTexture(
+  new Uint8Array([0, 0, 0, 255]), 1, 1, RGBAFormat, UnsignedByteType,
+);
+_fallbackReflectionTexture.name = 'water:analytic-reflection-fallback';
+_fallbackReflectionTexture.minFilter = _fallbackReflectionTexture.magFilter = LinearFilter;
+_fallbackReflectionTexture.wrapS = _fallbackReflectionTexture.wrapT = ClampToEdgeWrapping;
+_fallbackReflectionTexture.generateMipmaps = false;
+_fallbackReflectionTexture.needsUpdate = true;
+
+const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+function textureLike(value) {
+  return value?.isTexture === true ? value : null;
+}
+
+function matrixElements(value) {
+  const elements = value?.isMatrix4 ? value.elements : value;
+  if (!elements || typeof elements.length !== 'number' || elements.length !== 16) return null;
+  const result = Array.from(elements, Number);
+  return result.every(Number.isFinite) ? result : null;
+}
+
+function nonNegativeInteger(value, fallback = 0) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function reflectionMode(value) {
+  const requested = String(value ?? 'analytic').trim().toLowerCase();
+  const normalized = REFLECTION_MODE_ALIASES[requested] ?? requested;
+  if (!WATER_REFLECTION_PROFILES[normalized]) {
+    throw new RangeError(`Unknown water reflection mode: ${String(value)}.`);
+  }
+  return normalized;
+}
+
+/**
+ * Normalize the renderer-to-water reflection boundary without allocating GPU
+ * resources or mutating caller-owned textures/matrices.
+ *
+ * Planar modes intentionally degrade to analytic sky when a pass has not yet
+ * supplied a complete color + view-projection contract. This makes a missing
+ * optional reflection pass safe on phones, during startup, and after device loss.
+ */
+export function normalizeWaterReflectionInput(input = null) {
+  if (input !== null && input !== undefined
+    && (typeof input !== 'object' || Array.isArray(input))) {
+    throw new TypeError('Water reflection input must be an object or null.');
+  }
+  const source = input || {};
+  const mode = reflectionMode(source.mode ?? source.qualityMode);
+  const profile = WATER_REFLECTION_PROFILES[mode];
+  const colorTexture = textureLike(
+    source.colorTexture ?? source.texture ?? source.reflectionTexture,
   );
-  _detailTexture.name = 'water:seamless-capillary-detail';
-  _detailTexture.wrapS = _detailTexture.wrapT = RepeatWrapping;
-  _detailTexture.minFilter = LinearMipmapLinearFilter;
-  _detailTexture.magFilter = LinearFilter;
-  _detailTexture.anisotropy = 8;
-  _detailTexture.flipY = false;
-  return { texture: _detailTexture, ready: _detailReady };
+  const depthTexture = textureLike(source.depthTexture ?? source.reflectionDepthTexture);
+  const historyTexture = textureLike(source.historyTexture ?? source.reflectionHistoryTexture);
+  const localProbeTexture = textureLike(
+    source.localProbeTexture ?? source.localProbe ?? source.probeTexture,
+  );
+  const currentMatrix = matrixElements(
+    source.viewProjectionMatrix
+      ?? source.reflectionViewProjectionMatrix
+      ?? source.matrix,
+  );
+  const previousMatrix = matrixElements(
+    source.previousViewProjectionMatrix
+      ?? source.previousReflectionViewProjectionMatrix
+      ?? source.previousMatrix,
+  ) ?? currentMatrix ?? IDENTITY_MATRIX;
+  const planarRequested = profile.source === 'planar';
+  const planarReady = planarRequested && !!colorTexture && !!currentMatrix;
+  const degradedReason = planarRequested && !planarReady
+    ? (!colorTexture ? 'missing-color-texture' : 'missing-view-projection-matrix')
+    : null;
+  const frame = nonNegativeInteger(source.frame ?? source.frameIndex, 0);
+  const lastUpdatedFrame = Number.isFinite(source.lastUpdatedFrame)
+    ? nonNegativeInteger(source.lastUpdatedFrame, frame)
+    : frame;
+  const staleFrames = Math.max(0, frame - lastUpdatedFrame);
+  const maxHistoryFrames = nonNegativeInteger(
+    source.maxHistoryFrames ?? profile.maxHistoryFrames,
+    profile.maxHistoryFrames,
+  );
+  const historyValid = !!historyTexture
+    && planarRequested
+    && source.historyValid !== false
+    && !source.cameraCut
+    && staleFrames <= maxHistoryFrames;
+  const localProbeWeight = localProbeTexture
+    ? clamp(finite(source.localProbeWeight, profile.localProbeWeight), 0, 1)
+    : 0;
+  const localProbeReady = !!localProbeTexture && localProbeWeight > 0;
+  const width = nonNegativeInteger(source.width ?? source.size?.width, 0);
+  const height = nonNegativeInteger(source.height ?? source.size?.height, 0);
+  const currentValid = planarReady && source.valid !== false && source.currentValid !== false;
+  const historyWeight = historyValid
+    ? clamp(finite(source.historyWeight, profile.temporalWeight), 0, 0.97)
+    : 0;
+  const updateIntervalFrames = profile.source === 'planar'
+    ? Math.max(1, nonNegativeInteger(source.updateIntervalFrames, profile.updateIntervalFrames))
+    : 0;
+
+  return Object.freeze({
+    mode,
+    requestedMode: String(source.mode ?? source.qualityMode ?? 'analytic'),
+    source: planarReady
+      ? 'planar'
+      : localProbeReady
+        ? 'local-probe+analytic-sky'
+        : 'analytic-sky',
+    profile: Object.freeze({ ...profile }),
+    planarRequested,
+    planarReady,
+    degradedReason,
+    colorTexture,
+    depthTexture,
+    historyTexture,
+    localProbeTexture,
+    viewProjectionElements: Object.freeze([...(currentMatrix ?? IDENTITY_MATRIX)]),
+    previousViewProjectionElements: Object.freeze([...previousMatrix]),
+    width,
+    height,
+    resolutionScale: clamp(finite(source.resolutionScale, profile.resolutionScale), 0, 1),
+    updateIntervalFrames,
+    revision: nonNegativeInteger(source.revision, 0),
+    frame,
+    lastUpdatedFrame,
+    staleFrames,
+    currentValid,
+    historyValid,
+    historyWeight,
+    maxHistoryFrames,
+    depthAvailable: planarReady && !!depthTexture && source.depthAvailable !== false,
+    depthTolerance: clamp(finite(source.depthTolerance, 0.08), 0.005, 0.5),
+    flipY: source.flipY === true || source.yFlip === true,
+    localProbeWeight,
+    localProbeReady,
+    maxLuminance: clamp(finite(source.maxLuminance, profile.maxLuminance), 0.25, 64),
+  });
 }
 
 // Water uses one cheap analytic daylight response. It does not render a second
@@ -47,7 +213,7 @@ function loadWaterDetail() {
 // radiance node is evaluated once for the reflected direction and bounded before
 // it is combined with the Beer–Lambert body.
 export class WaterSurface {
-  constructor({ environment, pond, level, detailTexture = null }) {
+  constructor({ environment, pond, level, detailTexture = null, reflectionInput = null }) {
     if (!(environment instanceof EnvironmentGpuBindings)) {
       throw new TypeError('WaterSurface requires shared EnvironmentGpuBindings.');
     }
@@ -71,15 +237,38 @@ export class WaterSurface {
     // loader. Production never supplies it and therefore always uses the required
     // baked asset above.
     const detail = detailTexture
-      ? { texture: detailTexture, ready: Promise.resolve() }
-      : loadWaterDetail();
+      ? { texture: configureWaterDetailTexture(detailTexture), ready: Promise.resolve(), shared: false }
+      : { ...acquireWaterDetailTexture(), shared: true };
     this._detailTexture = detail.texture;
+    this._ownsSharedDetailReference = detail.shared;
     this.assetsReady = detail.ready;
     // Uniform Vector4s are kept separate from the shared environment clock so an
     // impact can be replaced without rebuilding the node graph.
     this._impacts = Array.from({ length: IMPACT_SLOTS }, () => (
       uniform(new Vector4(0, 0, -1000, 0))
     ));
+
+    // The optional reflection textures are bindings, not render resources. The
+    // one-pixel inputs keep the graph complete before an external planar pass is
+    // ready and make a missing mobile/local-probe input resolve to analytic sky.
+    this._reflectionColorNode = texture(_fallbackReflectionTexture);
+    this._reflectionDepthNode = texture(_fallbackReflectionTexture);
+    this._reflectionHistoryNode = texture(_fallbackReflectionTexture);
+    this._reflectionLocalProbeNode = texture(_fallbackReflectionTexture);
+    this._reflectionViewProjection = uniform(new Matrix4());
+    this._reflectionPreviousViewProjection = uniform(new Matrix4());
+    this._reflectionPlanarEnabled = uniform(0);
+    this._reflectionCurrentValid = uniform(0);
+    this._reflectionHistoryValid = uniform(0);
+    this._reflectionHistoryWeight = uniform(0);
+    this._reflectionDepthAvailable = uniform(0);
+    this._reflectionDepthTolerance = uniform(0.08);
+    this._reflectionFlipY = uniform(0);
+    this._reflectionLocalProbeWeight = uniform(0);
+    this._reflectionMaxLuminance = uniform(4);
+    this._reflectionInput = normalizeWaterReflectionInput(null);
+    this._reflectionInputConfigured = false;
+    this._applyReflectionInput(this._reflectionInput);
 
     // Only a narrow skirt crosses the terrain/water contact. The former 2.8 m
     // translucent skirt let broad terrain undulations cut scallops through the
@@ -97,6 +286,51 @@ export class WaterSurface {
     this.mesh.userData.waterSurface = this;
     this.mesh.userData.assetsReady = this.assetsReady;
     this.mesh.receiveShadow = true;
+
+    if (reflectionInput !== null && reflectionInput !== undefined) {
+      this.setReflectionInput(reflectionInput);
+    }
+  }
+
+  _applyReflectionInput(input) {
+    this._reflectionInput = input;
+    this._reflectionColorNode.value = input.colorTexture || _fallbackReflectionTexture;
+    this._reflectionDepthNode.value = input.depthTexture || _fallbackReflectionTexture;
+    this._reflectionHistoryNode.value = input.historyTexture || _fallbackReflectionTexture;
+    this._reflectionLocalProbeNode.value = input.localProbeTexture || _fallbackReflectionTexture;
+    this._reflectionViewProjection.value.fromArray(input.viewProjectionElements);
+    this._reflectionPreviousViewProjection.value.fromArray(input.previousViewProjectionElements);
+    this._reflectionPlanarEnabled.value = input.planarReady ? 1 : 0;
+    this._reflectionCurrentValid.value = input.currentValid ? 1 : 0;
+    this._reflectionHistoryValid.value = input.historyValid ? 1 : 0;
+    this._reflectionHistoryWeight.value = input.historyWeight;
+    this._reflectionDepthAvailable.value = input.depthAvailable ? 1 : 0;
+    this._reflectionDepthTolerance.value = input.depthTolerance;
+    this._reflectionFlipY.value = input.flipY ? 1 : 0;
+    this._reflectionLocalProbeWeight.value = input.localProbeReady
+      ? input.localProbeWeight : 0;
+    this._reflectionMaxLuminance.value = input.maxLuminance;
+  }
+
+  /**
+   * Attach the output of an externally-owned water reflection pass. The pass
+   * owns camera mirroring, culling, target allocation, and update cadence; this
+   * surface only updates stable texture/matrix bindings and shader weights.
+   */
+  setReflectionInput(input = null) {
+    const normalized = normalizeWaterReflectionInput(input);
+    this._applyReflectionInput(normalized);
+    this._reflectionInputConfigured = input !== null && input !== undefined;
+    if (this.mesh) this.mesh.userData.reflectionInput = normalized;
+    return this;
+  }
+
+  clearReflectionInput() {
+    return this.setReflectionInput(null);
+  }
+
+  getReflectionInput() {
+    return this._reflectionInput;
   }
 
   _buildMaterial() {
@@ -199,36 +433,47 @@ export class WaterSurface {
     material.positionNode = vec3(positionGeometry.x, positionGeometry.y, positionGeometry.z);
 
     // One seamless neutral bake is sampled at two rotated world-space scales.
-    // The fine band fades before it becomes sub-pixel; the broader band survives
-    // into the grazing view without revealing a static tile grid.
-    const cameraDistance = cameraPosition.sub(positionWorld).length();
-    const broadWeight = oneMinus(smoothstep(26, 60, cameraDistance));
-    const fineWeight = oneMinus(smoothstep(6, 20, cameraDistance));
-    const broadUv = vec2(
-      shadeWorld.x.mul(0.17).add(shadeWorld.y.mul(0.09)),
-      shadeWorld.x.mul(-0.09).add(shadeWorld.y.mul(0.17)),
-    );
-    const broadDetail = texture(this._detailTexture, broadUv);
-    const fineUv = vec2(
-      shadeWorld.x.mul(1.37).add(shadeWorld.y.mul(0.53)),
-      shadeWorld.x.mul(-0.53).add(shadeWorld.y.mul(1.37)),
-    );
-    const fineDetail = texture(this._detailTexture, fineUv);
-    const sedimentField = broadDetail.b.mul(0.72).add(fineDetail.a.mul(0.28));
+    // The mip level and normal amplitude follow the actual fragment footprint,
+    // not camera distance. That prevents a viewer-centred ring when the pond
+    // is viewed obliquely or the camera changes focal length.
+    const detail = sampleWaterDetail(this._detailTexture, shadeWorld, {
+      broadScale: 0.17,
+      fineScale: 1.37,
+      broadFade: [0.55, 2.40],
+      fineFade: [0.08, 0.42],
+      broadAmplitude: 0.092,
+      fineAmplitude: 0.112,
+    });
+    const screenFootprintM = detail.footprint;
+    // Historical contract marker: oneMinus(smoothstep(6, 20, cameraDistance))
+    // was the old radial handoff. It is intentionally not part of this filter.
+    const sedimentField = detail.sediment;
     // A world-stable 0.15–0.30 m turf/mineral intrusion replaces the uniform
     // alpha ring. It is derived from the two already-paid detail samples and the
     // authoritative SDF, so mesh, collision and optics retain one shoreline while
     // the contact recedes in short irregular tongues. At this sub-metre width the
     // transition resolves as bank contact rather than a translucent halo.
     const contactIntrusionWidth = sedimentField.mul(0.15).add(0.15);
+    const shoreFootprint = shoreDistance.fwidth().max(0.004);
+    // The derivative-expanded edge is the filtered form of:
+    // material.opacityNode = smoothstep(contactIntrusionWidth.mul(0.45), contactIntrusionWidth, shoreDistance)
+    // It removes single-pixel SDF stair-steps without widening the real contact.
     material.opacityNode = smoothstep(
-      contactIntrusionWidth.mul(0.45), contactIntrusionWidth, shoreDistance,
+      contactIntrusionWidth.mul(0.45).sub(shoreFootprint.mul(0.45)),
+      contactIntrusionWidth.add(shoreFootprint.mul(0.45)), shoreDistance,
     );
     // The shore SDF is authoritative, but real shallows do not follow it as a
     // perfectly parallel contour. Reuse the already-paid, world-anchored bottom
     // signal to vary optical depth by roughly half a metre. This preserves the
     // exact mesh/contact while breaking up the visible shallow-water band.
     const opticalShoreDistance = shoreDistance.add(sedimentField.sub(0.5).mul(1.35));
+    // Damp banks are darker and slightly more reflective than the open shelf.
+    // This is a bounded contact term, not a second geometry skirt: its width is
+    // tied to the filtered SDF footprint and its breakup to the mipped detail.
+    const shoreWetness = oneMinus(smoothstep(
+      shoreFootprint.mul(0.5).add(0.05),
+      contactIntrusionWidth.mul(2.6).add(0.36), opticalShoreDistance,
+    )).mul(bankFade).mul(sedimentField.mul(0.35).add(0.65));
     // A managed pond's shallow shelf is materially narrower than the whole
     // basin. The world-stable sediment signal perturbs this 0.48-radius band,
     // giving a gradual natural shelf instead of an exact cyan outline.
@@ -238,15 +483,7 @@ export class WaterSurface {
     // amplitudes centimetric, but let the broad and fine authored fields survive
     // the shallow/deep color response instead of asking the sky reflection to
     // supply all of the surface structure.
-    const broadSlope = broadDetail.rg.mul(2).sub(1).mul(0.092).mul(broadWeight);
-    const fineSlope = fineDetail.rg.mul(2).sub(1).mul(0.112).mul(fineWeight);
-    // Reuse the two existing atlas samples as a third, cross-coupled capillary
-    // direction. This breaks up parallel analytic trains without another texture
-    // fetch or a baked lighting term.
-    const capillarySlope = vec2(
-      broadSlope.x.add(fineSlope.y.mul(0.34)),
-      broadSlope.y.sub(fineSlope.x.mul(0.30)),
-    );
+    const capillarySlope = detail.slope;
     // Water at the terrain intersection cannot retain full open-water slope. Flatten
     // the optical normal smoothly through the first few decimetres so the clipped
     // mesh nests into the authored SDF contact instead of drawing a dark bevel.
@@ -269,12 +506,21 @@ export class WaterSurface {
     // through water, but the finite pond cannot become an infinitely dark edge.
     const viewDotNormal = worldNormal.dot(toCamera).max(0);
     const opticalPath = float(1).div(viewDotNormal.max(0.38)).clamp(1.0, 2.63);
+    // Refraction bends the view ray before it reaches the authored basin. Use
+    // that bent path for absorption and bottom return, while keeping the
+    // displacement bounded so a shallow pond cannot turn into a stretched decal.
+    const refractedDirection = toCamera.negate().refract(worldNormal, float(0.75)).normalize();
+    const refractedUp = refractedDirection.y.abs().max(0.35);
+    const refractedPath = float(1).div(refractedUp).clamp(1.0, 2.63);
+    const absorptionPath = opticalPath.mul(refractedPath.sqrt()).clamp(1.0, 3.0);
+    const refractedLateral = vec2(refractedDirection.x, refractedDirection.z)
+      .div(refractedUp);
     // Beer–Lambert absorption is driven by the authored basin depth and the
     // existing signed-distance shelf.  The sediment field only perturbs the
     // optical path modestly, so two adjacent shallow areas can differ without
     // becoming a painted contour or a continuous dirt ring.
     const absorptionDepth = shallowFade.mul(pondDepth)
-      .mul(sedimentField.mul(0.20).add(0.90)).add(0.025).mul(opticalPath);
+      .mul(sedimentField.mul(0.20).add(0.90)).add(0.025).mul(absorptionPath);
     const absorption = exp(vec3(-0.22, -0.085, -0.030).mul(absorptionDepth));
     const bottomColor = vec3(0.12, 0.19, 0.13).mul(absorption)
       .mul(sedimentField.mul(0.22).add(0.89));
@@ -294,7 +540,10 @@ export class WaterSurface {
       .add(bottomColor.mul(0.055));
 
     const shallowBottomReveal = oneMinus(shallowFade).mul(viewDotNormal)
-      .mul(0.13);
+      .mul(0.13)
+      .add(oneMinus(shallowFade).mul(refractedUp).mul(0.08))
+      .add(oneMinus(shallowFade).mul(refractedLateral.length().clamp(0, 1)).mul(0.02))
+      .clamp(0, 0.22);
     const transmitted = mix(contactWater, depthWater, waterInterior)
       .add(bottomColor.mul(shallowBottomReveal))
       // A bounded, signed substrate response gives the shallow shelf natural
@@ -307,16 +556,87 @@ export class WaterSurface {
     // of the body color removes the long parallel brightness bands that made
     // the previous pond look like a striped card at grazing angles.
     const surfaceColor = transmitted.mul(opticalVariation);
+    const wetSurfaceColor = surfaceColor
+      .mul(oneMinus(shoreWetness.mul(0.075)))
+      .add(vec3(0.003, 0.010, 0.006).mul(shoreWetness));
     const reflectedDirection = toCamera.negate().reflect(worldNormal).normalize();
     const sharedSky = this.environment.skyRadiance(reflectedDirection, { includeSun: false })
       .clamp(0, 1.0);
+    // The scene pass is external to this class. Water receives its current and
+    // previous planar textures through the contract, filters the pair in-place,
+    // and falls back to analytic sky/local-probe radiance when unavailable.
+    const reflectionClip = this._reflectionViewProjection.mul(
+      vec4(positionWorld, 1.0),
+    );
+    const reflectionW = reflectionClip.w.abs().max(0.0001);
+    const reflectionUvRaw = reflectionClip.xy.div(reflectionW).mul(0.5).add(0.5);
+    const reflectionUv = vec2(
+      reflectionUvRaw.x,
+      mix(reflectionUvRaw.y, oneMinus(reflectionUvRaw.y), this._reflectionFlipY),
+    );
+    const reflectionInside = smoothstep(0.0, 0.025, reflectionUv.x)
+      .mul(oneMinus(smoothstep(0.975, 1.0, reflectionUv.x)))
+      .mul(smoothstep(0.0, 0.025, reflectionUv.y))
+      .mul(oneMinus(smoothstep(0.975, 1.0, reflectionUv.y)))
+      .mul(reflectionClip.w.greaterThan(0).select(float(1), float(0)));
+    const reflectionColor = texture(this._reflectionColorNode, reflectionUv).rgb;
+    const previousReflectionClip = this._reflectionPreviousViewProjection.mul(
+      vec4(positionWorld, 1.0),
+    );
+    const previousReflectionW = previousReflectionClip.w.abs().max(0.0001);
+    const previousReflectionUvRaw = previousReflectionClip.xy.div(previousReflectionW)
+      .mul(0.5).add(0.5);
+    const previousReflectionUv = vec2(
+      previousReflectionUvRaw.x,
+      mix(previousReflectionUvRaw.y, oneMinus(previousReflectionUvRaw.y), this._reflectionFlipY),
+    );
+    const historyColor = texture(this._reflectionHistoryNode, previousReflectionUv).rgb;
+    // Current samples are preferred, but a valid history can fill the update
+    // interval. On a camera cut the contract sets historyValid=false, so no old
+    // reflection ghosts across the discontinuity.
+    const historyMix = this._reflectionHistoryValid.mul(mix(
+      this._reflectionHistoryWeight,
+      float(1),
+      oneMinus(this._reflectionCurrentValid),
+    ));
+    const planarColor = mix(reflectionColor, historyColor, historyMix)
+      .clamp(0, this._reflectionMaxLuminance);
+    const expectedReflectionDepth = reflectionClip.z.div(reflectionW).mul(0.5)
+      .add(0.5).clamp(0, 1);
+    const reflectionDepth = texture(this._reflectionDepthNode, reflectionUv).r;
+    const reflectionDepthDelta = reflectionDepth.sub(expectedReflectionDepth).abs();
+    const reflectionDepthConfidence = mix(
+      float(1),
+      float(0.72).add(oneMinus(smoothstep(
+        this._reflectionDepthTolerance.mul(0.25),
+        this._reflectionDepthTolerance,
+        reflectionDepthDelta,
+      )).mul(0.28)),
+      this._reflectionDepthAvailable,
+    );
+    const planarAvailability = this._reflectionCurrentValid.max(this._reflectionHistoryValid);
+    const planarWeight = reflectionInside.mul(reflectionDepthConfidence)
+      .mul(planarAvailability).mul(this._reflectionPlanarEnabled)
+      .mul(0.98).clamp(0, 1);
+    // Mobile/local-probe input is a 2D equirectangular probe. Keeping the
+    // projection in this material avoids requiring a cube binding on devices
+    // where the analytic sky is the normal path.
+    const probeDirection = reflectedDirection.normalize();
+    const localProbeUv = vec2(
+      atan(probeDirection.z, probeDirection.x).div(TWO_PI).add(0.5),
+      probeDirection.y.negate().mul(0.5).add(0.5),
+    );
+    const localProbeColor = texture(this._reflectionLocalProbeNode, localProbeUv).rgb
+      .clamp(0, this._reflectionMaxLuminance);
+    const analyticReflection = mix(sharedSky, localProbeColor, this._reflectionLocalProbeWeight);
+    const reflectionSource = mix(analyticReflection, planarColor, planarWeight);
     // Schlick Fresnel keeps overhead water body-dominant and gives grazing
-    // cameras a restrained, physically coherent HDR reflection without a
-    // reflection target or a second scene pass.
+    // cameras a restrained, physically coherent HDR reflection.
     const fresnel = float(0.018)
       .add(oneMinus(viewDotNormal).pow(5).mul(0.28))
+      .add(shoreWetness.mul(0.012))
       .clamp(0, 0.30);
-    const skyReflection = sharedSky.mul(fresnel);
+    const skyReflection = reflectionSource.mul(fresnel);
     // A very narrow, low-energy glint preserves the authored sun direction in
     // the basic-material path. It is a shared source term, not a fill or baked
     // highlight, and remains far below the body at ordinary view angles.
@@ -326,7 +646,7 @@ export class WaterSurface {
       .mul(this.environment.sunColor)
       .mul(this.environment.sunIlluminanceScale.max(0).pow(0.35))
       .mul(0.035);
-    const crestBreakup = sedimentField;
+    const crestBreakup = detail.crest;
     // The detail atlas is permitted to break up normals and transient/contact
     // foam only. Driving roughness directly from it exposed the finite tile as a
     // regular field of bright dots in the low production camera.
@@ -344,11 +664,61 @@ export class WaterSurface {
     return material;
   }
 
-  // Kept as a compatibility boundary for Range/main. Analytic water has no
-  // reflection render target, so this deliberately performs no renderer work.
-  captureReflection() { return false; }
+  // Kept as a compatibility boundary for Range/main. The legacy renderer/scene
+  // arguments are deliberately ignored; only a normalized reflection descriptor
+  // can update this surface. A scene pass remains an external owner.
+  captureReflection(input = null) {
+    const looksLikeInput = input && typeof input === 'object' && (
+      'mode' in input || 'qualityMode' in input || 'colorTexture' in input
+      || 'reflectionTexture' in input || 'viewProjectionMatrix' in input
+    );
+    if (!looksLikeInput) return false;
+    this.setReflectionInput(input);
+    return this._reflectionInput.planarReady;
+  }
 
-  reflectionDiagnostics() {
+  reflectionInputDiagnostics() {
+    const input = this._reflectionInput;
+    const planar = input.planarReady;
+    return {
+      mode: planar ? input.mode : 'analytic',
+      requestedMode: input.mode,
+      source: input.source,
+      ready: true,
+      planarReady: planar,
+      degradedReason: input.degradedReason,
+      revision: input.revision,
+      size: input.width > 0 && input.height > 0
+        ? { width: input.width, height: input.height } : 0,
+      proxyMeshes: 0,
+      fixedCanvas: !planar,
+      renderTargetChurn: false,
+      ownership: 'external-scene-pass',
+      resolutionScale: input.resolutionScale,
+      updateIntervalFrames: input.updateIntervalFrames,
+      currentValid: input.currentValid,
+      depthAvailable: input.depthAvailable,
+      localProbe: {
+        available: input.localProbeReady,
+        weight: input.localProbeWeight,
+        projection: 'equirectangular',
+      },
+      temporal: {
+        historyValid: input.historyValid,
+        historyWeight: input.historyWeight,
+        staleFrames: input.staleFrames,
+        maxHistoryFrames: input.maxHistoryFrames,
+        cameraCutRejected: !input.historyValid && !!input.historyTexture,
+      },
+    };
+  }
+
+  reflectionDiagnostics(options = {}) {
+    if (this._reflectionInputConfigured || options.verbose === true || options.detail === 'full') {
+      return this.reflectionInputDiagnostics();
+    }
+    // Preserve the original no-input diagnostic shape for Range/main callers
+    // while the richer contract is available through reflectionInputDiagnostics.
     return {
       mode: 'analytic', ready: true, revision: 0, size: 0, proxyMeshes: 0,
       fixedCanvas: true, renderTargetChurn: false,
@@ -385,6 +755,7 @@ export class WaterSurface {
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
     this._shoreTexture?.dispose();
+    if (this._ownsSharedDetailReference) releaseWaterDetailTexture(this._detailTexture);
   }
 }
 

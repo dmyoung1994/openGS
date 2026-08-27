@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeCourse } from './src/course/course.js';
 
 // Dev-server sidecar for the in-app Course Builder. It does three things:
 //   1. GET  /course.json  — serve the root course spec (the single source of truth).
@@ -56,11 +57,19 @@ export function courseAgent(opts = {}) {
           try { prompt = String(JSON.parse(body).prompt || ''); } catch { /* ignore */ }
           if (!prompt.trim()) return sendJSON(res, 400, { ok: false, error: 'empty prompt' });
 
+          const priorCourse = await readFile(coursePath, 'utf8');
           const result = await runAgent({ root, prompt });
-          // Guard: never accept a run that left course.json unparseable.
-          let valid = false;
-          try { JSON.parse(await readFile(coursePath, 'utf8')); valid = true; } catch { /* invalid */ }
-          if (result.ok && !valid) { result.ok = false; result.error = 'agent produced invalid course.json'; }
+          // Agent edits are one transaction. Run the same complete normalizer used
+          // by runtime/MCP; restore the exact prior bytes if schema or transitions
+          // are invalid so a failed authoring turn cannot strand the live course.
+          try {
+            normalizeCourse(JSON.parse(await readFile(coursePath, 'utf8')));
+          } catch (error) {
+            await writeFile(coursePath, priorCourse);
+            result.ok = false;
+            result.error = `agent course transaction rolled back: ${error.message}`;
+            result.restoredPriorCourse = true;
+          }
           sendJSON(res, result.ok ? 200 : 500, result);
         });
       });
@@ -106,9 +115,10 @@ function runAgent({ root, prompt, timeoutMs = 240000 }) {
 function instruction(prompt) {
   return `You are the course-design agent for a Three.js golf simulator. You edit exactly ONE file: course.json (repo root). Do NOT edit any other file, run scripts, run analyzers, or touch code or terrain.
 
-Design principles: FIRST read .agents/skills/golf-course-authoring/references/engine.md (it describes THIS engine and its schema authoritatively), then .agents/skills/golf-course-authoring/SKILL.md and the design references (course/green/bunker/hazard/approach/realistic/spectacle) and apply them. IGNORE any instructions about MCP tool servers, run_course_analyzers, .golfcourse archives, catalog IDs, or an "apps/web" engine — that tooling is from a different engine and does not exist here. Your only action is editing course.json.
+Design principles: FIRST read .agents/skills/golf-course-authoring/references/engine.md (it describes THIS engine and its schema authoritatively), then .agents/skills/golf-course-authoring/SKILL.md and the design references. For biome, coastline, ecological-region, or course-edge work, also use .agents/skills/golf-biome-transitions/SKILL.md. Your only action is editing course.json.
 
-This engine bakes all terrain from FEATURES; there is no heightfield to edit. course.json schema:
+This engine bakes all terrain from FEATURES; there is no heightfield to edit. course.json schema v3 requires meta.schema=3 and biomeTransitions (use [] when no transition is intended):
+- biomeTransitions[]: {id,from,to,boundary,profile,seed,widthScale,priority}. course-edge boundaries declare sides from min-x|max-x|min-z|max-z. polygon-region boundaries declare valid non-self-intersecting points. Profiles: natural-resort-beach, narrow-wild-shore, broad-pristine-beach, maritime-alpine-ecotone. Water profiles are course-edge only and never change playable-surface physics.
 - bounds {minX,maxX,minZ,maxZ} in metres.
 - Coordinate system: x = lateral (right is +x). z = down-range: the tee sits near z≈2 and the course runs toward NEGATIVE z (a 150-yard green is at z ≈ -137). y is up and is computed automatically.
 - tee {x,z,boxHalfX,z0,z1}.

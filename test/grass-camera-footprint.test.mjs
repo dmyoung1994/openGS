@@ -9,6 +9,11 @@ const scalar = (text, name) => {
   assert.ok(match, `missing ${name}`);
   return Number(match[1].replaceAll('_', ''));
 };
+const scalarArray = (text, name) => {
+  const match = text.match(new RegExp(`const ${name} = Object\\.freeze\\( \\[ ([\\d_., ]+) \\] \\)`));
+  assert.ok(match, `missing ${name}`);
+  return match[1].split(',').map((value) => Number(value.trim().replaceAll('_', '')));
+};
 
 test('grass LOD follows the final active render camera, not the ball or a static origin', async () => {
   const [main, range, grass] = await Promise.all([
@@ -64,24 +69,24 @@ test('view-oriented far tier extends the terminal horizon without changing close
   assert.equal(near, 0.18, 'the accepted full-density close field is immutable');
   assert.ok(tailStart < baseTerminal,
     'the sparse tail must overlap the base fade instead of exposing a gap');
-  assert.ok(tailTerminal >= 2.20 && tailTerminal <= 2.30,
-    'forward geometry must extend beyond 95 m on the accepted high tier');
-  assert.ok(tailTerminal / lateralScale >= 1.45,
-    'lateral geometry must extend beyond 60 m instead of exposing a narrow strip');
+  assert.ok(tailTerminal >= 3.95 && tailTerminal <= 4.05,
+    'forward geometry must extend beyond 170 m on the accepted high tier');
+  assert.ok(tailTerminal / lateralScale >= 2.60,
+    'lateral geometry must extend beyond 110 m instead of exposing a narrow strip');
   assert.equal(tailPeak, 0.22,
-    'the projected far tier must retain enough midfield population to avoid a bare LOD band');
+    'the projected far tier must retain continuous tree-line population');
   assert.equal(farStride, 4,
     'far-only work must use the accepted quarter-rate candidate lattice');
   assert.match(grass, /const keepProb = baseKeepProb\.toVar\(\);[\s\S]*?keepProb\.maxAssign\( farTierKeepAt/,
     'tail acceptance may only add far candidates; it must not thin the base field');
   assert.match(grass, /const nearby = nearbyBase\.or\( nearbyFar \)/,
     'tile dispatch must cover the union of the accepted base disk and forward tail');
-  assert.match(grass, /tail\.mul\( tail \)\.mul\( FAR_TIER_PEAK_KEEP \)\.mul\( forwardGate \)/,
-    'terminal transition must be a soft forward-gated falloff');
+  assert.match(grass, /tail\.mul\( FAR_TIER_PEAK_KEEP \)\.mul\( forwardGate \)/,
+    'terminal transition must preserve its plateau before a soft forward-gated falloff');
   assert.match(grass, /const samplesCandidate = farOnly\.not\(\)\.or\( groupInTile\.lessThan\([\s\S]*?GROUPS_PER_TILE \/ FAR_ONLY_CANDIDATE_STRIDE/,
     'the far lattice must retain every near/overlap workgroup and one coherent quarter of far workgroups');
   assert.match(grass, /const farLocalCandidate = blockZ\.mul\( uint\( 2 \* GRID \) \)[\s\S]*?blockX\.mul\( uint\( 2 \) \)/,
-    'quarter-rate workgroups must remap their lanes across every 2x2 block, not one contiguous tile strip');
+    'quarter-rate workgroups must remap their lanes across every 2x2 block');
   const sampleGuard = grass.indexOf('If( samplesCandidate');
   const acceptanceHash = grass.indexOf('hC.assign( hash2', sampleGuard);
   assert.ok(sampleGuard >= 0 && acceptanceHash > sampleGuard,
@@ -114,8 +119,32 @@ test('grass diagnostics expose the live LOD footprint contract', async () => {
     'the engine harness must reject a ball- or origin-centred grass footprint');
   assert.match(benchmark, /grass LOD forward axis is not the active evaluator view/,
     'the engine harness must reject a stale world-space forward axis');
-  assert.match(benchmark, /farTierTerminalRadius >= grassDiagnostics\.nominalRadius \* 2\.20/,
+  assert.match(benchmark, /farTierTerminalRadius >= grassDiagnostics\.nominalRadius \* 3\.95/,
     'the engine harness must bind the extended forward horizon');
+  assert.match(benchmark, /grassDiagnostics\.triangleCount > grassDiagnostics\.triangleBudget/,
+    'the engine harness must reject a submitted triangle-budget overflow');
+});
+
+test('grass distance LOD spends a fixed triangle budget instead of a blade cutoff', async () => {
+  const grass = await read('src/terrain/Grass.js');
+  const triangles = scalarArray(grass, 'GRASS_LOD_TRIANGLES');
+  const capacities = scalarArray(grass, 'GRASS_LOD_CAPACITIES');
+  const offsets = scalarArray(grass, 'GRASS_LOD_OFFSETS');
+  const triangleBudget = scalar(grass, 'GRASS_TRIANGLE_BUDGET');
+  const recordCapacity = scalar(grass, 'MAX_VISIBLE_BLADE_RECORDS');
+
+  assert.deepEqual(triangles, [12, 8, 4]);
+  assert.deepEqual(offsets, [0, capacities[0], capacities[0] + capacities[1]]);
+  assert.equal(capacities.reduce((sum, value) => sum + value, 0), recordCapacity);
+  assert.equal(capacities.reduce((sum, value, lod) => sum + value * triangles[lod], 0), triangleBudget);
+  assert.match(grass, /lodClass\.assign\( dist\.lessThan\( radius\.mul\( GRASS_LOD_NEAR_RADIUS \) \)/,
+    'camera distance must select geometric complexity, not a second renderer');
+  assert.match(grass, /geo\.setIndirect\( this\._drawArgsAttr, \[ 0, 20, 40 \] \)/,
+    'the one shared mesh must submit its three indexed topology ranges');
+  assert.match(grass, /triangleCount\.greaterThan\( uint\( GRASS_TRIANGLE_BUDGET \) \)/,
+    'GPU finalization must fail loudly if the authored triangle budget is exceeded');
+  assert.doesNotMatch(grass, /MAX_VISIBLE_BLADES/,
+    'the former full-detail blade-count workload ceiling must stay retired');
 });
 
 test('all active tiles reject provably impossible lanes before expensive turf preparation', async () => {
@@ -190,8 +219,8 @@ test('packed surface and canopy guard is conservative and precedes zone and ecol
   const grass = await read('src/terrain/Grass.js');
   const dataFetch = grass.indexOf('const data = textureLoad( c.dataTex');
   const canopyDecode = grass.indexOf('const canopyMask = packedGround.mod', dataFetch);
-  const growableDecode = grass.indexOf('const growable = packedGround.greaterThanEqual', canopyDecode);
-  const canopyKeep = grass.indexOf('const canopyKeep = mix( 1.0, CANOPY_DENSITY_FLOOR, canopyMask )', growableDecode);
+  const candidateDecode = grass.indexOf('const turfCandidate = packedGround.greaterThanEqual', canopyDecode);
+  const canopyKeep = grass.indexOf('const canopyKeep = mix( 1.0, CANOPY_DENSITY_FLOOR, canopyMask )', candidateDecode);
   const surfaceCeiling = grass.indexOf('const surfaceDensityUpper = densityUpper.mul( canopyKeep )', canopyKeep);
   const surfaceGuard = grass.indexOf('If( canReachExactDensity', surfaceCeiling);
   const zoneFetch = grass.indexOf('const zoneSD = textureLevel( c.zoneTex', surfaceGuard);
@@ -199,14 +228,14 @@ test('packed surface and canopy guard is conservative and precedes zone and ecol
   const macroNoise = grass.indexOf('const macroCluster = mx_noise_float', surfaceGuard);
   const patchNoise = grass.indexOf('const patchBreak = mx_noise_float', surfaceGuard);
   const exactPredicate = grass.indexOf('const keepCandidate = hC.lessThan( densityTarget )', surfaceGuard);
-  assert.ok(dataFetch >= 0 && canopyDecode > dataFetch && growableDecode > canopyDecode
-    && canopyKeep > growableDecode && surfaceCeiling > canopyKeep && surfaceGuard > surfaceCeiling,
+  assert.ok(dataFetch >= 0 && canopyDecode > dataFetch && candidateDecode > canopyDecode
+    && canopyKeep > candidateDecode && surfaceCeiling > canopyKeep && surfaceGuard > surfaceCeiling,
   'the existing packed fetch must decode surface and canopy before the nested guard');
   assert.ok(zoneFetch > surfaceGuard && edgeNoise > surfaceGuard
     && macroNoise > surfaceGuard && patchNoise > surfaceGuard && exactPredicate > surfaceGuard,
   'zone sampling, all three ecological noises, and the unchanged exact predicate must be nested behind the guard');
-  assert.match(grass, /const canReachExactDensity = inBounds\.and\( growable \)[\s\S]*?hC\.lessThan\( surfaceDensityUpper \)/,
-    'out-of-bounds, non-growable, and canopy-retired lanes must all stop at one conservative guard');
+  assert.match(grass, /const canReachExactDensity = inBounds\.and\( turfCandidate \)[\s\S]*?hC\.lessThan\( surfaceDensityUpper \)/,
+    'out-of-bounds, non-turf, and canopy-retired lanes must all stop at one conservative guard');
   assert.match(grass, /If\( canopyMask\.greaterThan\( 0\.0 \), \(\) => \{[\s\S]*?densityTarget\.mulAssign\( mix\( 1\.0, CANOPY_DENSITY_FLOOR, canopyMask \) \)/,
     'the exact final density expression must remain unchanged inside the guard');
 

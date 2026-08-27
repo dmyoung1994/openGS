@@ -1,4 +1,4 @@
-# Claude GolfSim
+# Rangeform
 
 A physics-based, procedurally generated golf simulation with a custom
 WebGPU/TSL environment renderer on Three.js and a Vite development/build toolchain.

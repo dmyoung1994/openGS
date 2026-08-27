@@ -2,9 +2,10 @@ import {
   BufferGeometry, BufferAttribute, Mesh, MeshPhysicalNodeMaterial, Group,
   Vector2, Vector3, Vector4, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
   StorageTexture, DataTexture, RedFormat, FloatType, NearestFilter, LinearFilter, ClampToEdgeWrapping,
+  DataArrayTexture, RGBAFormat, UnsignedByteType, LinearMipmapLinearFilter,
 } from 'three';
 import {
-  positionWorld, normalWorld, positionGeometry, transformNormalToView, cameraPosition,
+  positionWorld, normalWorld, normalGeometry, positionGeometry, transformNormalToView, cameraPosition,
   mx_noise_float, float, vec2, vec3, vec4, mix, texture, textureLevel,
   luminance, smoothstep, oneMinus, Fn, If, Loop, Break, dFdx, dFdy,
   uniform, instanceIndex, textureStore, uvec2, struct, textureLoad, ivec2, int, mrt,
@@ -13,24 +14,34 @@ import { surface } from '../physics/groundInteraction.js';
 import { buildZoneMap, zoneAt as zoneAtTexel } from './ZoneMap.js';
 import {
   turfBase,
-  turfBladeBase,
+  turfUndercoatBase,
   MOW_STRIPE_PERIOD_M,
   MOW_STRIPE_CROSS_SLOPE,
 } from './turfColor.js';
+import {
+  acquireCoastSandTextures, COAST_SAND_SPECULAR_INTENSITY, coastTextureBlendWeights,
+  releaseCoastSandTextures,
+  sampleCoastSand,
+} from '../scene/CoastSandDetail.js';
 
-// Turf surface maps: TWO BAKES (which surface), each read at TWO TIERS (how far away).
+// Turf surface maps: the two maintained turf materials are read separately, and the
+// existing long-grass bake is selected for rough. Each bake is sampled at the current
+// screen-space footprint, so short fairway/green grass stays a material problem rather
+// than becoming a forest of tiny clumps.
 //
-// The bakes differ by mowing height, because a mown surface and long rough are not the
-// same texture at different scales — they are different plants' worth of structure:
-//   * MOWN  (turfdetail_*, scripts/pack_ambientcg_grass001.py) — ambientCG CC0
-//     Grass001 at its declared 1.40 m tile / 1024 px = 1.367 mm/texel. Its measured
-//     albedo, GL normal, displacement, roughness, and AO serve fairway, green, fringe,
-//     tee, and the ground under sand. See docs/turf-grass001-provenance.md.
-//   * ROUGH (roughdetail_*, scripts/gen_rough_detail.mjs) — 2.0 m tile at 2048 px =
-//     0.98 mm/texel, ~73k tufted 35-95 mm blades. Rough and deep rough.
-// The rough used to be textured with the MOWN bake, on the theory that the 3D blade
-// system carried it. It doesn't: a 10 mm blade is under one device pixel by ~40 m, so
-// past the blade LOD the rough was reading as fairway with a few slivers standing in it.
+//   * FAIRWAY (blendkit_fairway_*) — the pinned BlenderKit/Blendkit "Procedural Grass"
+//     material from asset 5b9e35dc-d8e7-4e16-a038-b48d5b8a925f. The baked source maps
+//     preserve its authored base colour, tangent normal, roughness, and procedural
+//     height signal. See docs/blendkit-turf-provenance.md.
+//   * GREEN (blendkit_green_*) — the pinned "Golf Bentgrass" material from asset
+//     34a832ef-bb9d-4213-89e9-9143b137d99e. It is intentionally a different tile and
+//     cut-height response, not a hue tweak of the fairway.
+//   * ROUGH (roughdetail_*, scripts/gen_rough_detail.mjs) — 2.0 m tile at 2048 px,
+//     ~73k tufted 35-95 mm blades. Rough and deep rough only.
+//
+// Fairway and green never receive blade geometry: short blades read as scattered
+// slivers at playable camera distances. Their PBR maps supply the dense shoot-level
+// variation, while the real sun/sky lights the normal and roughness response.
 //
 // Either bake carries NO baked light: albedo is pigment only, the across-blade rounding
 // lives in the normal map so the scene's real sun makes the sheen, and canopy occlusion
@@ -59,28 +70,80 @@ function loadTurfMaps() {
   // R,G = normal.xy | B = canopy height | A = canopy AO. flipY off on the detail maps
   // so the normal's V axis maps straight onto world +Z (and stays registered with the
   // albedo) — otherwise the baked relief lights from the wrong side.
-  const set = (name, tile, farMean, albedoMean, packedRoughness = false) => {
+  const set = (name, tile, farMean, albedoMean, packedRoughness = false,
+    resolution = 1024, pigmentMean = [TURF_LUM, TURF_LUM, TURF_LUM],
+    albedoLodBias = 0.0, albedoContrast = 1.0) => {
     const albLoad = load(`/assets/textures/${name}_alb.png`, true);
     const nrhLoad = load(`/assets/textures/${name}_nrh.png`, false);
     const alb = albLoad.texture, nrh = nrhLoad.texture;
     alb.flipY = nrh.flipY = false;
-    return { alb, nrh, tile, farMean, albedoMean, packedRoughness,
+    return { alb, nrh, tile, farMean, albedoMean, packedRoughness, resolution,
+      pigmentMean, albedoLodBias, albedoContrast,
       ready: Promise.all([albLoad.ready, nrhLoad.ready]) };
   };
-  // The bentgrass_* bake is deliberately NOT loaded any more. Nothing samples it: the
-  // broad tier moved onto the detail bake (see turfColorNode) because bentgrass has a
-  // directional artifact that tiled into fake mow stripes, and the normal/rough maps
-  // were never wired up at all. Loading it cost ~2.3 MB of download and a GPU upload
-  // for a texture no shader read.
-  // B/A means are measured from the generated NRH assets. At a footprint where the
-  // source blades are sub-pixel, these are the physically correct filtered canopy
-  // values; retaining the arrangement of one finite tile is not.
-  // Grass001 source means measured from the pinned 1K maps. Rough keeps its existing
-  // generated bake and measured means. The third far value is packed roughness;
-  // rough has no packed channel and keeps a neutral constant that is ignored there.
-  const mown = set('turfdetail', 1.4, [0.36329, 0.81186, 0.54402], 0.092492, true);
-  const rough = set('roughdetail', 2.0, [0.50762, 0.66504, 0.54402], TURF_LUM, false);
-  return { mown, rough, ready: Promise.all([mown.ready, rough.ready]) };
+  // Height, AO, roughness, and source-albedo means are measured from the packed maps.
+  // Pigment targets recenter the highly saturated procedural sources onto the course's
+  // yellow-green turf family; the bounded source deviation still supplies local colour.
+  const fairway = set('blendkit_fairway', 1.8,
+    [0.44124056, 1.0, 0.90948934], 0.08483945, true, 2048,
+    [0.08400000, 0.16600000, 0.03400000], 0.75, 0.32);
+  const green = set('blendkit_green', 1.5,
+    [0.61920959, 1.0, 0.99607843], 0.11012081, true, 2048,
+    [0.07500000, 0.20000000, 0.04500000], 0.75, 0.24);
+  const rough = set('roughdetail', 2.0, [0.50762, 0.66504, 0.54402], TURF_LUM, false, 2048);
+  const makeArray = (name, srgb) => {
+    const array = new DataArrayTexture(new Uint8Array(3 * 4), 1, 1, 3);
+    array.name = name;
+    array.format = RGBAFormat;
+    array.type = UnsignedByteType;
+    array.wrapS = array.wrapT = RepeatWrapping;
+    array.magFilter = LinearFilter;
+    array.minFilter = LinearMipmapLinearFilter;
+    array.generateMipmaps = true;
+    array.anisotropy = 8;
+    if (srgb) array.colorSpace = SRGBColorSpace;
+    array.needsUpdate = true;
+    return array;
+  };
+  const albedoArray = makeArray('turf:albedo-array', true);
+  const nrhArray = makeArray('turf:normal-relief-array', false);
+  const sets = [fairway, green, rough];
+  sets.forEach((entry, layer) => { entry.layer = layer; });
+  const uploadArray = (array, sources) => {
+    const width = sources[0].image.width;
+    const height = sources[0].image.height;
+    if (width !== 2048 || height !== 2048
+        || sources.some((source) => source.image.width !== width || source.image.height !== height)) {
+      throw new Error('Turf texture arrays require three authored 2048x2048 layers.');
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const pixels = new Uint8Array(width * height * 4 * sources.length);
+    sources.forEach((source, layer) => {
+      context.clearRect(0, 0, width, height);
+      context.drawImage(source.image, 0, 0, width, height);
+      pixels.set(context.getImageData(0, 0, width, height).data, layer * width * height * 4);
+    });
+    array.image = { data: pixels, width, height, depth: sources.length };
+    array.dispose();
+    array.needsUpdate = true;
+  };
+  const ready = Promise.all(sets.map((entry) => entry.ready)).then(() => {
+    uploadArray(albedoArray, sets.map((entry) => entry.alb));
+    uploadArray(nrhArray, sets.map((entry) => entry.nrh));
+    for (const entry of sets) {
+      entry.alb.dispose();
+      entry.nrh.dispose();
+      // The array owns a byte-for-byte copy after this point. Drop decoded source
+      // image references as well as their GPU handles so the browser can reclaim the
+      // six temporary 2K image surfaces instead of retaining both representations.
+      entry.alb.image = null;
+      entry.nrh.image = null;
+    }
+  });
+  return { fairway, green, rough, albedoArray, nrhArray, ready };
 }
 
 // Everything one detail bake contributes to shading, in one value. It has to travel as
@@ -90,9 +153,27 @@ function loadTurfMaps() {
 const turfTierStruct = struct({
   relief: 'vec3', far: 'vec2', shade: 'float', alb: 'vec4',
 }, 'TurfTier');
-// Mean LINEAR luminance of both albedo tiers (measured, not guessed) — the shader
-// divides by this so a map swap doesn't silently change how bright the turf is.
+// Common LINEAR source-albedo normalization target. Each baked map is divided by its
+// measured mean before its bounded variation is recentered on the per-surface pigment.
 const TURF_LUM = 0.138;
+
+// The maintained maps are a material/heightfield solution, not a short-blade draw.
+// Keep their screen-space relief bounded by physical source texels: grazing pixels
+// that cannot resolve the source are allowed to fall back to filtered normal/albedo
+// response instead of turning a two-layer POM march into a streak generator.
+const TURF_POM_MAX_TRAVEL_TEXELS = 2.5;
+const TURF_POM_MIN_VIEW_UP = 0.18;
+const TURF_POM_FULL_VIEW_UP = 0.46;
+const TURF_SHADOW_MAX_TRAVEL_TEXELS = 2.0;
+
+// This is a Toksvig-style screen-space proxy. It broadens the leaf highlight when the
+// sampled normal changes materially inside one pixel, and reduces the lobe peak by the
+// same bounded amount. The constants are intentionally small: turf remains matte and
+// the source normal still supplies the visible close-up structure.
+const TURF_NORMAL_VARIANCE_START = 0.0025;
+const TURF_NORMAL_VARIANCE_FULL = 0.050;
+const TURF_NORMAL_VARIANCE_ROUGHNESS = 0.12;
+const TURF_NORMAL_VARIANCE_SPECULAR = 0.18;
 
 // A heightfield that is simultaneously the physics collision surface and the
 // rendered ground. Heights are baked into a grid once at construction (CPU) so
@@ -112,7 +193,8 @@ export class Terrain {
     // heavy vertex work down while the fine grid preserves gameplay fidelity.
     const {
       bounds, spacing = 2, renderSpacing = spacing, heightFn, surfaceFn, zones,
-      motionHistory = null, renderer,
+      motionHistory = null, renderer, biomeField = null,
+      analyticHeightFn = null, analyticPatchContains = null,
     } = config;
     if (!renderer?.isWebGPURenderer) {
       throw new Error('Terrain requires the strict WebGPU renderer for its GPU-authored variation field.');
@@ -121,11 +203,15 @@ export class Terrain {
     this.spacing = spacing;
     this.renderSpacing = renderSpacing;
     this.heightFn = heightFn;
+    this.analyticHeightFn = analyticHeightFn;
+    this.analyticPatchContains = analyticPatchContains;
     this.surfaceFn = surfaceFn;
     // Geometric zone spec (greens/sands circles, fairway corridor, tee box) used
     // to classify the turf ANALYTICALLY in the shader — smooth-curve boundaries
     // instead of a rasterized splat's stair-stepped squares. See turfColorNode.
     this.zones = zones;
+    this._biomeField = biomeField;
+    this._coastSandAsset = biomeField?.hasTransitions ? acquireCoastSandTextures() : null;
     this.motionHistory = motionHistory;
 
     this.nx = Math.floor((bounds.maxX - bounds.minX) / spacing) + 1;
@@ -364,6 +450,9 @@ export class Terrain {
 
   // Bilinear height lookup, clamped to bounds.
   heightAt(x, z) {
+    if (this.analyticHeightFn && this.analyticPatchContains?.(x, z, this.spacing)) {
+      return this.analyticHeightFn(x, z);
+    }
     const { minX, minZ, maxX, maxZ } = this.bounds;
     const fx = (Math.min(Math.max(x, minX), maxX) - minX) / this.spacing;
     const fz = (Math.min(Math.max(z, minZ), maxZ) - minZ) / this.spacing;
@@ -383,6 +472,18 @@ export class Terrain {
   // Surface normal from central differences of the height field.
   normalAt(x, z, out = new Vector3()) {
     const e = this.spacing;
+    if (this.analyticHeightFn && this.analyticPatchContains?.(x, z, e)) {
+      // Resolve the near-vertical analytic wall instead of averaging it across a
+      // complete 0.6 m heightfield cell. This is also the normal authored into the
+      // fixed patch, so lighting and collision share the same local derivative.
+      const analyticE = Math.min(e, 0.06);
+      const hL = this.analyticHeightFn(x - analyticE, z);
+      const hR = this.analyticHeightFn(x + analyticE, z);
+      const hD = this.analyticHeightFn(x, z - analyticE);
+      const hU = this.analyticHeightFn(x, z + analyticE);
+      out.set(hL - hR, 2 * analyticE, hD - hU).normalize();
+      return out;
+    }
     const hL = this.heightAt(x - e, z);
     const hR = this.heightAt(x + e, z);
     const hD = this.heightAt(x, z - e);
@@ -429,6 +530,22 @@ export class Terrain {
     return this._zoneMap?.waterTexture;
   }
 
+  get biomeTransitionTextures() {
+    return this._biomeField?.hasTransitions
+      ? Object.freeze({ land: this._biomeField.landTexture, water: this._biomeField.waterTexture })
+      : null;
+  }
+
+  createHazardPatchMaterial() {
+    const material = this._buildTurfMaterial(uniform(new Vector2(0, 0)), { useGeometrySurface: true });
+    material.name = 'terrain-pbr-hazard-patch';
+    return material;
+  }
+
+  classifyBiomeAt(x, z) {
+    return this._biomeField?.sample(x, z) ?? null;
+  }
+
   // Node graphs retain textures outside ordinary material properties, so Range's
   // generic material scan cannot own these.  Terrain owns them explicitly; Grass
   // borrows `heightTexture` / `zoneTexture` and must never dispose either one.
@@ -439,17 +556,21 @@ export class Terrain {
     // bookkeeping can retain a disposed Terrain briefly; severing the callbacks here
     // prevents that renderer lifetime from retaining the entire superseded course.
     this.heightFn = null;
+    this.analyticHeightFn = null;
+    this.analyticPatchContains = null;
     this.surfaceFn = null;
     this._heightTex?.dispose();
     this._zoneMap?.texture?.dispose();
     this._zoneMap?.waterTexture?.dispose();
+    this._biomeField?.dispose();
+    this._biomeField = null;
     this._divotTex?.dispose();
     this._macroTexture?.dispose();
     this._macroInit?.dispose();
-    this._turfMaps?.mown?.alb?.dispose();
-    this._turfMaps?.mown?.nrh?.dispose();
-    this._turfMaps?.rough?.alb?.dispose();
-    this._turfMaps?.rough?.nrh?.dispose();
+    this._turfMaps?.albedoArray?.dispose();
+    this._turfMaps?.nrhArray?.dispose();
+    if (this._coastSandAsset?.textures) releaseCoastSandTextures(this._coastSandAsset.textures);
+    this._coastSandAsset = null;
   }
 
   // Course-scale variation is invariant under camera/time, so evaluating its twelve
@@ -465,8 +586,11 @@ export class Terrain {
     textureOut.name = 'terrain-macro-variation-gpu';
     textureOut.minFilter = textureOut.magFilter = LinearFilter;
     textureOut.wrapS = textureOut.wrapT = ClampToEdgeWrapping;
-    textureOut.generateMipmaps = false;
-    textureOut.mipmapsAutoUpdate = false;
+    // The compute pass writes only mip 0. Let the WebGPU binding generate the
+    // remaining levels once the write has completed, so the persistent 0.5 m field
+    // is footprint filtered at distance instead of aliasing into turf noise.
+    textureOut.generateMipmaps = true;
+    textureOut.mipmapsAutoUpdate = true;
     this._macroTexture = textureOut;
 
     this._macroInit = Fn(() => {
@@ -509,18 +633,17 @@ export class Terrain {
   _buildMesh() {
     // Fixed nested camera-centred rings. Each ring is a shared static grid with a
     // centre hole (except L0), so it has no overdraw/z-fight with its finer neighbour.
-    // The first three rings deliberately use 0.9/1.8/3.6 m display steps while the
-    // authoritative 0.6 m height texture remains intact for bilinear reconstruction,
-    // normals, and physics. This removes low-value far vertices without changing any
-    // golfer-height landform or surface boundary. The outer ring keeps its 4.8 m
-    // anchor so camera snapping/temporal history remain unchanged. Its 384 m
+    // Every level is an exact multiple of the authoritative 0.6 m height grid and
+    // remains registered to the common 4.8 m camera snap. This prevents small,
+    // steep pot-bunker walls from changing coverage as ring ownership changes.
+    // The outer ring keeps its 4.8 m anchor. Its 384 m
     // reach is intentional: the flight director can rise without following the
     // ball all the way downrange, and a 288 m reach exposed sky between the
     // playable edge and the backdrop shell.
     const rings = [
-      { half: 36, step: 0.9, inner: 0 },
-      { half: 72, step: 1.8, inner: 36 },
-      { half: 144, step: 3.6, inner: 72 },
+      { half: 36, step: 0.6, inner: 0 },
+      { half: 72, step: 1.2, inner: 36 },
+      { half: 144, step: 2.4, inner: 72 },
       { half: 384, step: 4.8, inner: 144 },
     ];
     const group = new Group();
@@ -673,7 +796,7 @@ export class Terrain {
   // Shared turf material: analytic per-zone tint (smooth-curve boundaries) relit
   // by a lawn detail texture. Sand keeps its own tan (the green-ward turfBase
   // transform is only for grass).
-  _buildTurfMaterial(origin = uniform(new Vector2())) {
+  _buildTurfMaterial(origin = uniform(new Vector2()), { useGeometrySurface = false } = {}) {
     if (!this._turfMaps) {
       this._turfMaps = loadTurfMaps();
       // Some terrain materials are compiled while image decode is still in flight.
@@ -683,23 +806,26 @@ export class Terrain {
       // replaces it.  These are the same loaded texture objects (not a secondary
       // asset path): dispose only forces the next bind to allocate their final image
       // and makes renderer memory reporting match the actual GPU allocation.
-      this.assetsReady = this._turfMaps.ready.then(() => {
-        if (this._disposed) return;
-        for (const set of [this._turfMaps.mown, this._turfMaps.rough]) {
-          set.alb.dispose(); set.alb.needsUpdate = true;
-          set.nrh.dispose(); set.nrh.needsUpdate = true;
-        }
-      });
+      this.assetsReady = Promise.all([
+        this._turfMaps.ready,
+        this._coastSandAsset?.ready || Promise.resolve(),
+      ]);
     }
     const maps = this._turfMaps;
+    // One base TextureNode per array is essential: samples cloned from this base
+    // share one WebGPU texture/sampler binding even when they select different
+    // layers and LODs. Creating a new texture node per layer defeats the array's
+    // binding compaction and consumes the same sampler budget as six 2D textures.
+    const turfAlbedoArrayNode = texture(maps.albedoArray);
+    const turfNrhArrayNode = texture(maps.nrhArray);
     const mat = new MeshPhysicalNodeMaterial({ metalness: 0.0, side: DoubleSide });
     // `positionGeometry` carries only static X/Z grid topology. Reconstruct Y and
     // the matching central-difference normal from the authoritative height texture
     // in the vertex path; physics remains the sole CPU consumer of `heights`.
     const terrainX = positionGeometry.x.add(origin.x);
     const terrainZ = positionGeometry.z.add(origin.y);
-    const terrainHeight = this._heightNode(terrainX, terrainZ);
-    const terrainNormal = this._normalNode(terrainX, terrainZ);
+    const terrainHeight = useGeometrySurface ? positionGeometry.y : this._heightNode(terrainX, terrainZ);
+    const terrainNormal = useGeometrySurface ? normalGeometry.normalize() : this._normalNode(terrainX, terrainZ);
     const inBounds = terrainX.greaterThanEqual(this.bounds.minX).and(terrainX.lessThanEqual(this.bounds.maxX))
       .and(terrainZ.greaterThanEqual(this.bounds.minZ)).and(terrainZ.lessThanEqual(this.bounds.maxZ));
     // Sampling clamps safely at the texture boundary, but rendering that clamped edge
@@ -712,6 +838,7 @@ export class Terrain {
     // Y.  Preserve it after displacement or the skirt collapses onto the top surface.
     mat.positionNode = vec3(positionGeometry.x,
       renderedHeight.add(positionGeometry.y), positionGeometry.z);
+    if (useGeometrySurface) mat.positionNode = vec3(positionGeometry.x, renderedHeight, positionGeometry.z);
     if (this.motionHistory) {
       // A shared anchor is an integer multiple of every ring step: at a snap, the
       // *same world samples* are still present, merely under different static vertex
@@ -735,6 +862,31 @@ export class Terrain {
       worldXZ.y.sub(this.bounds.minZ).div(this.bounds.maxZ - this.bounds.minZ),
     );
     const macroVariation = texture(this._macroTexture, macroUv);
+    const zoneSample = texture(this._zoneMap.texture, macroUv).toVar('zoneSD');
+    const waterZoneSample = texture(this._zoneMap.waterTexture, macroUv).toVar('waterBankSample');
+    let biomeLand = null;
+    let biomeWater = null;
+    let coastWeights = null;
+    let coastSand = null;
+    if (this._biomeField?.hasTransitions) {
+      biomeLand = texture(this._biomeField.landTexture, macroUv);
+      biomeWater = texture(this._biomeField.waterTexture, macroUv);
+      coastWeights = coastTextureBlendWeights({
+        dune: biomeLand.b, drySand: biomeLand.a, wetSand: biomeWater.r,
+        shallowShelf: biomeWater.g,
+      }, worldXZ);
+      if (this._coastSandAsset?.textures) {
+        coastSand = sampleCoastSand(this._coastSandAsset.textures, worldXZ, coastWeights);
+      }
+    }
+    if (!useGeometrySurface) {
+      // The fixed analytic patch owns the complete pot-bunker footprint. Removing
+      // the coarse clipmap below it prevents z-fighting and stops camera snaps from
+      // changing which low-resolution wall triangles remain visible.
+      const potOuter = waterZoneSample.a;
+      mat.opacityNode = oneMinus(smoothstep(-0.12, 0.04, potOuter));
+      mat.alphaTestNode = 0.5;
+    }
     const flat = smoothstep(0.75, 0.97, terrainNormal.y);
 
     // Detail is filtered by the texture footprint below, not by camera distance. A
@@ -759,11 +911,11 @@ export class Terrain {
     // blade GEOMETRY (short blades read as scattered slivers), so all of their height
     // has to come from here — this is what gives the ball something to sit down into
     // instead of resting on a painted plane.
-    const m = turfZoneMasks(this._zoneMap.texture, this._zoneMap.waterTexture, this.bounds, this.zones);
+    const m = turfZoneMasks(zoneSample, waterZoneSample, this.zones);
     const zone = turfCanopyDepth(m);
     const zoneDepth = zone.depth;
-    // Which of the two detail bakes this pixel belongs to (0 = rough/deepRough,
-    // 1 = mown). See turfMownWeight.
+    // Which detail family this pixel belongs to (0 = rough/deepRough,
+    // 1 = maintained fairway/green). See turfMownWeight.
     const mownW = turfMownWeight(m);
 
     // ---- LAYERED parallax occlusion. The ray from the eye is marched DOWN through
@@ -783,15 +935,21 @@ export class Terrain {
     const NL = 2;
     const V = cameraPosition.sub(positionWorld).normalize();
     const S = this.uSunDir;
-    const depthM = zoneDepth.mul(dw).mul(this.uParallax);
+    // POM is intentionally disabled at the most grazing view angles. There is no
+    // stable texel intersection to recover there once a pixel spans multiple source
+    // texels; the filtered normal/roughness path is the higher-quality answer than a
+    // stretched heightfield streak.
+    const pomViewWeight = smoothstep(TURF_POM_MIN_VIEW_UP, TURF_POM_FULL_VIEW_UP, V.y);
+    const depthM = zoneDepth.mul(dw).mul(this.uParallax).mul(pomViewWeight);
     // Per-pixel world footprint in METRES, taken once here. Every texture read below
     // uses an explicit LOD derived from this rather than implicit derivatives, for two
     // reasons: WGSL forbids implicit-derivative sampling under non-uniform control flow
     // (and the whole detail tier now sits inside a branch), and the parallax/self-shadow
-    // marches were already required to do it. Both bakes are 2048 px, so a map's LOD is
-    // just this footprint measured in ITS tile.
+    // marches were already required to do it. Each map's LOD is the footprint measured
+    // in its own tile and actual baked resolution.
     const duvM = dFdx(worldXZ).length().max(dFdy(worldXZ).length());
-    const lodFor = (scaleM) => duvM.div(scaleM).mul(2048).log2().max(0.0);
+    const lodFor = (scaleM, resolution, albedoBias = 0.0) => duvM.div(scaleM).mul(resolution).log2()
+      .max(0.0).min(Math.log2(resolution) - albedoBias);
     // A parallax or blade-shadow ray can only add information while the native
     // canopy texture is actually resolved.  Once one shaded fragment covers several
     // source texels, ray-marching that texture is both undersampled (it aliases) and
@@ -807,24 +965,29 @@ export class Terrain {
     // CAP the total march distance. Horizontal travel goes as V.xz/V.y, so at ball-eye
     // height the ray wants to cross far more texels than NL steps can sample, and the
     // march strides straight over whole blades — which shows up as smearing along the
-    // view direction. Capping the travel (rather than the angle) bounds the step to a
-    // couple of texels at any angle: depth is preserved wherever it can be resolved and
-    // quietly gives way where it can't, which is the honest trade at a fixed layer count.
-    // In UV, so it's a fixed ~2.5 texels/step for either bake (both are 2048 px).
-    const MAX_TRAVEL = NL * 0.0012;
+    // view direction. Capping the TOTAL travel (rather than the angle) bounds the
+    // two-layer march to 2.5 source texels at any angle: depth is preserved wherever
+    // it can be resolved and quietly gives way where it can't, which is the honest
+    // trade at a fixed layer count. The old global 2048 assumption made the 1024px
+    // maintained maps start one mip too blurry and halved their useful close-range
+    // parallax travel.
 
     // Everything read out of ONE detail bake. Called once per bake so the mown and
     // rough sets go through identical code — they differ only in content and in the
     // world size of their tile.
     // The phase field is common to both bakes.  Keeping it outside readTier makes the
-    // rough overwrite path share the same four procedural samples with the mown
+    // rough overwrite path share the same four procedural samples with maintained
     // default instead of evaluating them twice per rough fragment.
     // Continuous phase offsets are generated once on the GPU for the entire authored
     // course. They break repeated atlas seam alignment without twelve live noise fields.
     const phase = macroVariation.rg.mul(0.32).sub(0.16);
     const readTier = (set) => {
       const T = set.tile;
-      const lod = lodFor(T);
+      // Reserve the source's positive albedo bias inside the final mip boundary.
+      // The normal/height read can stop two levels earlier because its unresolved
+      // response is already retired before that boundary.
+      const lod = lodFor(T, set.resolution, set.albedoLodBias);
+      const maxTravelUV = float(TURF_POM_MAX_TRAVEL_TEXELS / set.resolution);
       const micro = microRayWeight(lod);
       // Once a pixel covers centimetres of turf, the finite atlas's low mips stop
       // representing blades and start representing the unique arrangement of THIS
@@ -833,7 +996,7 @@ export class Terrain {
       // distance: no radial handoff, and no texture motif survives past its physical
       // resolving limit. Non-repeating world-space fields below carry macro variation.
       const unresolved = smoothstep(4.5, 7.0, lod);
-      const rayActive = dw.mul(micro);
+      const rayActive = dw.mul(micro).mul(pomViewWeight);
       // A continuous phase warp makes the atlas's U/V wrap lines wander naturally
       // through world space instead of accumulating into straight visible seams.
       const uv0 = worldXZ.mul(1 / T).add(phase);
@@ -843,16 +1006,29 @@ export class Terrain {
       // skipping the loop would make a hard UV step at its coverage boundary.
       const microDepthM = depthM.mul(micro);
       const travel = vec2(V.x, V.z).div(V.y.abs().max(0.30)).mul(microDepthM.div(T));
-      const scale = float(MAX_TRAVEL).div(travel.length().max(1e-6)).min(1.0);
+      const scale = maxTravelUV.div(travel.length().max(1e-6)).min(1.0);
       const stepUV = travel.mul(scale).negate().div(NL);
-      const uvP = turfParallaxUV(set.nrh, uv0, stepUV, lod, rayActive, NL);
+      const uvP = turfParallaxUV(
+        turfNrhArrayNode, int(set.layer), uv0, stepUV, lod, rayActive, NL,
+      );
 
-      const dNrh = textureLevel(set.nrh, uvP, lod);
-      const dAlb = textureLevel(set.alb, uvP, lod);
+      const dNrh = textureLevel(turfNrhArrayNode, uvP, lod).depth(int(set.layer));
+      // Keep the full-resolution relief signal, but do not mistake every baked colour
+      // fleck for a separate blade. Short, tightly cut turf reads as a coherent
+      // pigment layer whose fine structure appears through normal/height response to
+      // light. A positive albedo-only mip bias prefilters the source colour while the
+      // 2K NRH map remains at native footprint resolution.
+      const dAlb = textureLevel(
+        turfAlbedoArrayNode, uvP, lod.add(set.albedoLodBias),
+      ).depth(int(set.layer));
+      const pigmentMean = vec3(...set.pigmentMean);
+      const normalizedAlbedo = dAlb.rgb.mul(TURF_LUM / set.albedoMean);
+      const pigment = mix(pigmentMean, normalizedAlbedo, set.albedoContrast);
       const nDetail = vec3(dNrh.r.mul(2).sub(1), 0.0, dNrh.g.mul(2).sub(1));
       // Same cap on the shadow march, for the same reason (a low sun grazes just as hard).
       const sunTravel = vec2(S.x, S.z).div(S.y.max(0.15)).mul(microDepthM.div(T));
-      const sunUVFull = sunTravel.mul(float(MAX_TRAVEL).div(sunTravel.length().max(1e-6)).min(1.0));
+      const shadowTravelUV = float(TURF_SHADOW_MAX_TRAVEL_TEXELS / set.resolution);
+      const sunUVFull = sunTravel.mul(shadowTravelUV.div(sunTravel.length().max(1e-6)).min(1.0));
 
       return {
         // The detail relief is NOT gated by camera distance, and must never be again.
@@ -879,17 +1055,19 @@ export class Terrain {
         far: mix(vec2(dNrh.b, dNrh.a), vec2(set.farMean[0], set.farMean[1]), unresolved),
       // Two fixed probes are enough to catch a neighbouring long blade at the sun
       // direction while keeping the branch spatially coherent and bounded.
-      shade: turfSelfShadow(set.nrh, uvP, dNrh.b, sunUVFull, lod, rayActive, 2),
+      shade: turfSelfShadow(
+        turfNrhArrayNode, int(set.layer), uvP, dNrh.b, sunUVFull, lod, rayActive, 2,
+      ),
         // `uvP` is exactly `uv0` once the footprint disables the ray, and its
         // displacement smoothly tends to zero through the minification band.  Sampling
         // this single UV is therefore equivalent at both ends to the former far/near
         // blend while avoiding a second albedo fetch in every terrain fragment.
         // Normalize each source's measured linear luminance before the common zone
-        // grade. This keeps the existing rough bake stable while Grass001 retains its
-        // real chroma/structure. Alpha carries measured roughness for the CC0 mown
+        // grade. This keeps the existing rough bake stable while the Blendkit sources
+        // retain their real chroma/structure. Alpha carries measured roughness for the
         // source; the generated rough tier uses its neutral declared constant.
         alb: vec4(
-          mix(dAlb.rgb.mul(TURF_LUM / set.albedoMean), vec3(TURF_LUM), unresolved),
+          mix(pigment, pigmentMean, unresolved),
           set.packedRoughness
             ? mix(dAlb.a, float(set.farMean[2]), unresolved)
             : float(set.farMean[2]),
@@ -897,18 +1075,15 @@ export class Terrain {
       };
     };
 
-    // ---- Pick the bake. Rough and deep rough get long, tufted grass; the mown
-    // surfaces get the short one. This has to switch BOTH tiers together: gating it on
-    // anything that varies with camera distance would crossfade one bake into the other
-    // as you walked, which is precisely the camera-centred ring the fade below exists
-    // to keep smooth.
+    // ---- Pick the bake. Rough and deep rough get long, tufted grass; maintained
+    // surfaces get their authored Blendkit material. Fairway and green are read in
+    // parallel and blended only by the analytic green mask, so the cut-height change
+    // is spatially stable and does not depend on camera distance.
     //
-    // Branch rather than blend. A pixel is essentially always fully one surface or the
-    // other — the only pixels that are both lie in the outer ~1 m shoulder — so this is
-    // spatially coherent and whole waves take the same path, the same argument the
-    // parallax/self-shadow marches already rely on. An unconditional mix would sample
-    // both bakes everywhere and roughly double the fetch count of the most expensive
-    // shader in the frame.
+    // Branch rough rather than blend it with maintained turf. A pixel is essentially
+    // always fully one surface or the other — the only pixels that are both lie in the
+    // outer ~1 m shoulder — so this is spatially coherent and whole waves take the same
+    // path, the same argument the parallax/self-shadow marches already rely on.
     //
     // ---- EXACTLY ONE CONDITIONAL, and the other case is the unconditional DEFAULT.
     //
@@ -928,28 +1103,29 @@ export class Terrain {
     // body changed nothing, and swapping the two branches' order moved the black from
     // the rough to the fairway.
     //
-    // So the mown tier is read unconditionally and the rough tier overwrites it under a
-    // single `If`. The cost is one extra set of fetches ON ROUGH PIXELS ONLY — mown
-    // surfaces, which are most of a course, still pay for exactly one bake. That is the
-    // cheapest arrangement that is actually correct; an unconditional mix of both would
-    // pay it everywhere.
+    // So the fairway and green tiers are read unconditionally, then the rough tier
+    // overwrites the maintained result under a single `If`. This costs the second
+    // maintained material read on every turf fragment, but keeps green transitions
+    // branch-free and avoids the broken nested-conditional path documented above.
     //
     // IF YOU TOUCH THIS: never add a second `If`, an `Else`, or an `ElseIf` here. Verify
     // any change with `node scripts/shot.mjs --asset "turf: rough" --probe` — a broken
     // branch shows up as pctNearBlack ~99, not as an error.
     //
-    // There is also no third path for the mowing line (it used to cross-fade both bakes
-    // there). Both bakes are normalised to the same TURF_LUM, so the inner shoulder
-    // remains a stable mown read while the long-grass bake begins only after the
-    // measured carpet transition; canopy depth follows that same world-space shoulder.
+    // There is no third path for the mowing line. Both maintained source bakes are
+    // normalized before being recentered on their own fairway/green pigments; the
+    // long-grass bake begins only after the measured carpet transition, and canopy
+    // depth follows that same world-space shoulder.
     const tier = Fn(() => {
-      const base = readTier(maps.mown);
-      const relief = base.relief.toVar();
-      const far = base.far.toVar();
-      const shade = base.shade.toVar();
-      const alb = base.alb.toVar();
+      const fairway = readTier(maps.fairway);
+      const putting = readTier(maps.green);
+      const greenW = m.green;
+      const relief = mix(fairway.relief, putting.relief, greenW).toVar();
+      const far = mix(fairway.far, putting.far, greenW).toVar();
+      const shade = mix(fairway.shade, putting.shade, greenW).toVar();
+      const alb = mix(fairway.alb, putting.alb, greenW).toVar();
       // Keep the expensive rough bake on the long-grass side of the transition. The
-      // mown default owns the first part of the shoulder, where the geometry carpet is
+      // maintained default owns the first part of the shoulder, where the geometry carpet is
       // also thinning, so no hard texture seam can sit beneath it.
       If(mownW.lessThanEqual(0.18), () => {
         const r = readTier(maps.rough);
@@ -963,7 +1139,7 @@ export class Terrain {
     const tShade = tier.get('shade');
     const tAlb = tier.get('alb');
 
-    // Sand is shaded on this same clipmap surface. It must not inherit the mown
+    // Sand is shaded on this same clipmap surface. It must not inherit the maintained
     // turf normal atlas: doing so recreates grass-blade relief inside a bunker.
     // The same canopy bake serves the maintained surfaces, but their real cut
     // heights are different: a green is roughly 4 mm, a fairway 11 mm, while the
@@ -979,36 +1155,39 @@ export class Terrain {
     // Cut-height alone correctly orders canopy depth, but it made the 4 mm green
     // almost optically flat once the atlas reached its first mip.  Real tightly cut
     // turf is low, not featureless: its dense shoot tips still make a fine normal
-    // field.  Apply a bounded class profile to the SAME measured micro relief so the
+    // field. Apply a bounded class profile to the SAME measured micro relief so the
     // hierarchy survives real light without changing canopy depth or gameplay grade.
-    // The resulting approximate amplitudes remain ordered: green 0.42, tee 0.70,
-    // fairway 0.89, fringe 1.02, then the long-grass bake at 1.11.
+    // The fairway gets a stronger authored response than the cleaner green, while
+    // both remain below a geometric-blade interpretation of the source.
     let cutMicroGain = float(1.0);
-    cutMicroGain = mix(cutMicroGain, float(1.08), m.visualFairway);
-    cutMicroGain = mix(cutMicroGain, float(0.92), m.fringe);
-    cutMicroGain = mix(cutMicroGain, float(1.42), m.green);
-    cutMicroGain = mix(cutMicroGain, float(0.94), m.tee);
-    const reliefAmplitude = reliefScale.mul(0.82).mul(cutMicroGain).clamp(0.22, 1.8);
+    cutMicroGain = mix(cutMicroGain, float(1.12), m.visualFairway);
+    cutMicroGain = mix(cutMicroGain, float(0.96), m.fringe);
+    cutMicroGain = mix(cutMicroGain, float(1.28), m.green);
+    cutMicroGain = mix(cutMicroGain, float(0.98), m.tee);
+    const reliefAmplitude = reliefScale.mul(0.94).mul(cutMicroGain).clamp(0.22, 1.8);
     const grassNormal = terrainNormal.add(tRelief.mul(reliefAmplitude)).normalize();
     // Directional fibre relief stays visible after the atlas is minified. Keep this
     // fine field restrained: the fairway's readable structure is the reel-pass
     // pass below, not a high-frequency procedural noise carpet.
     // The macro bake already carries a filtered, world-stable low-frequency field.
-    // Reuse its moisture channel as the fibre warp instead of evaluating another
-    // full 3D noise field in every terrain fragment.  The remaining fibre field is
-    // still live at blade/near-meso scale, so close turf keeps its directional
-    // micro-response while the warp remains continuous across all four clipmaps.
-    const fibreWarp = macroVariation.a.sub(0.5);
-    const fibreField = mx_noise_float(vec3(
-      worldXZ.x.mul(1.16).add(fibreWarp.mul(0.72)),
-      worldXZ.y.mul(0.93).sub(fibreWarp.mul(0.58)), 181.0));
+    // Reuse its phase/moisture channels as the fibre signal instead of evaluating
+    // another full 3D noise field in every terrain fragment. The source NRH map
+    // remains the blade/near-meso signal, while this field stays continuous across
+    // all four clipmaps.
+    // The former fibre field was a live 3-D noise evaluation per fragment. It was
+    // stable in world space, but its screen-space derivative became visible grain in
+    // close fairway views and then aliased when the footprint grew. Use the already
+    // generated phase/moisture bands instead; the source NRH map owns the fine scale,
+    // while this pair supplies only broad, filtered fibre drift.
+    // Retired bake comparison (do not reintroduce as a live fragment signal):
+    // const fibreField = mx_noise_float(vec3(worldXZ.x.mul(1.16), worldXZ.y.mul(0.93), 181.0));
+    // Former normal path: vec3(dFdx(fibreField), 0.0, dFdy(fibreField)).mul(0.34)
+    const fibreBand = oneMinus(smoothstep(0.035, 0.16, duvM));
+    const fibreSignal = macroVariation.r.mul(0.62).add(macroVariation.a.mul(0.38));
+    const fibreGradient = vec3(dFdx(fibreSignal), 0.0, dFdy(fibreSignal));
     // Keep a visible but physically small fibre roll after the source atlas is
-    // minified. The old 0.24 response left the 10--20 m turf footprint almost
-    // perfectly planar in the approach capture; this is still only a few
-    // centimetres of slope in the normal field, not displacement.
-    // The ecotone is a render-only shoulder.  Its low-frequency warp keeps the
-    // maintained edge from reading as a ruler-straight SDF cut, while the
-    // gameplay masks and collision surface remain untouched.
+    // minified. This is a broad normal response, not displacement, and it disappears
+    // by physical footprint before the 0.5 m macro texel can alias.
     const visualMaintained = m.visualFairway.add(m.fringe).add(m.green).add(m.tee).clamp(0.0, 1.0);
     // The authored gameplay fairway mask is the sole owner of mowing response.
     // Explicit exclusions prevent its antialiased corridor edge from leaking the
@@ -1016,8 +1195,8 @@ export class Terrain {
     const fairwayMowMask = m.fairway
       .mul(oneMinus(m.fringe)).mul(oneMinus(m.green)).mul(oneMinus(m.tee))
       .mul(oneMinus(m.sand)).mul(oneMinus(m.waterBank)).clamp(0.0, 1.0);
-    const fibreBump = vec3(dFdx(fibreField), 0.0, dFdy(fibreField)).mul(0.34).mul(0.30)
-      .mul(fairwayMowMask);
+    const fibreBump = fibreGradient.mul(0.34).mul(0.42)
+      .mul(fairwayMowMask).mul(fibreBand);
     // Straight 2.54 m reel passes. The coordinate is exactly linear in authored
     // world/course axes: no noise, warp, curvature, or per-pass phase perturbation.
     const stripCoordinate = worldXZ.x.add(worldXZ.y.mul(MOW_STRIPE_CROSS_SLOPE));
@@ -1049,11 +1228,11 @@ export class Terrain {
     // The macro phase field is already a filtered low-frequency warp. Keep one live
     // meso field for relief breakup, but do not spend another noise evaluation to
     // perturb its coordinates.
-    const mesoWarp = macroVariation.r.sub(0.5);
-    const mesoReliefField = mx_noise_float(vec3(
-      worldXZ.x.mul(0.24).add(mesoWarp.mul(0.8)),
-      worldXZ.y.mul(0.19).sub(mesoWarp.mul(0.6)), 229.0));
-    const mesoGradient = vec3(dFdx(mesoReliefField), 0.0, dFdy(mesoReliefField));
+    // Retired bake comparison (the old signal was a live full-screen noise field):
+    // const mesoReliefField = mx_noise_float(vec3(worldXZ.x.mul(0.24), worldXZ.y.mul(0.19), 229.0));
+    const mesoBand = oneMinus(smoothstep(0.12, 0.55, duvM));
+    const mesoSignal = macroVariation.b.mul(0.68).add(macroVariation.a.mul(0.32));
+    const mesoGradient = vec3(dFdx(mesoSignal), 0.0, dFdy(mesoSignal)).mul(mesoBand);
     // The same 4--5 m field must not make every maintained surface one material.
     // Fairway retains the strongest fibrous undulation, fringe is coarser but less
     // uniformly worked, tee is compact, and the dense low green carries only a small
@@ -1065,6 +1244,20 @@ export class Terrain {
     cutMesoNormal = mix(cutMesoNormal, float(0.065), m.green);
     cutMesoNormal = mix(cutMesoNormal, float(0.105), m.tee);
     const mesoBump = mesoGradient.mul(cutMesoNormal);
+    // The packed NRH height is a second, broader source of the same authored blade
+    // relief. Its screen derivative reads as coherent shoot-scale roll at a grazing
+    // angle, while the footprint band retires it before a pixel spans the source
+    // pattern. This is a normal-only contribution: no gameplay height or silhouette
+    // changes, and the green remains deliberately quieter than the fairway.
+    const canopyHeightGradient = vec3(dFdx(tFar.x), 0.0, dFdy(tFar.x));
+    const canopyGradientBand = oneMinus(smoothstep(0.025, 0.20, duvM));
+    let cutHeightNormal = float(0.0);
+    cutHeightNormal = mix(cutHeightNormal, float(0.16), m.visualFairway);
+    cutHeightNormal = mix(cutHeightNormal, float(0.10), m.fringe);
+    cutHeightNormal = mix(cutHeightNormal, float(0.055), m.green);
+    cutHeightNormal = mix(cutHeightNormal, float(0.09), m.tee);
+    const canopyHeightBump = canopyHeightGradient.mul(cutHeightNormal)
+      .mul(visualMaintained).mul(flat).mul(canopyGradientBand);
     // Native shoulders expose more mineral structure as slope increases. Reuse the
     // already-paid 4–5 m meso field and 0.5 m baked macro channels, so this is
     // slope-aware, world stable, and adds no texture fetch or procedural evaluation.
@@ -1080,11 +1273,26 @@ export class Terrain {
     const bankRelief = vec3(dFdx(m.waterMottle), 0.0, dFdy(m.waterMottle))
       .mul(0.42).mul(m.waterBank);
     const maintainedNormal = grassNormal.add(fibreBump).add(mowBump).add(mesoBump)
-      .add(nativeBump).add(bankRelief).normalize();
+      .add(canopyHeightBump).add(nativeBump).add(bankRelief).normalize();
+    // Normal-variance/specular AA: source turf normals and the mower lay can carry
+    // more directional change than one pixel can resolve. Estimating variance from
+    // the final world-anchored normal lets the PBR response average those microfacets
+    // instead of producing isolated sparkling pixels in close-up grazing views. The
+    // same variance signal broadens roughness and lowers only the lobe peak; pigment,
+    // silhouette, and the actual heightfield remain untouched.
+    const normalDx = dFdx(maintainedNormal);
+    const normalDy = dFdy(maintainedNormal);
+    const normalVariance = normalDx.dot(normalDx).add(normalDy.dot(normalDy)).mul(0.5);
+    const normalVarianceWeight = smoothstep(
+      TURF_NORMAL_VARIANCE_START, TURF_NORMAL_VARIANCE_FULL, normalVariance,
+    );
+    const normalVarianceRoughness = normalVarianceWeight.mul(TURF_NORMAL_VARIANCE_ROUGHNESS);
+    const specularAA = oneMinus(normalVarianceWeight.mul(TURF_NORMAL_VARIANCE_SPECULAR))
+      .clamp(0.82, 1.0);
     // The same world-anchored fibre field also gives a tiny roughness modulation.
     // It is broad enough to survive 2–30 m minification, but remains far below
     // the roughness floor so the turf never turns into a glossy sheet.
-    const fibreRoughness = fibreField.sub(0.5).mul(0.070)
+    const fibreRoughness = fibreSignal.sub(0.5).mul(0.070)
       .mul(fairwayMowMask);
     // Sand has no canopy relief, but its fine aggregate still breaks the broad
     // bunker floor into a granular, matte response. A derivative of a low-amplitude
@@ -1097,7 +1305,7 @@ export class Terrain {
       .add(macroVariation.a.sub(0.5).mul(0.12));
     const rakeResolution = oneMinus(smoothstep(0.045, 0.20, duvM));
     const sandRake = rakeCoordinate.mul(6.2831853 / 0.28).sin().mul(0.035).mul(rakeResolution);
-    // The mown-tier albedo was already fetched for every bunker fragment. Reuse only
+    // The maintained-tier albedo was already fetched for every bunker fragment. Reuse only
     // its scalar, normalized high-frequency luminance as sub-decimetre aggregate:
     // no turf colour/normal enters sand, and this adds no texture sample. Its own mip
     // chain naturally removes grains when they cease to resolve.
@@ -1106,10 +1314,19 @@ export class Terrain {
       .add(sandMicro.sub(1.0).mul(0.055));
     const sandBump = vec3(dFdx(sandSurface), 0.0, dFdy(sandSurface)).mul(0.32).mul(m.sand);
     const sandNormal = terrainNormal.add(sandBump).normalize();
+    let resolvedGroundNormal = mix(maintainedNormal, sandNormal, m.sand).normalize();
+    if (coastWeights && coastSand) {
+      const beachNormal = terrainNormal.add(vec3(
+        coastSand.slope.x, 0.0, coastSand.slope.y,
+      ).mul(0.46)).normalize();
+      resolvedGroundNormal = mix(
+        resolvedGroundNormal, beachNormal, coastWeights.beachWeight,
+      ).normalize();
+    }
     // transformNormalToView performs the final normalization after the sand/turf
     // blend. A second normalize here was an identical inverse-square-root in every
     // terrain fragment and did not change the resulting view-space normal.
-    mat.normalNode = transformNormalToView(mix(maintainedNormal, sandNormal, m.sand));
+    mat.normalNode = transformNormalToView(resolvedGroundNormal);
 
     // ---- Occlusion. Two separate terms, combined into aoNode:
     //   * baked canopy AO (far.y) — sky occlusion measured from the bake's own depth
@@ -1128,7 +1345,9 @@ export class Terrain {
     // The self-shadow march is too costly to run everywhere, so it stays gated — but
     // over the same wide band as the rest, so what's left is a gradient, not an edge.
     const grassAO = canopyAO.mul(mix(float(1.0), tShade, dw.mul(this.uShadow)));
-    mat.aoNode = mix(grassAO, float(1.0), m.sand);
+    let resolvedAO = mix(grassAO, float(1.0), m.sand);
+    if (coastWeights) resolvedAO = mix(resolvedAO, float(1.0), coastWeights.beachWeight);
+    mat.aoNode = resolvedAO;
 
     // Grass is MATTE, with a tight sheen — not a glossy sheet. Roughness has to vary at
     // BLADE scale or the turf reads as one flat painted surface, so it comes from the
@@ -1146,7 +1365,7 @@ export class Terrain {
     // CG sheet without ever becoming a visible pattern or texture boundary.
     const moisture = macroVariation.a;
     // Rough retains its canopy-height roughness model. Maintained cuts use the real
-    // Grass001 roughness packed into the already-read albedo alpha, remapped into a
+    // Blendkit roughness packed into the already-read albedo alpha, remapped into a
     // matte turf range while preserving its measured local variation.
     const canopyRoughness = oneMinus(tFar.x).mul(this.uRoughRange.mul(1.6)).add(this.uRoughBase);
     const scannedRoughness = tAlb.a.mul(0.30).add(0.61);
@@ -1229,14 +1448,25 @@ export class Terrain {
     zoneRoughness = mix(zoneRoughness, float(0.60), m.green);
     zoneRoughness = mix(zoneRoughness, float(0.75), m.tee);
     const surfaceRoughness = mix(mix(rGrassV, float(0.97), steepR), zoneRoughness, 0.56);
+    const filteredSurfaceRoughness = surfaceRoughness.add(normalVarianceRoughness)
+      .clamp(0.68, 0.99);
     // The water-bank shelf is damp mineral soil/gravel, not a painted radial ring:
     // its moisture response comes from the authored pond SDF and stays matte under
     // the same sun/sky rig. Interior water is excluded by the SDF mask and remains
     // hidden beneath the dedicated water surface.
-    const bankRoughness = surfaceRoughness.add(m.waterBank.mul(0.075)).clamp(0.68, 0.99);
+    const bankRoughness = filteredSurfaceRoughness.add(m.waterBank.mul(0.075)).clamp(0.68, 0.99);
     const sandRoughness = sandHeight.mul(0.035).add(sandMicro.sub(1.0).mul(0.025))
       .add(0.90).clamp(0.86, 0.95);
-    mat.roughnessNode = mix(mix(bankRoughness, sandRoughness, m.sand), float(0.97), m.waterBank.mul(oneMinus(m.sand)));
+    let resolvedRoughness = mix(
+      mix(bankRoughness, sandRoughness, m.sand),
+      float(0.97), m.waterBank.mul(oneMinus(m.sand)),
+    );
+    if (coastWeights && coastSand) {
+      resolvedRoughness = mix(
+        resolvedRoughness, coastSand.roughness, coastWeights.beachWeight,
+      );
+    }
+    mat.roughnessNode = resolvedRoughness;
     // Opposite mower lays expose a bounded amount of cuticle to the same real light.
     // The inverse relationship with roughness avoids a wet/plastic lobe: the pass
     // made rougher above also carries less dielectric return here (maximum +/-16%).
@@ -1249,7 +1479,14 @@ export class Terrain {
     cutSpecular = mix(cutSpecular, float(0.92), m.fringe);
     cutSpecular = mix(cutSpecular, float(1.20), m.green);
     cutSpecular = mix(cutSpecular, float(1.05), m.tee);
-    mat.specularIntensityNode = this.uSpecular.mul(mowSpecular).mul(cutSpecular);
+    let resolvedSpecular = this.uSpecular.mul(mowSpecular).mul(cutSpecular)
+      .mul(specularAA);
+    if (coastWeights) {
+      resolvedSpecular = mix(
+        resolvedSpecular, float(COAST_SAND_SPECULAR_INTENSITY), coastWeights.beachWeight,
+      );
+    }
+    mat.specularIntensityNode = resolvedSpecular;
     // The zone tint is the turf's ALBEDO — the light rig and tone-map decide how
     // bright it ends up, so it must not be pre-darkened. The old chain stacked three
     // separate sub-1.0 multipliers (turfBase's 0.82 lightness, this 0.82, and a
@@ -1260,7 +1497,7 @@ export class Terrain {
       return vec3(c.r, c.g, c.b);
     };
     const roughUndercoat = (name) => {
-      const c = turfBladeBase(name, new Color());
+      const c = turfUndercoatBase(name, new Color());
       return vec3(c.r, c.g, c.b);
     };
     // Sand keeps its darkening: removing it along with the turf's blew the bunkers out
@@ -1275,12 +1512,12 @@ export class Terrain {
       // And no extra darkening on either. That 0.85 existed to push the ground under
       // the blades toward the shaded blade bases, so gaps in a thinned canopy read as
       // shadow rather than a lighter speckle — but the rough bake now measures that
-      // occlusion for real (its canopy-AO channel means 0.596 against the mown bake's
+      // occlusion for real (its canopy-AO channel is authored separately from the
       // 0.758, because long grass genuinely shadows itself far more), and stacking a
       // hand-picked multiplier on top of a measured one double-counts.
-      // Use the exact same chlorophyll tint as the geometry above. Texture, AO,
-      // normals, and real lighting still give the substrate depth; exposed pixels
-      // no longer reveal a different grey-green material between blade ribbons.
+      // Derive the undercoat from the same chlorophyll tint as the geometry, then
+      // compensate for its stronger upward-facing sky fill. Texture, AO, normals,
+      // and real lighting retain depth without exposing pale gaps between ribbons.
       rough: roughUndercoat('rough'), deepRough: roughUndercoat('deepRough'),
       // The putting surface is the same believable plant family but not the same
       // material as fairway. Its dedicated gameplay pigment is slightly cleaner and
@@ -1290,11 +1527,31 @@ export class Terrain {
       green: grassCol('green', 0.92), fringe: grassCol('fringe', 0.96), tee: grassCol('tee'),
       sand: vec3(sc.r, sc.g, sc.b),
     };
-    mat.colorNode = turfColorNode(tAlb.rgb, m, {
+    let nativeBiomeWeight = float(1.0);
+    if (this._biomeField?.hasTransitions) {
+      // Only the managed/native turf channel may receive the rough under-canopy
+      // response. Strand, dune, beach, shelf, and ocean bands retain their own
+      // substrate optics even while the visual transition is fractional.
+      nativeBiomeWeight = biomeLand.r;
+    }
+    const turfColor = turfColorNode(tAlb.rgb, m, {
       ...this.zones, colors: palette, sat: this.uSat, val: this.uVal,
       divotSample, mowResolution, sandSignal: sandHeight, sandMicro,
-      maintainedCoverage: visualMaintained, fairwayMowMask, stripLay, nativeRockPatch,
+      maintainedCoverage: visualMaintained, sourceAlbedo: tAlb.rgb,
+      fairwayMowMask, stripLay, nativeRockPatch,
+      canopyHeight: tFar.x, nativeBiomeWeight,
     }, macroVariation, terrainNormal);
+    if (this._biomeField?.hasTransitions && coastWeights && coastSand) {
+      const strand = biomeLand.g;
+      const ecotoneGrass = turfColor.mul(vec3(0.86, 0.91, 0.72));
+      mat.colorNode = mix(
+        mix(turfColor, ecotoneGrass, strand.mul(0.34)),
+        coastSand.color,
+        coastWeights.beachWeight,
+      );
+    } else {
+      mat.colorNode = turfColor;
+    }
     // Do not lift shaded bunker walls or sand with emissive compensation. Their
     // readability comes from the carved terrain, real sun/sky fill, and the
     // restrained geometric canopy/screen-space contact terms above. An emissive
@@ -1317,9 +1574,9 @@ const CANOPY_M = {
 // Returns the UV where the view ray first passes below the canopy surface.
 //
 // Wrapped in Fn because If/Loop need a shader stack, and the whole march is skipped
-// where the near-field weight is ~0 — that branch is spatially coherent (it's purely
-// distance-based), so distant pixels genuinely cost nothing.
-const turfParallaxUV = Fn(([hTex, uv0, stepUV, lod, active, nl]) => {
+// where the footprint/view-angle weight is ~0 — both inputs are screen-stable and
+// world/material based, so distant or grazing pixels genuinely cost nothing.
+const turfParallaxUV = Fn(([hTex, layer, uv0, stepUV, lod, active, nl]) => {
   const uv = uv0.toVar();
   If(active.greaterThan(0.02), () => {
     const d = float(0).toVar();            // ray depth below the canopy top, 0..1
@@ -1329,7 +1586,7 @@ const turfParallaxUV = Fn(([hTex, uv0, stepUV, lod, active, nl]) => {
     const dPrev = float(0).toVar();
     Loop(nl, () => {
       // B channel is canopy height with 1 = blade tip, so depth below the tips is 1-h.
-      const ds = textureLevel(hTex, uv, lod).b.oneMinus().toVar();
+      const ds = textureLevel(hTex, uv, lod).depth(layer).b.oneMinus().toVar();
       If(d.greaterThanEqual(ds), () => {
         // Interpolate the crossing between the last two layers. Without this the
         // march quantises to nl flat shelves and the turf shows chevron stair-steps
@@ -1358,7 +1615,7 @@ const turfParallaxUV = Fn(([hTex, uv0, stepUV, lod, active, nl]) => {
 // shadows cast by neighbouring blades, and that high-frequency contrast is what the
 // eye reads as "real". A normal map alone can only shade a blade by its own facing; it
 // can never let one blade darken another.
-const turfSelfShadow = Fn(([hTex, uvHit, h0, sunUVFull, lod, active, ns]) => {
+const turfSelfShadow = Fn(([hTex, layer, uvHit, h0, sunUVFull, lod, active, ns]) => {
   const shade = float(1.0).toVar();
   If(active.greaterThan(0.02), () => {
     const climb = oneMinus(h0);                 // height left to clear the canopy top
@@ -1376,7 +1633,7 @@ const turfSelfShadow = Fn(([hTex, uvHit, h0, sunUVFull, lod, active, ns]) => {
       h.addAssign(stepH);
       // How far the canopy pokes ABOVE the light ray here — the deepest breach along
       // the march sets the shadow, so a single tall blade shadows what's behind it.
-      occ.assign(occ.max(textureLevel(hTex, uv, lod).b.sub(h).max(0.0)));
+      occ.assign(occ.max(textureLevel(hTex, uv, lod).depth(layer).b.sub(h).max(0.0)));
     });
     shade.assign(oneMinus(occ.mul(6.0).clamp(0.0, 1.0)));
   });
@@ -1396,19 +1653,10 @@ const turfSelfShadow = Fn(([hTex, uvHit, h0, sunUVFull, lod, active, ns]) => {
 // filtering — see ZoneMap.js for why an id/grey-level map could not have worked here.
 // The rough band and the fringe collar need no channels of their own: they're just the
 // corridor and green distances offset by their widths.
-function turfZoneMasks(zoneTex, waterTex, bounds, zones) {
+function turfZoneMasks(sd, waterSample, zones) {
   const AA = 0.16;                        // edge softness (m): smooth curve, still crisp
-  const sd = texture(zoneTex, vec2(
-    positionWorld.x.sub(bounds.minX).div(bounds.maxX - bounds.minX),
-    positionWorld.z.sub(bounds.minZ).div(bounds.maxZ - bounds.minZ),
-  )).toVar('zoneSD');
-  // Water's signed distance and deterministic bank signals are authored from the
-  // same irregular pond outline as Range collision and WaterSurface geometry. This
-  // is one filtered RGBA16F lookup, not an analytic circle or radial camera fade.
-  const waterSample = texture(waterTex, vec2(
-    positionWorld.x.sub(bounds.minX).div(bounds.maxX - bounds.minX),
-    positionWorld.z.sub(bounds.minZ).div(bounds.maxZ - bounds.minZ),
-  )).toVar('waterBankSample');
+  // Zone and water samples are hoisted by the material so the pot-bunker opacity
+  // path and the surface masks share the same two bindings and exact filtered values.
   const waterSD = waterSample.x;
   const outsideWater = oneMinus(smoothstep(0.0, 0.08, waterSD));
   const bankDistance = waterSD.negate().max(0.0);
@@ -1419,7 +1667,7 @@ function turfZoneMasks(zoneTex, waterTex, bounds, zones) {
   const bankWidth = float(0.15).add(bankWidthNoise.mul(0.15));
   const bankEnvelope = oneMinus(smoothstep(0.0, bankWidth, bankDistance)).mul(outsideWater);
   const bankExposure = smoothstep(0.42, 0.76,
-    waterSample.z.mul(0.68).add(waterSample.w.mul(0.32)));
+    waterSample.z.mul(0.82).add(waterSample.y.mul(0.18)));
   const waterBank = bankEnvelope.mul(bankExposure.mul(0.82).add(0.08));
   const waterBankWet = oneMinus(smoothstep(0.0, 0.075, bankDistance))
     .mul(outsideWater).mul(bankExposure.mul(0.76).add(0.12));
@@ -1460,14 +1708,14 @@ function turfZoneMasks(zoneTex, waterTex, bounds, zones) {
     waterBank,
     waterBankWet,
     waterMottle: waterSample.z,
-    waterGrass: waterSample.w,
+    waterGrass: waterSample.z,
   };
 }
 
 // Which detail bake this pixel wants: 0 = the rough bake (long, tufted grass), 1 = the
-// mown bake. Composited through the SAME mask chain in the SAME order as the colour and
+// maintained bake. Composited through the SAME mask chain in the SAME order as the colour and
 // depth paths, so the texture switch lands exactly on the mowing line and not a pixel
-// off it. Sand takes the mown bake — it has no canopy of its own, and the short map is
+// off it. Sand takes the maintained bake — it has no canopy of its own, and the short map is
 // the more neutral relief to carry under it.
 function turfMownWeight(m) {
   // The wide maintained shoulder is intentional: long blades begin thinning before
@@ -1493,17 +1741,18 @@ function turfCanopyDepth(m) {
   return { depth: mix(d, float(CANOPY_M.tee), m.tee) };
 }
 
-// TSL colorNode: the per-zone tint (`color`) carrying the grain of a turf albedo
-// texture. The texture's luminance supplies the blade-level variation while the zone
-// tint sets the actual colour of each surface (fairway/rough/green), so it's
-// photographic AND correctly coloured. `tex` is mipped at distance and
-// blade-resolving/parallaxed up close (see readTier). Continuous macro variation sits
-// on top; the only directional course-scale signal is the explicit straight reel pass
-// below, never a hidden atlas period.
+// TSL colorNode: rough/native surfaces retain the shared zone grade, while maintained
+// turf uses the actual Blendkit albedo sampled by the detail tier. That distinction is
+// important: treating a photographed grass material as mere luminance grain throws
+// away the authored pigment and makes every surface converge on the same synthetic
+// green. `tex` is mipped at distance and blade-resolving/parallaxed up close (see
+// readTier). Continuous macro variation sits on top; the only directional course-scale
+// signal is the explicit straight reel pass below, never a hidden atlas period.
 function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorld) {
   const wx = positionWorld.x;             // TRUE world pos drives zone classification
   const wz = positionWorld.z;
   const C = zones.colors;                 // vec3 per zone
+  const sourceAlbedo = zones.sourceAlbedo || tex;
   const AA = 0.16;                        // edge softness (m): smooth curve, still crisp
 
   // Zone classification comes from the baked signed-distance map (see turfZoneMasks):
@@ -1522,11 +1771,10 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   baseCol = mix(baseCol, C.sand, m.sand);
   baseCol = mix(baseCol, C.tee, m.tee);
 
-  // Both tiers are sampled from the DETAIL bakes, never from the bentgrass bake.
-  // The bentgrass map had a directional artifact that tiled into fake short-period
-  // stripes. The detail bakes are drawn with randomly-oriented blades so they have no
-  // preferred direction; the deliberate straight reel pass is added below in world
-  // space, where its period and direction remain measurable and stable.
+  // The maintained tier is the authored Blendkit albedo; the deliberate straight reel
+  // pass is added below in world space, where its period and direction remain measurable
+  // and stable. Rough pixels still use their dedicated long-grass source through the
+  // same `tex` input.
   const texLum = luminance(tex).max(0.001);
 
   // Render the turf albedo as real detail, not flat grain: its per-blade variation
@@ -1538,8 +1786,11 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   // while compact tee and dense green average progressively cleaner. This changes
   // only the contrast of the already sampled physical-scale atlas; no class receives
   // a new texture, UV period, or camera-dependent fade.
-  let microContrast = float(1.28);
-  microContrast = mix(microContrast, float(1.18), m.rough);
+  // The geometric canopy supplies the close high-frequency silhouette. Compress
+  // the baked undercoat's brightest blade marks so an exposed texel reads as shaded
+  // vegetation/litter rather than a pale hole between ribbons.
+  let microContrast = float(1.12);
+  microContrast = mix(microContrast, float(1.06), m.rough);
   microContrast = mix(microContrast, float(0.98), m.visualFairway);
   microContrast = mix(microContrast, float(0.82), m.fringe);
   microContrast = mix(microContrast, float(0.52), m.green);
@@ -1572,6 +1823,11 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   // atlas is fully minified.
     const maintainedCoverage = zones.maintainedCoverage;
     const fairwayMowMask = zones.fairwayMowMask;
+    // The Blendkit maps are authored albedo, not a decorative grayscale detail layer.
+    // Replace the synthetic zone grade wherever maintained turf owns the pixel, then
+    // let the same world-space macro, moisture, reel-pass, and lighting terms act on
+    // that real pigment. Rough/native pixels keep the established shared grade.
+    c = mix(c, sourceAlbedo, maintainedCoverage);
     // The reel pass is the fairway's readable directional signal. Keep the
     // persistent macro field, but compress its contrast over maintained turf so
     // stochastic lime mottling cannot compete with the directional cut pattern.
@@ -1641,6 +1897,19 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   zoneGrade = mix(zoneGrade, float(0.950), m.green);
   zoneGrade = mix(zoneGrade, float(0.985), m.tee);
   c = c.mul(mix(zoneGrade, float(1.0), m.sand));
+
+  // Reuse the existing rough-detail canopy height to place a restrained same-hue
+  // root/litter response under geometric blades. This is world/texture anchored,
+  // not camera distance or stochastic screen coverage, so it cannot form an LOD
+  // ring or shimmer. Every maintained/hazard mask and every non-turf biome band
+  // explicitly retires it.
+  const occupiedByOtherSurface = maintainedCoverage.max(m.sand).max(m.waterBank);
+  const nativeTurfWeight = oneMinus(occupiedByOtherSurface)
+    .mul(zones.nativeBiomeWeight).clamp(0.0, 1.0);
+  const rootExposure = oneMinus(smoothstep(0.28, 0.72, zones.canopyHeight));
+  const rootLitterWeight = rootExposure.mul(nativeTurfWeight).mul(0.22);
+  const rootLitterTint = vec3(0.72, 0.80, 0.48);
+  c = mix(c, c.mul(rootLitterTint), rootLitterWeight);
 
   // Steep native ground reveals a restrained mineral/soil fraction. It follows the
   // actual terrain normal and the same baked 0.5 m macro field used by its normal,
@@ -1725,7 +1994,12 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   // each end of the pot wall that read as a black polygon from oblique cameras.
   const steep = smoothstep(0.82, 0.55, terrainNormal.y);
   const yWarp = macroVariation.a.sub(0.5).mul(0.03);
-  const sod = positionWorld.y.add(yWarp).mul(42.0).sin().mul(0.5).add(0.5);
+  const sodPhase = positionWorld.y.add(yWarp).mul(42.0);
+  const sodResolved = sodPhase.sin().mul(0.5).add(0.5);
+  // Each course is 15 cm. Fade its contrast from the analytic phase footprint so
+  // revetment converges to its mean under minification instead of stripe-crawling.
+  const sodVisibility = oneMinus(smoothstep(0.35, 1.4, sodPhase.fwidth()));
+  const sod = mix(float(0.5), sodResolved, sodVisibility);
   // Warm, earthy sod courses (dark peat → tan-olive turf edge); the cool sky fill
   // in the shaded pit would otherwise read blue-grey.
   // Keep the deepest peat course dark, but above the tone-map crush point under the

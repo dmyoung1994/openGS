@@ -1,7 +1,7 @@
 import { Vector3, Quaternion } from 'three';
 import { BALL, GRAVITY, SPIN_DECAY_COEFFICIENT } from './constants.js';
 import {
-  AIR_VISCOSITY, MODERN_TOUR_AERO_PROFILE, aeroAcceleration, coefficientSnapshot,
+  AIR_VISCOSITY, CONTEMPORARY_URETHANE_AERO_PROFILE, aeroAcceleration, coefficientSnapshot,
 } from './aerodynamics.js';
 import { DEG_TO_RAD, MPH_TO_MS, RPM_TO_RADS } from '../util/units.js';
 import { FRESH_WATER_DENSITY, validateWaterEntryModel } from './waterInteraction.js';
@@ -66,7 +66,7 @@ export function makeEnv({
   waterEntryModel = null,
   waterDensity = FRESH_WATER_DENSITY,
   viscosity = AIR_VISCOSITY,
-  aerodynamicProfile = MODERN_TOUR_AERO_PROFILE,
+  aerodynamicProfile = CONTEMPORARY_URETHANE_AERO_PROFILE,
   groundFirmness = 'medium',
 } = {}) {
   if (!Number.isFinite(rho) || rho <= 0) throw new RangeError('rho must be a finite value > 0');
@@ -117,11 +117,16 @@ function derivatives(acceleration, angularAcceleration, velocity, angularVelocit
   acceleration.copy(_aero);
   acceleration.y -= env.gravity;
 
-  // USGA/R&A Appendix C equation (5): dω/dt = -Cw |u|/r ω, using
-  // Cw=2e-5 (the report states this is consistent with Overall Distance
-  // Standard). This is a dissipative aerodynamic torque and therefore acts on
-  // the full vector, not a scalar spin magnitude / immutable axis.
-  const damping = SPIN_DECAY_COEFFICIENT * _relativeVelocity.length() / env.ball.radius;
+  // Ferguson equation (3.10)/(3.15) uses CM=0.01S and
+  // M=2Q*CM*r opposite angular velocity. Substitution reduces it to linear
+  // vector damping. The older source profile retains its own published Cw law.
+  // Both are dissipative torques acting on the full vector, never a frozen axis.
+  const speed = _relativeVelocity.length();
+  const momentSlope = env.aerodynamicProfile.spinMomentSlope;
+  const damping = Number.isFinite(momentSlope)
+    ? momentSlope * env.rho * env.ball.area * env.ball.radius * env.ball.radius * speed
+      / env.ball.momentOfInertia
+    : SPIN_DECAY_COEFFICIENT * speed / env.ball.radius;
   angularAcceleration.copy(angularVelocity).multiplyScalar(-damping);
 }
 

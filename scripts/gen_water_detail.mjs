@@ -1,8 +1,8 @@
-// Bake one small, seamless, lighting-neutral pond detail texture.
+// Bake the one seamless, lighting-neutral water detail shared by ponds and ocean.
 //
 // R,G = signed capillary-wave slope encoded from [-1,1] to [0,255]
-// B   = sparse crest breakup (used only to modulate shoreline/impact foam)
-// A   = finer independent crest breakup for the rotated second sample
+// B   = broad sediment/depth variation (never a crest mask)
+// A   = restrained crest breakup for foam/transient response only
 //
 // Every source wave has an integer period across the tile, so opposite edges are
 // identical. There is no albedo or baked light: the production material's shared
@@ -12,16 +12,39 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { png } from './lib/png.mjs';
 
-const RES = 256;
+const RES = 1024;
 const TAU = Math.PI * 2;
-const WAVES = [
-  [1, 3, 0.34, 0.1], [2, -5, 0.24, 1.7], [4, 3, 0.18, 4.1],
-  [5, -7, 0.13, 2.6], [8, 5, 0.09, 5.3], [11, -9, 0.06, 3.4],
-];
-const FINE = [
-  [3, 7, 0.42, 0.8], [7, -4, 0.28, 3.7], [11, 8, 0.18, 5.8],
-  [13, -11, 0.12, 2.1],
-];
+
+function rng(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+function modes(seed, count, minFrequency, maxFrequency, falloff) {
+  const random = rng(seed);
+  const result = [];
+  const used = new Set();
+  while (result.length < count) {
+    const kx = Math.floor(minFrequency + random() * (maxFrequency - minFrequency + 1));
+    const kyMagnitude = Math.floor(minFrequency + random() * (maxFrequency - minFrequency + 1));
+    const ky = random() < 0.5 ? -kyMagnitude : kyMagnitude;
+    const key = `${kx},${ky}`;
+    // Every train is oblique. Distinct integer vectors keep the tile seamless
+    // while preventing a repeated horizontal/vertical or single-angle family.
+    if (kx === Math.abs(ky) || used.has(key)) continue;
+    used.add(key);
+    const frequency = Math.hypot(kx, ky);
+    result.push([kx, ky, Math.pow(frequency, -falloff) * (0.78 + random() * 0.44), random() * TAU]);
+  }
+  return result;
+}
+
+const CAPILLARY = modes(0x77617665, 36, 2, 47, 1.05);
+const CRESTS = modes(0x63726573, 18, 5, 31, 0.92);
+const SEDIMENT = modes(0x73656469, 14, 1, 9, 1.32);
 
 function field(u, v, waves) {
   let h = 0, dx = 0, dy = 0, weight = 0;
@@ -32,7 +55,7 @@ function field(u, v, waves) {
     dy += Math.cos(angle) * amplitude * ky;
     weight += amplitude;
   }
-  return { h: h / weight, dx: dx * 0.075, dy: dy * 0.075 };
+  return { h: h / weight, dx: dx / weight, dy: dy / weight };
 }
 
 const bytes = Buffer.alloc(RES * RES * 4);
@@ -43,19 +66,22 @@ for (let y = 0; y < RES; y++) {
     // mipmaps retain that continuity because all components are periodic.
     const u = (x + 0.5) / RES;
     const v = (y + 0.5) / RES;
-    const broad = field(u, v, WAVES);
-    const fine = field(u, v, FINE);
-    const crest = Math.max(0, Math.min(1, (broad.h - 0.04) * 1.85));
-    const fineCrest = Math.max(0, Math.min(1, (fine.h - 0.10) * 2.0));
+    const capillary = field(u, v, CAPILLARY);
+    const crestField = field(u, v, CRESTS);
+    const sedimentField = field(u, v, SEDIMENT);
+    const slopeScale = 0.052;
+    const sediment = Math.max(0, Math.min(1,
+      0.5 + sedimentField.h * 0.28 + capillary.h * 0.035));
+    const crest = Math.max(0, Math.min(1, (crestField.h - 0.22) * 1.38));
     const i = (y * RES + x) * 4;
-    bytes[i] = clampByte((Math.max(-1, Math.min(1, broad.dx)) * 0.5 + 0.5) * 255);
-    bytes[i + 1] = clampByte((Math.max(-1, Math.min(1, broad.dy)) * 0.5 + 0.5) * 255);
-    bytes[i + 2] = clampByte(Math.pow(crest, 1.45) * 255);
-    bytes[i + 3] = clampByte(Math.pow(fineCrest, 1.65) * 255);
+    bytes[i] = clampByte((Math.max(-1, Math.min(1, capillary.dx * slopeScale)) * 0.5 + 0.5) * 255);
+    bytes[i + 1] = clampByte((Math.max(-1, Math.min(1, capillary.dy * slopeScale)) * 0.5 + 0.5) * 255);
+    bytes[i + 2] = clampByte(sediment * 255);
+    bytes[i + 3] = clampByte(Math.pow(crest, 1.7) * 160);
   }
 }
 
 const outDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'textures');
 const outPath = join(outDir, 'water_detail_rgba.png');
 writeFileSync(outPath, png(RES, RES, 4, bytes));
-console.log(`wrote ${outPath} (${RES}x${RES}, seamless RG slope + BA crest breakup)`);
+console.log(`wrote ${outPath} (${RES}x${RES}, seamless RG slope + B sediment + A crest breakup)`);

@@ -2,12 +2,13 @@
   "meta": {
     "name": "Premium Range",
     "mode": "realistic",
-    "schema": 2,
-    "notes": "Long Augusta-inspired practice range test: a broad immaculate hitting corridor, layered target greens from 40 to 450 yards, warm sand accents, and a dense, staggered Poly Haven perimeter grove."
+    "schema": 3,
+    "notes": "Long Augusta-inspired practice range test: a broad immaculate hitting corridor, layered target greens from 40 to 450 yards, warm sand accents, a staggered Poly Haven perimeter grove, and deep-rough grass communities that frame the maintained route without closing it in."
   },
   "catalogVersion": 2,
   "placementAlgorithmVersion": 1,
   "biome": "temperate-maritime",
+  "biomeTransitions": [],
   "environmentSeed": 1694481937,
   "bounds": { "minX": -150, "maxX": 150, "minZ": -480, "maxZ": 34 },
   "tee": { "x": 0, "z": 2, "boxHalfX": 4.2, "z0": -3, "z1": 7 },
@@ -39,60 +40,178 @@
   ],
   "ponds": [],
   "environment": {
-    "objectBudget": 40,
+    "objectBudget": 280,
     "placements": [
-      { "id": "polyhaven-island-01-front-left", "assetId": "polyhaven-island-tree-01", "x": -64, "z": -30, "rotationY": 0.42, "scale": 2.8 },
-      { "id": "polyhaven-tree-small-01-front-left", "assetId": "polyhaven-tree-small-02", "x": -78, "z": -30, "rotationY": 5.18, "scale": 2.3 },
-      { "id": "polyhaven-island-01-front-right", "assetId": "polyhaven-island-tree-01", "x": 64, "z": -30, "rotationY": 3.71, "scale": 2.8 },
-      { "id": "polyhaven-tree-small-01-front-right", "assetId": "polyhaven-tree-small-02", "x": 78, "z": -30, "rotationY": 1.96, "scale": 2.3 },
+      { "id": "polyhaven-island-01-front-left", "assetId": "polyhaven-island-tree-01", "x": -64, "z": -30, "rotationY": 0.42, "scale": 5.4 },
+      { "id": "polyhaven-tree-small-01-front-left", "assetId": "polyhaven-tree-small-02-hero", "x": -78, "z": -30, "rotationY": 5.18, "scale": 4.6 },
+      { "id": "polyhaven-island-01-front-right", "assetId": "polyhaven-island-tree-01", "x": 64, "z": -30, "rotationY": 3.71, "scale": 5.4 },
+      { "id": "polyhaven-tree-small-01-front-right", "assetId": "polyhaven-tree-small-02-hero", "x": 78, "z": -30, "rotationY": 1.96, "scale": 4.6 },
 
-      { "id": "polyhaven-fir-variant-b-02-left", "assetId": "polyhaven-fir-tree-01-variant-b", "x": -74, "z": -70, "rotationY": 1.16, "scale": 1.1 },
-      { "id": "polyhaven-island-02-left", "assetId": "polyhaven-island-tree-01", "x": -88, "z": -70, "rotationY": 4.83, "scale": 2.6 },
-      { "id": "polyhaven-fir-variant-c-02-right", "assetId": "polyhaven-fir-tree-01-variant-c", "x": 74, "z": -70, "rotationY": 4.32, "scale": 1.1 },
-      { "id": "polyhaven-island-02-right", "assetId": "polyhaven-island-tree-01", "x": 88, "z": -70, "rotationY": 2.27, "scale": 2.6 },
+      { "id": "polyhaven-island-02-left-outer", "assetId": "polyhaven-island-tree-02", "x": -74, "z": -70, "rotationY": 1.16, "scale": 6.0 },
+      { "id": "polyhaven-island-02-left", "assetId": "polyhaven-island-tree-02", "x": -88, "z": -70, "rotationY": 4.83, "scale": 5.2 },
+      { "id": "polyhaven-tree-small-02-right-outer", "assetId": "polyhaven-tree-small-02-hero", "x": 74, "z": -70, "rotationY": 4.32, "scale": 5.0 },
+      { "id": "polyhaven-island-02-right", "assetId": "polyhaven-island-tree-02", "x": 88, "z": -70, "rotationY": 2.27, "scale": 5.2 },
 
-      { "id": "polyhaven-tree-small-02-left", "assetId": "polyhaven-tree-small-02", "x": -82, "z": -110, "rotationY": 0.71, "scale": 2.2 },
-      { "id": "polyhaven-fir-01-02-left", "assetId": "polyhaven-fir-tree-01", "x": -98, "z": -110, "rotationY": 2.08, "scale": 1.0 },
-      { "id": "polyhaven-tree-small-02-right", "assetId": "polyhaven-tree-small-02", "x": 82, "z": -110, "rotationY": 3.88, "scale": 2.2 },
-      { "id": "polyhaven-pine-01-02-right", "assetId": "polyhaven-pine-tree-01", "x": 98, "z": -110, "rotationY": 5.24, "scale": 1.0 },
+      { "id": "polyhaven-tree-small-02-left", "assetId": "polyhaven-tree-small-02-hero", "x": -82, "z": -110, "rotationY": 0.71, "scale": 4.8 },
+      { "id": "polyhaven-tree-small-02-left-outer", "assetId": "polyhaven-tree-small-02-hero", "x": -98, "z": -110, "rotationY": 2.08, "scale": 5.8 },
+      { "id": "polyhaven-tree-small-02-right", "assetId": "polyhaven-tree-small-02-hero", "x": 82, "z": -110, "rotationY": 3.88, "scale": 4.8 },
+      { "id": "polyhaven-island-02-right-outer", "assetId": "polyhaven-island-tree-02", "x": 98, "z": -110, "rotationY": 5.24, "scale": 6.2 },
 
-      { "id": "polyhaven-island-03-left", "assetId": "polyhaven-island-tree-01", "x": -90, "z": -150, "rotationY": 1.55, "scale": 2.6 },
-      { "id": "polyhaven-tree-small-03-left", "assetId": "polyhaven-tree-small-02", "x": -108, "z": -150, "rotationY": 4.26, "scale": 2.2 },
-      { "id": "polyhaven-island-03-right", "assetId": "polyhaven-island-tree-01", "x": 90, "z": -150, "rotationY": 4.68, "scale": 2.6 },
-      { "id": "polyhaven-fir-variant-b-03-right", "assetId": "polyhaven-fir-tree-01-variant-b", "x": 108, "z": -150, "rotationY": 0.94, "scale": 1.0 },
+      { "id": "polyhaven-island-03-left", "assetId": "polyhaven-island-tree-02", "x": -90, "z": -150, "rotationY": 1.55, "scale": 5.8 },
+      { "id": "polyhaven-tree-small-03-left", "assetId": "polyhaven-tree-small-02-hero", "x": -108, "z": -150, "rotationY": 4.26, "scale": 4.8 },
+      { "id": "polyhaven-island-03-right", "assetId": "polyhaven-island-tree-02", "x": 90, "z": -150, "rotationY": 4.68, "scale": 5.8 },
+      { "id": "polyhaven-island-03-right-outer", "assetId": "polyhaven-island-tree-02", "x": 108, "z": -150, "rotationY": 0.94, "scale": 6.4 },
 
-      { "id": "polyhaven-fir-variant-c-03-left", "assetId": "polyhaven-fir-tree-01-variant-c", "x": -96, "z": -195, "rotationY": 2.61, "scale": 1.05 },
-      { "id": "polyhaven-pine-03-left", "assetId": "polyhaven-pine-tree-01", "x": -114, "z": -195, "rotationY": 0.78, "scale": 1.0 },
-      { "id": "polyhaven-fir-variant-b-03-mid-right", "assetId": "polyhaven-fir-tree-01-variant-b", "x": 96, "z": -195, "rotationY": 5.63, "scale": 1.05 },
-      { "id": "polyhaven-tree-small-03-right", "assetId": "polyhaven-tree-small-02", "x": 114, "z": -195, "rotationY": 2.44, "scale": 2.2 },
+      { "id": "polyhaven-tree-small-03-left-outer", "assetId": "polyhaven-tree-small-02-hero", "x": -96, "z": -195, "rotationY": 2.61, "scale": 5.8 },
+      { "id": "polyhaven-island-03-left-outer", "assetId": "polyhaven-island-tree-02", "x": -114, "z": -195, "rotationY": 0.78, "scale": 6.4 },
+      { "id": "polyhaven-tree-small-03-right-outer", "assetId": "polyhaven-tree-small-02-hero", "x": 96, "z": -195, "rotationY": 5.63, "scale": 5.8 },
+      { "id": "polyhaven-tree-small-03-right", "assetId": "polyhaven-tree-small-02-hero", "x": 114, "z": -195, "rotationY": 2.44, "scale": 4.8 },
 
-      { "id": "polyhaven-island-04-left", "assetId": "polyhaven-island-tree-01", "x": -102, "z": -240, "rotationY": 3.14, "scale": 2.7 },
-      { "id": "polyhaven-fir-02-left", "assetId": "polyhaven-fir-tree-01", "x": -120, "z": -240, "rotationY": 1.32, "scale": 1.0 },
-      { "id": "polyhaven-island-04-right", "assetId": "polyhaven-island-tree-01", "x": 102, "z": -240, "rotationY": 0.58, "scale": 2.7 },
-      { "id": "polyhaven-pine-04-right", "assetId": "polyhaven-pine-tree-01", "x": 120, "z": -240, "rotationY": 4.17, "scale": 1.0 },
+      { "id": "polyhaven-island-04-left", "assetId": "polyhaven-island-tree-02", "x": -102, "z": -240, "rotationY": 3.14, "scale": 5.8 },
+      { "id": "polyhaven-island-04-left-outer", "assetId": "polyhaven-island-tree-02", "x": -120, "z": -240, "rotationY": 1.32, "scale": 6.5 },
+      { "id": "polyhaven-island-04-right", "assetId": "polyhaven-island-tree-02", "x": 102, "z": -240, "rotationY": 0.58, "scale": 5.8 },
+      { "id": "polyhaven-tree-small-04-right-outer", "assetId": "polyhaven-tree-small-02-hero", "x": 120, "z": -240, "rotationY": 4.17, "scale": 5.8 },
 
-      { "id": "polyhaven-tree-small-04-left", "assetId": "polyhaven-tree-small-02", "x": -108, "z": -285, "rotationY": 5.02, "scale": 2.3 },
-      { "id": "polyhaven-fir-variant-c-04-left", "assetId": "polyhaven-fir-tree-01-variant-c", "x": -126, "z": -285, "rotationY": 2.06, "scale": 1.05 },
-      { "id": "polyhaven-tree-small-04-right", "assetId": "polyhaven-tree-small-02", "x": 108, "z": -285, "rotationY": 1.84, "scale": 2.3 },
-      { "id": "polyhaven-fir-variant-b-04-right", "assetId": "polyhaven-fir-tree-01-variant-b", "x": 126, "z": -285, "rotationY": 4.92, "scale": 1.05 },
+      { "id": "polyhaven-tree-small-04-left", "assetId": "polyhaven-tree-small-02-hero", "x": -108, "z": -285, "rotationY": 5.02, "scale": 4.8 },
+      { "id": "polyhaven-island-04-left-back", "assetId": "polyhaven-island-tree-02", "x": -126, "z": -285, "rotationY": 2.06, "scale": 6.4 },
+      { "id": "polyhaven-tree-small-04-right", "assetId": "polyhaven-tree-small-02-hero", "x": 108, "z": -285, "rotationY": 1.84, "scale": 4.8 },
+      { "id": "polyhaven-tree-small-04-right-back", "assetId": "polyhaven-tree-small-02-hero", "x": 126, "z": -285, "rotationY": 4.92, "scale": 5.8 },
 
-      { "id": "polyhaven-island-05-left", "assetId": "polyhaven-island-tree-01", "x": -114, "z": -330, "rotationY": 4.02, "scale": 2.7 },
-      { "id": "polyhaven-pine-05-left", "assetId": "polyhaven-pine-tree-01", "x": -134, "z": -330, "rotationY": 1.08, "scale": 1.0 },
-      { "id": "polyhaven-island-05-right", "assetId": "polyhaven-island-tree-01", "x": 114, "z": -330, "rotationY": 1.02, "scale": 2.7 },
-      { "id": "polyhaven-fir-03-right", "assetId": "polyhaven-fir-tree-01", "x": 134, "z": -330, "rotationY": 4.46, "scale": 1.0 },
+      { "id": "polyhaven-island-05-left", "assetId": "polyhaven-tree-small-02-hero", "x": -114, "z": -330, "rotationY": 4.02, "scale": 5.2 },
+      { "id": "polyhaven-island-05-left-outer", "assetId": "polyhaven-island-tree-02", "x": -134, "z": -330, "rotationY": 1.08, "scale": 6.8 },
+      { "id": "polyhaven-island-05-right", "assetId": "polyhaven-tree-small-02-hero", "x": 114, "z": -330, "rotationY": 1.02, "scale": 5.2 },
+      { "id": "polyhaven-tree-small-05-right-outer", "assetId": "polyhaven-tree-small-02-hero", "x": 134, "z": -330, "rotationY": 4.46, "scale": 5.8 },
 
-      { "id": "polyhaven-fir-variant-b-05-left", "assetId": "polyhaven-fir-tree-01-variant-b", "x": -120, "z": -380, "rotationY": 0.26, "scale": 1.1 },
-      { "id": "polyhaven-tree-small-05-left", "assetId": "polyhaven-tree-small-02", "x": -138, "z": -380, "rotationY": 3.42, "scale": 2.3 },
-      { "id": "polyhaven-fir-variant-c-05-right", "assetId": "polyhaven-fir-tree-01-variant-c", "x": 120, "z": -380, "rotationY": 3.41, "scale": 1.1 },
-      { "id": "polyhaven-island-06-right", "assetId": "polyhaven-island-tree-01", "x": 138, "z": -380, "rotationY": 5.76, "scale": 2.8 },
+      { "id": "polyhaven-tree-small-06-left-outer", "assetId": "polyhaven-tree-small-02-hero", "x": -120, "z": -380, "rotationY": 0.26, "scale": 5.8 },
+      { "id": "polyhaven-tree-small-05-left", "assetId": "polyhaven-tree-small-02-hero", "x": -138, "z": -380, "rotationY": 3.42, "scale": 4.8 },
+      { "id": "polyhaven-island-06-right-outer", "assetId": "polyhaven-island-tree-02", "x": 120, "z": -380, "rotationY": 3.41, "scale": 6.8 },
+      { "id": "polyhaven-island-06-right", "assetId": "polyhaven-island-tree-02", "x": 138, "z": -380, "rotationY": 5.76, "scale": 6.4 },
 
-      { "id": "polyhaven-island-06-left", "assetId": "polyhaven-island-tree-01", "x": -128, "z": -430, "rotationY": 1.91, "scale": 2.8 },
-      { "id": "polyhaven-pine-06-left", "assetId": "polyhaven-pine-tree-01", "x": -142, "z": -430, "rotationY": 4.73, "scale": 1.0 },
-      { "id": "polyhaven-island-07-right", "assetId": "polyhaven-island-tree-01", "x": 128, "z": -430, "rotationY": 4.91, "scale": 2.8 },
-      { "id": "polyhaven-fir-04-right", "assetId": "polyhaven-fir-tree-01", "x": 142, "z": -430, "rotationY": 2.35, "scale": 1.05 }
+      { "id": "polyhaven-island-06-left", "assetId": "polyhaven-tree-small-02-hero", "x": -128, "z": -430, "rotationY": 1.91, "scale": 5.8 },
+      { "id": "polyhaven-island-07-left-outer", "assetId": "polyhaven-island-tree-02", "x": -142, "z": -430, "rotationY": 4.73, "scale": 7.2 },
+      { "id": "polyhaven-island-07-right", "assetId": "polyhaven-island-tree-02", "x": 128, "z": -430, "rotationY": 4.91, "scale": 6.8 },
+      { "id": "polyhaven-tree-small-07-right-outer", "assetId": "polyhaven-tree-small-02-hero", "x": 142, "z": -430, "rotationY": 2.35, "scale": 6.0 }
     ],
-    "scatter": [],
-    "assembly": [],
+    "scatter": [
+      {
+        "id": "premium-rough-front-left",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30117,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": -92, "maxX": -42, "minZ": -92, "maxZ": -28 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-front-right",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30118,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": 42, "maxX": 92, "minZ": -92, "maxZ": -28 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-landing-left",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30217,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": -108, "maxX": -48, "minZ": -177, "maxZ": -102 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-landing-right",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30218,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": 48, "maxX": 108, "minZ": -177, "maxZ": -102 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-middle-left",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30317,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": -126, "maxX": -56, "minZ": -270, "maxZ": -188 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-middle-right",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30318,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": 56, "maxX": 126, "minZ": -270, "maxZ": -188 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-deep-left",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30417,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": -142, "maxX": -66, "minZ": -356, "maxZ": -282 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-deep-right",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30418,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": 66, "maxX": 142, "minZ": -356, "maxZ": -282 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-back-left",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30517,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": -148, "maxX": -78, "minZ": -432, "maxZ": -368 },
+        "minSpacing": 2.4
+      },
+      {
+        "id": "premium-rough-back-right",
+        "assetIds": ["polyhaven-grass-medium-02", "polyhaven-grass-bermuda-01", "polyhaven-fern-02"],
+        "seed": 30518,
+        "count": 18,
+        "region": { "kind": "bounds", "minX": 78, "maxX": 148, "minZ": -432, "maxZ": -368 },
+        "minSpacing": 2.4
+      }
+    ],
+    "assembly": [
+      {
+        "id": "premium-woodland-cluster-front-left",
+        "assetIds": ["polyhaven-island-tree-02", "polyhaven-tree-small-02-hero"],
+        "seed": 40117,
+        "count": 8,
+        "region": { "kind": "bounds", "minX": -126, "maxX": -48, "minZ": -96, "maxZ": -28 },
+        "minSpacing": 8,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "premium-woodland-cluster-front-right",
+        "assetIds": ["polyhaven-island-tree-02", "polyhaven-tree-small-02-hero"],
+        "seed": 40118,
+        "count": 8,
+        "region": { "kind": "bounds", "minX": 48, "maxX": 126, "minZ": -96, "maxZ": -28 },
+        "minSpacing": 8,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "premium-woodland-cluster-middle-left",
+        "assetIds": ["polyhaven-island-tree-02", "polyhaven-tree-small-02-hero"],
+        "seed": 40217,
+        "count": 8,
+        "region": { "kind": "bounds", "minX": -145, "maxX": -58, "minZ": -205, "maxZ": -118 },
+        "minSpacing": 8,
+        "semantic": "forest-cluster"
+      },
+      {
+        "id": "premium-woodland-cluster-middle-right",
+        "assetIds": ["polyhaven-island-tree-02", "polyhaven-tree-small-02-hero"],
+        "seed": 40218,
+        "count": 8,
+        "region": { "kind": "bounds", "minX": 58, "maxX": 145, "minZ": -205, "maxZ": -118 },
+        "minSpacing": 8,
+        "semantic": "forest-cluster"
+      }
+    ],
     "edgeDressing": [],
     "exclusions": []
   }

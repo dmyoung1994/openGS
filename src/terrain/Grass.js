@@ -8,10 +8,11 @@ import {
 import {
   Fn, If, atomicAdd, atomicLoad, atomicStore, float, int, instanceIndex, ivec2, mrt, mx_noise_float,
   mix, positionGeometry, smoothstep, storage, textureLevel, textureLoad, transformNormalToView,
-  uniform, uvec2, uvec3, uint, vec2, vec3, vec4, varying, workgroupArray,
+  uniform, uvec2, uvec3, uint, uv, vec2, vec3, vec4, varying, workgroupArray,
   workgroupBarrier, workgroupId, localId,
 } from 'three/tsl';
 import { disposeComputeNodes, disposeWebGPUAttributes } from '../scene/WebGPUResourceDisposal.js';
+import { coastTextureBlendWeights } from '../scene/CoastSandDetail.js';
 import { turfBladeBase } from './turfColor.js';
 
 // SceneManager supplies the shared PMREM through the builder rather than setting a
@@ -28,7 +29,7 @@ class SharedEnvironmentGrassPhongMaterial extends MeshPhongNodeMaterial {
 // WebGPU-only grass renderer.
 //
 // There is deliberately one runtime path: classify tiles on the GPU, compact live
-// blades in GPU workgroups, and submit one indexed indirect draw.  Keeping an old
+// blades in GPU workgroups, and submit one indexed indirect render item. Keeping an old
 // tile-mesh path as a "safe" alternative would make every visual or temporal fix
 // two renderers deep and would hide failures on the only renderer we ship.
 //
@@ -45,19 +46,39 @@ const CANDIDATES_PER_TILE = GRID * GRID;
 const WORKGROUP = 256;
 const GROUPS_PER_TILE = CANDIDATES_PER_TILE / WORKGROUP;
 const BLADE_SEGMENTS = 3;
-// Two crossed ribbons per instance keep the rough canopy volumetric at oblique
-// angles without adding a second draw. Each ribbon still uses the same indexed
-// tapered blade profile and the same stable record/velocity path.
-const BLADE_INDEX_COUNT = BLADE_SEGMENTS * 12;
-
-// 786432 records * 52 bytes = 39 MiB. This is a fixed GPU reservation, not a
-// per-frame allocation. The tile frustum classifier keeps normal views well below
-// it. Overflow is never clamped: the GPU zeros the indirect instance count and sets
-// a diagnostic word, making the fault visibly loud rather than silently dropping a
-// nondeterministic suffix of grass.
-const MAX_VISIBLE_BLADES = 786_432;
+// One compacted record stream feeds three indexed commands in the same mesh and
+// material. Close blades retain the authored three-segment crossed silhouette;
+// middle blades skip one longitudinal row; far blades remain real crossed geometry
+// but use one quad per plane. Distance therefore retires triangles, not grass
+// coverage or lighting/wind behavior.
+const GRASS_LOD_NEAR_RADIUS = 0.36;
+const GRASS_LOD_MID_RADIUS = 1.10;
+const GRASS_LOD_TRIANGLES = Object.freeze( [ 12, 8, 4 ] );
+const GRASS_LOD_INDEX_COUNTS = Object.freeze( [ 36, 24, 12 ] );
+const GRASS_LOD_FIRST_INDICES = Object.freeze( [ 0, 36, 60 ] );
+const GRASS_LOD_CAPACITIES = Object.freeze( [ 393_216, 262_144, 786_432 ] );
+const GRASS_LOD_OFFSETS = Object.freeze( [ 0, 393_216, 655_360 ] );
+// This is the authored workload ceiling: 393216*12 + 262144*8 + 786432*4.
+// The record allocation is merely the exact storage implied by those triangle
+// reservations. Overflow remains fail-loud; population LOD never aims at it.
+const GRASS_TRIANGLE_BUDGET = 9_961_472;
+const MAX_VISIBLE_BLADE_RECORDS = 1_441_792;
 
 const BLADE_H = { rough: 0.20, deepRough: 0.32 };
+// The packed R8 bit is deliberately broader than the surfaces which finally grow
+// long blades.  Every turf family must enter the candidate compute so the filtered
+// zone SDF can resolve the mowing line per blade.  Baking only rough/deepRough into
+// this bit quantizes that line back onto Terrain's CPU sampling grid before the SDF
+// ever gets a chance to shape it.
+const GRASS_CANDIDATE_SURFACES = new Set( [
+  'deepRough', 'rough', 'fairway', 'fringe', 'green', 'tee',
+] );
+// The visible height is kept in the authored cut range, then a small fraction of
+// that span is hidden below the sampled terrain. Encoding the buried root in the
+// existing height lane keeps the record layout fixed and makes burial vary with the
+// same stable world-cell height identity as the blade itself.
+const ROOT_BURY_FRACTION = 0.10;
+const ROOT_BURY_ANCHOR_FRACTION = ROOT_BURY_FRACTION / ( 1.0 + ROOT_BURY_FRACTION );
 const SURFACE_TRANSITION_M = 1.5;
 // Rough is rendered as a dense stand of broad leaf ribbons. These are deliberately
 // wider than the former 4.2–11 mm slivers: perceived coverage is not allowed to be
@@ -102,23 +123,24 @@ const TILE_CIRCUMRADIUS = Math.SQRT2 * TILE_SIZE * 0.5 + CELL;
 // The dense, view-independent field above remains untouched. A second term in the
 // same stochastic acceptance curve carries a small population of those exact same
 // world-cell blades into the complete perception-sensitive camera footprint. The
-// accepted tail now reaches 96.8 m down-view and 64.5 m laterally at high tier, so
-// low cameras cannot expose the former 31.8 m geometry cutoff. Close density, rooted
-// width, candidate identity, draw count, and GPU capacity are unchanged.
+// accepted tail now reaches 172 m down-view and 114.7 m laterally at high tier, so
+// low oblique cameras carry authored blades all the way into the tree-line ground
+// instead of exposing a broad flat-texture band behind the midfield. Close density,
+// rooted width, and candidate identity are unchanged; topology and reservations are
+// now owned by the explicit triangle-budget LOD above.
 const FAR_TIER_START_RADIUS = 0.36;
-const FAR_TIER_TERMINAL_RADIUS = 2.25;
+const FAR_TIER_FADE_START_RADIUS = 2.80;
+const FAR_TIER_TERMINAL_RADIUS = 4.00;
 const FAR_TIER_LATERAL_SCALE = 1.50;
-// The former 9% tail exposed a visibly bare band immediately after the dense base
-// field ended around 19 m. A 22% world-cell population keeps the golfer-visible
-// midfield continuous; quarter-rate far sampling still caps actual candidate work
-// at one lane per 2x2 block and the quadratic tail retires it toward the horizon.
+// Geometry complexity now owns distance LOD. Keep a stable projected population
+// through the tree-line ground and begin the only distance fade near the terminal
+// horizon. Quarter-rate far sampling is exactly compensated in the acceptance test.
 const FAR_TIER_PEAK_KEEP = 0.22;
 const FAR_TIER_FORWARD_FEATHER = 0.08;
-// Far-only tiles are beyond the complete base field, where a full 192x192
-// candidate evaluation is substantial sub-pixel overdraw. Sample one stable lane
-// from each 2x2 world-cell block and compensate the stochastic keep probability.
-// This preserves expected coverage and the authored horizon while avoiding 75% of
-// the hashes, terrain reads, ecological noise, wind, and record preparation there.
+// Far-only tiles are beyond the complete base field. Sample one stable lane from
+// each 2x2 world-cell block and compensate its acceptance probability. The
+// cheap four-triangle far geometry makes this denser continuation affordable while
+// still avoiding 75% of the hashes, terrain reads, ecological noise, and wind work.
 const FAR_ONLY_CANDIDATE_STRIDE = 4;
 const DENSITY_TARGET_MAX_SCALE = 1.24 * ROUGH_COVERAGE_MAX;
 // Active-tile records keep their existing far-only flag in bit zero, carry an
@@ -129,8 +151,36 @@ const ACTIVE_TILE_BOUND_BITS = 8;
 const ACTIVE_TILE_RECORD_SHIFT = ACTIVE_TILE_BOUND_BITS + 1;
 const ACTIVE_TILE_BOUND_MAX = ( 1 << ACTIVE_TILE_BOUND_BITS ) - 1;
 const MAX_WIDTH_RAMP = 2.2;
+// Crossed ribbons already provide a second face when a blade turns edge-on. A
+// smaller compensation avoids the broad, repeated cards that made close rough
+// read as woven fabric while retaining enough silhouette at grazing angles.
+const EDGE_WIDTH_COMPENSATION = 1.45;
 // Avoid one synthetic neon-green population. Species/age grading below supplies
 // the hue spread; this keeps the shared turf pigment vivid without clipping it.
+
+const GRASS_WORKLOAD_LIMITS = Object.freeze( {
+  densityScale: Object.freeze( { min: 0.35, max: 1.0 } ),
+  radiusScale: Object.freeze( { min: 0.55, max: 1.0 } ),
+  farTierScale: Object.freeze( { min: 0.0, max: 1.0 } ),
+} );
+
+const clampWorkloadValue = ( value, fallback, { min, max } ) => {
+  const numeric = Number.isFinite( value ) ? value : fallback;
+  return Math.min( max, Math.max( min, numeric ) );
+};
+
+// Optional policy input for adaptive quality controllers. Every scale is bounded
+// at or below the authored workload, so this can never enlarge the fixed GPU
+// reservation or make a policy change unsafe. Existing `{ radius }` callers remain
+// valid because the policy is an independent optional field.
+export function normalizeGrassWorkloadPolicy( policy = undefined ) {
+  const source = policy && typeof policy === 'object' ? policy : {};
+  return Object.freeze( {
+    densityScale: clampWorkloadValue( source.densityScale, 1.0, GRASS_WORKLOAD_LIMITS.densityScale ),
+    radiusScale: clampWorkloadValue( source.radiusScale, 1.0, GRASS_WORKLOAD_LIMITS.radiusScale ),
+    farTierScale: clampWorkloadValue( source.farTierScale, 1.0, GRASS_WORKLOAD_LIMITS.farTierScale ),
+  } );
+}
 
 // Four normalized scalars in one existing u32 record lane. Wind uses [-16,16] m/s;
 // camera LOD uses [fade, width/6.6] pairs. The maximum geometric quantization is
@@ -152,7 +202,9 @@ function unpackUnorm4x8( value ) {
   ).div( 255.0 );
 }
 
-function bladeHeight( name ) { return BLADE_H[ name ] || 0; }
+export function isGrassCandidateSurface( name ) {
+  return GRASS_CANDIDATE_SURFACES.has( name );
+}
 
 // Bake a camera-independent overlap field directly into the low seven bits of the
 // existing grass byte. Splatting into that final byte avoids another texture, CPU
@@ -219,20 +271,21 @@ function densityAtDistance( radius, distance ) {
   return { progress, keepProb };
 }
 
-// Sparse projected-error tail. `dx/dz` and the forward axis are camera-relative,
+// Projected-error continuation. `dx/dz` and the forward axis are camera-relative,
 // but the candidate threshold remains the immutable world-cell hash, so translating
 // or rotating the camera changes only LOD residency and never the blade layout.
-// The quadratic terminal falloff is continuous and reaches exactly zero at 2.25R.
+// Population stays level through the visible tree-line ground; only the terminal
+// horizon fades, continuously reaching exactly zero at 4R.
 function farTierKeepAt( radius, dx, dz, cameraForward ) {
   const along = dx.mul( cameraForward.x ).add( dz.mul( cameraForward.y ) );
   const lateral = dx.mul( cameraForward.y ).sub( dz.mul( cameraForward.x ) );
   const scaledLateral = lateral.mul( FAR_TIER_LATERAL_SCALE );
   const footprintDistance = along.mul( along ).add( scaledLateral.mul( scaledLateral ) ).sqrt();
-  const progress = footprintDistance.sub( radius.mul( FAR_TIER_START_RADIUS ) )
-    .div( radius.mul( FAR_TIER_TERMINAL_RADIUS - FAR_TIER_START_RADIUS ) ).clamp( 0.0, 1.0 );
-  const tail = float( 1 ).sub( progress );
+  const progress = footprintDistance.sub( radius.mul( FAR_TIER_FADE_START_RADIUS ) )
+    .div( radius.mul( FAR_TIER_TERMINAL_RADIUS - FAR_TIER_FADE_START_RADIUS ) ).clamp( 0.0, 1.0 );
+  const tail = float( 1 ).sub( smoothstep( 0.0, 1.0, progress ) );
   const forwardGate = smoothstep( 0.0, radius.mul( FAR_TIER_FORWARD_FEATHER ), along );
-  return tail.mul( tail ).mul( FAR_TIER_PEAK_KEEP ).mul( forwardGate );
+  return tail.mul( FAR_TIER_PEAK_KEEP ).mul( forwardGate );
 }
 
 const BLADE_COLOR = {};
@@ -241,7 +294,7 @@ for ( const name of Object.keys( BLADE_H ) ) {
 }
 
 export class Grass {
-  constructor( { terrain, camera, renderer, motionHistory, environment, canopyPlacements = [], tileSize = TILE_SIZE, gridPerTile = GRID, radius = 30 } ) {
+  constructor( { terrain, camera, renderer, motionHistory, environment, canopyPlacements = [], tileSize = TILE_SIZE, gridPerTile = GRID, radius = 30, workloadPolicy = undefined } ) {
     if ( tileSize !== TILE_SIZE || gridPerTile !== GRID ) {
       throw new Error( `Grass uses a fixed ${TILE_SIZE}m / ${GRID} GPU candidate layout; runtime variants are not supported.` );
     }
@@ -259,6 +312,7 @@ export class Grass {
     this.motionHistory = motionHistory;
     this.environment = environment;
     this.radius = radius;
+    this.workloadPolicy = normalizeGrassWorkloadPolicy( workloadPolicy );
     this._motionReady = false;
     this._cameraForwardScratch = new Vector3();
 
@@ -268,9 +322,12 @@ export class Grass {
     const { dataTex } = this._bakeTextures( terrain, canopyPlacements );
     const heightTex = terrain.heightTexture;
     const zoneTex = terrain.zoneTexture;
+    const biomeTextures = terrain.biomeTransitionTextures;
     if ( ! heightTex || ! zoneTex ) throw new Error( 'Grass requires Terrain height and zone textures.' );
     this._const = {
       heightTex, zoneTex, dataTex,
+      biomeLandTex: biomeTextures?.land ?? null,
+      biomeWaterTex: biomeTextures?.water ?? null,
       nx: terrain.nx, nz: terrain.nz,
       minX: terrain.bounds.minX, minZ: terrain.bounds.minZ,
       sizeX: terrain.bounds.maxX - terrain.bounds.minX,
@@ -293,8 +350,16 @@ export class Grass {
     this.uCameraForwardXZ = uniform( initialForward.clone() );
     this.uPreviousCameraForwardXZ = uniform( initialForward.clone() );
     this.uViewProjection = uniform( new Matrix4() );
-    this.uRadius = uniform( radius );
-    this.uSpecular = uniform( 0.045 );
+    this.uRadius = uniform( radius * this.workloadPolicy.radiusScale );
+    this.uPreviousRadius = uniform( radius * this.workloadPolicy.radiusScale );
+    this.uDensityScale = uniform( this.workloadPolicy.densityScale );
+    this.uPreviousDensityScale = uniform( this.workloadPolicy.densityScale );
+    this.uFarTierScale = uniform( this.workloadPolicy.farTierScale );
+    this.uPreviousFarTierScale = uniform( this.workloadPolicy.farTierScale );
+    // A broad leaf highlight remains restrained by the existing Phong lobe and
+    // shared daylight, but this gives the rough stand enough response to rake
+    // across it under a low sun without adding a fake emissive term.
+    this.uSpecular = uniform( 0.06 );
 
     const tileMetadata = this._makeTileOrigins();
     this._tileOrigins = tileMetadata.origins;
@@ -306,17 +371,29 @@ export class Grass {
 
     this.mesh = new Mesh( this._geometry(), this._material() );
     this.mesh.name = 'grass-gpu-indirect';
+    // The compacted indirect list is classified for the gameplay camera and cannot
+    // be frustum-reused by a second mirrored camera. The planar pass retains the
+    // authoritative rough substrate, banks, trees, and lighting; submitting this
+    // source-camera blade list would add millions of incorrect off-frustum vertices
+    // for sub-centimetre detail that the water's ripple footprint cannot resolve.
+    this.mesh.userData.planarReflectionDetail = 'terrain-substrate';
     this.mesh.castShadow = false;
     this.mesh.receiveShadow = true;
     this.mesh.frustumCulled = false;
   }
 
+  setWorkloadPolicy( policy = undefined ) {
+    this.workloadPolicy = normalizeGrassWorkloadPolicy( policy );
+    return this;
+  }
+
   _bakeTextures( terrain, canopyPlacements ) {
     const { nx, nz } = terrain;
 
-    // Candidate classification only needs a growable bit; cut height is derived
-    // from the authoritative zone SDF below. Reuse the remaining seven bits for
-    // dense authored-canopy overlap, retaining the same R8 allocation and fetch.
+    // Candidate classification is a broad turf-domain bit; the filtered zone SDF
+    // below is the sole authority for the final long-grass boundary and cut height.
+    // Reuse the remaining seven bits for dense authored-canopy overlap, retaining
+    // the same R8 allocation and fetch.
     const data = new Uint8Array( nx * nz );
     bakeDenseCanopyMask( data, nx, nz, {
       minX: terrain.bounds.minX,
@@ -330,7 +407,7 @@ export class Grass {
         const wz = minZ + z * terrain.spacing;
         const name = terrain.surfaceAt( wx, wz );
         const i = z * nx + x;
-        if ( bladeHeight( name ) > 0 ) data[ i ] |= GRASS_GROWABLE_BIT;
+        if ( isGrassCandidateSurface( name ) ) data[ i ] |= GRASS_GROWABLE_BIT;
       }
     }
     const dataTex = new DataTexture( data, nx, nz, RedFormat, UnsignedByteType );
@@ -397,7 +474,7 @@ export class Grass {
     // Tile list is GPU-compacted; there is no JS frustum list and no tile mesh churn.
     this._activeTiles = storage( new StorageBufferAttribute( new Uint32Array( this._tileCount ), 1, Uint32Array ), 'uint', this._tileCount );
     this._tileCounter = storage( new StorageBufferAttribute( new Uint32Array( 1 ), 1, Uint32Array ), 'uint', 1 ).toAtomic();
-    this._visibleCounter = storage( new StorageBufferAttribute( new Uint32Array( 1 ), 1, Uint32Array ), 'uint', 1 ).toAtomic();
+    this._lodCounters = storage( new StorageBufferAttribute( new Uint32Array( 3 ), 1, Uint32Array ), 'uint', 3 ).toAtomic();
     this._overflow = storage( new StorageBufferAttribute( new Uint32Array( 1 ), 1, Uint32Array ), 'uint', 1 ).toAtomic();
 
     // One vec4 each for base+height, basis+shape and colour. The existing integer
@@ -405,15 +482,15 @@ export class Grass {
     // camera LOD pairs in Z. Computing these once per surviving blade is equivalent
     // to rebuilding them at every one of the blade's vertices, but removes millions
     // of repeated trig/sqrt/curve evaluations without adding another allocation.
-    this._recordAnchor = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADES * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADES );
-    this._recordShape = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADES * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADES );
-    this._recordColor = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADES * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADES );
-    this._recordId = storage( new StorageInstancedBufferAttribute( new Uint32Array( MAX_VISIBLE_BLADES * 3 ), 3, Uint32Array ), 'uvec3', MAX_VISIBLE_BLADES );
+    this._recordAnchor = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADE_RECORDS * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADE_RECORDS );
+    this._recordShape = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADE_RECORDS * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADE_RECORDS );
+    this._recordColor = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADE_RECORDS * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADE_RECORDS );
+    this._recordId = storage( new StorageInstancedBufferAttribute( new Uint32Array( MAX_VISIBLE_BLADE_RECORDS * 3 ), 3, Uint32Array ), 'uvec3', MAX_VISIBLE_BLADE_RECORDS );
 
     this._candidateDispatchAttr = new IndirectStorageBufferAttribute( new Uint32Array( [ 0, 1, 1 ] ), 3 );
     this._candidateDispatch = storage( this._candidateDispatchAttr, 'uint', 3 );
-    this._drawArgsAttr = new IndirectStorageBufferAttribute( new Uint32Array( [ BLADE_INDEX_COUNT, 0, 0, 0, 0 ] ), 5 );
-    this._drawArgs = storage( this._drawArgsAttr, 'uint', 5 );
+    this._drawArgsAttr = new IndirectStorageBufferAttribute( new Uint32Array( 15 ), 5 );
+    this._drawArgs = storage( this._drawArgsAttr, 'uint', 15 );
 
     this._clearCompute = this._buildClearCompute();
     this._tileCompute = this._buildTileCompute();
@@ -430,16 +507,21 @@ export class Grass {
   _buildClearCompute() {
     return Fn( () => {
       atomicStore( this._tileCounter.element( uint( 0 ) ), uint( 0 ) );
-      atomicStore( this._visibleCounter.element( uint( 0 ) ), uint( 0 ) );
+      for ( let lod = 0; lod < 3; lod ++ ) {
+        atomicStore( this._lodCounters.element( uint( lod ) ), uint( 0 ) );
+      }
       atomicStore( this._overflow.element( uint( 0 ) ), uint( 0 ) );
       this._candidateDispatch.element( uint( 0 ) ).assign( uint( 0 ) );
       this._candidateDispatch.element( uint( 1 ) ).assign( uint( 1 ) );
       this._candidateDispatch.element( uint( 2 ) ).assign( uint( 1 ) );
-      this._drawArgs.element( uint( 0 ) ).assign( uint( BLADE_INDEX_COUNT ) );
-      this._drawArgs.element( uint( 1 ) ).assign( uint( 0 ) );
-      this._drawArgs.element( uint( 2 ) ).assign( uint( 0 ) );
-      this._drawArgs.element( uint( 3 ) ).assign( uint( 0 ) );
-      this._drawArgs.element( uint( 4 ) ).assign( uint( 0 ) );
+      for ( let lod = 0; lod < 3; lod ++ ) {
+        const arg = lod * 5;
+        this._drawArgs.element( uint( arg ) ).assign( uint( GRASS_LOD_INDEX_COUNTS[ lod ] ) );
+        this._drawArgs.element( uint( arg + 1 ) ).assign( uint( 0 ) );
+        this._drawArgs.element( uint( arg + 2 ) ).assign( uint( GRASS_LOD_FIRST_INDICES[ lod ] ) );
+        this._drawArgs.element( uint( arg + 3 ) ).assign( uint( 0 ) );
+        this._drawArgs.element( uint( arg + 4 ) ).assign( uint( GRASS_LOD_OFFSETS[ lod ] ) );
+      }
     } )().compute( 1 );
   }
 
@@ -451,6 +533,8 @@ export class Grass {
     const cam = this.uCameraPosition;
     const cameraForward = this.uCameraForwardXZ;
     const radius = this.uRadius;
+    const densityScale = this.uDensityScale;
+    const farTierScale = this.uFarTierScale;
     const viewProjection = this.uViewProjection;
     return Fn( () => {
       const tile = uint( instanceIndex );
@@ -490,7 +574,8 @@ export class Grass {
       const lateral = dx.mul( cameraForward.y ).sub( dz.mul( cameraForward.x ) );
       const scaledLateral = lateral.mul( FAR_TIER_LATERAL_SCALE );
       const farMargin = TILE_CIRCUMRADIUS * FAR_TIER_LATERAL_SCALE;
-      const nearbyFar = along.greaterThan( -TILE_CIRCUMRADIUS )
+      const farTierEnabled = farTierScale.greaterThan( 0.0 );
+      const nearbyFar = farTierEnabled.and( along.greaterThan( -TILE_CIRCUMRADIUS ) )
         .and( along.mul( along ).add( scaledLateral.mul( scaledLateral ) )
           .lessThan( radius.mul( FAR_TIER_TERMINAL_RADIUS ).add( farMargin ).pow( 2 ) ) );
       const nearby = nearbyBase.or( nearbyFar );
@@ -518,15 +603,15 @@ export class Grass {
         const farFootprintDistance = along.mul( along )
           .add( scaledLateral.mul( scaledLateral ) ).sqrt();
         const farMinDistance = farFootprintDistance.sub( farMargin ).max( 0.0 );
-        const farProgress = farMinDistance.sub( radius.mul( FAR_TIER_START_RADIUS ) )
-          .div( radius.mul( FAR_TIER_TERMINAL_RADIUS - FAR_TIER_START_RADIUS ) ).clamp( 0.0, 1.0 );
-        const farTail = float( 1 ).sub( farProgress );
+        const farProgress = farMinDistance.sub( radius.mul( FAR_TIER_FADE_START_RADIUS ) )
+          .div( radius.mul( FAR_TIER_TERMINAL_RADIUS - FAR_TIER_FADE_START_RADIUS ) ).clamp( 0.0, 1.0 );
+        const farTail = float( 1 ).sub( smoothstep( 0.0, 1.0, farProgress ) );
         const farSamplingScale = nearbyBase.not()
           .select( float( FAR_ONLY_CANDIDATE_STRIDE ), float( 1 ) );
-        const farKeepUpper = farTail.mul( farTail ).mul( FAR_TIER_PEAK_KEEP )
-          .mul( farSamplingScale ).min( 1.0 );
+        const farKeepUpper = farTail.mul( FAR_TIER_PEAK_KEEP )
+          .mul( farTierScale ).mul( farSamplingScale ).min( 1.0 );
         const densityUpper = baseKeepUpper.max( farKeepUpper )
-          .mul( DENSITY_TARGET_MAX_SCALE ).clamp( 0.0, 1.0 );
+          .mul( DENSITY_TARGET_MAX_SCALE ).mul( densityScale ).clamp( 0.0, 1.0 );
         // Float-to-uint truncates downward; add one bucket before clamping so the
         // decoded threshold is always >= the analytic bound, never an approximation
         // that could remove a surviving blade.
@@ -573,13 +658,18 @@ export class Grass {
     const recordShape = this._recordShape;
     const recordColor = this._recordColor;
     const recordId = this._recordId;
-    const visibleCounter = this._visibleCounter;
+    const lodCounters = this._lodCounters;
     const overflow = this._overflow;
     const cam = this.uCameraPosition;
     const previousCam = this.uPreviousCameraPosition;
     const cameraForward = this.uCameraForwardXZ;
     const previousCameraForward = this.uPreviousCameraForwardXZ;
     const radius = this.uRadius;
+    const previousRadius = this.uPreviousRadius;
+    const densityScale = this.uDensityScale;
+    const previousDensityScale = this.uPreviousDensityScale;
+    const farTierScale = this.uFarTierScale;
+    const previousFarTierScale = this.uPreviousFarTierScale;
     const scan = workgroupArray( 'uint', WORKGROUP ).setName( 'grassVisiblePrefix' );
     const base = workgroupArray( 'uint', 1 ).setName( 'grassVisibleBase' );
     const total = workgroupArray( 'uint', 1 ).setName( 'grassVisibleTotal' );
@@ -603,7 +693,7 @@ export class Grass {
       // Keep the far decision coherent across an entire workgroup. A scattered
       // one-in-four lane predicate still makes Apple SIMD execute both sides of the
       // expensive branch. The first quarter of a far tile's workgroups instead map
-      // their contiguous reduced index over every 2x2 block in the tile; remaining
+      // their contiguous reduced index over every 2x2 block; remaining
       // workgroups take one uniform empty path. Near and overlap tiles retain the
       // original candidate index exactly.
       const samplesCandidate = farOnly.not().or( groupInTile.lessThan(
@@ -645,6 +735,7 @@ export class Grass {
       const heightClass = float( 0 ).toVar();
       const widthBase = float( ROUGH_BLADE_WIDTH_MIN_M ).toVar();
       const alive = uint( 0 ).toVar();
+      const lodClass = uint( 2 ).toVar();
       If( samplesCandidate, () => {
         hC.assign( hash2( cell, 3.3 ) );
         const canPossiblyLive = hC.lessThan( densityUpper );
@@ -661,7 +752,7 @@ export class Grass {
         const data = textureLoad( c.dataTex, ivec2( int( uvx.mul( c.nx - 1 ).add( 0.5 ).clamp( 0.0, c.nx - 1 ) ), int( uvz.mul( c.nz - 1 ).add( 0.5 ).clamp( 0.0, c.nz - 1 ) ) ) );
         const packedGround = data.x.mul( 255.0 ).add( 0.5 ).floor();
         const canopyMask = packedGround.mod( GRASS_GROWABLE_BIT ).div( CANOPY_MASK_MAX );
-        const growable = packedGround.greaterThanEqual( GRASS_GROWABLE_BIT );
+        const turfCandidate = packedGround.greaterThanEqual( GRASS_GROWABLE_BIT );
         // The tile ceiling was rounded upward from the exact maximum base target.
         // Multiplying it by the same final canopy keep factor therefore remains an
         // upper bound on the final predicate. Reject dead surface/canopy lanes here,
@@ -670,40 +761,73 @@ export class Grass {
         // accepted evaluation path below.
         const canopyKeep = mix( 1.0, CANOPY_DENSITY_FLOOR, canopyMask );
         const surfaceDensityUpper = densityUpper.mul( canopyKeep );
-        const canReachExactDensity = inBounds.and( growable )
+        const canReachExactDensity = inBounds.and( turfCandidate )
           .and( hC.lessThan( surfaceDensityUpper ) );
         If( canReachExactDensity, () => {
         const zoneSD = textureLevel( c.zoneTex, vec2( uvx, uvz ), 0.0 );
+        const biomeLand = c.biomeLandTex
+          ? textureLevel( c.biomeLandTex, vec2( uvx, uvz ), 0.0 )
+          : vec4( 1, 0, 0, 0 );
+        const biomeWater = c.biomeWaterTex
+          ? textureLevel( c.biomeWaterTex, vec2( uvx, uvz ), 0.0 )
+          : vec4( 0 );
+        // The coast needs a readable turf-to-sand handoff, not a dense green
+        // carpet ending at the beach. Managed ground retains full blades, sparse
+        // strand habitat keeps only a low population, and dune/sand/water retire
+        // geometry entirely. These semantic weights are visual/ecological only;
+        // zoneSD remains the sole gameplay-surface authority.
+        const coastWeights = coastTextureBlendWeights( {
+          dune: biomeLand.b, drySand: biomeLand.a, wetSand: biomeWater.r,
+        }, vec2( worldX, worldZ ) );
+        const vegetationWeight = biomeLand.r.add( biomeLand.g.mul( 0.28 ) )
+          .mul( float( 1 ).sub( coastWeights.beachWeight) )
+          .mul( float( 1 ).sub( biomeWater.g.max( biomeWater.b ) ) )
+          .clamp( 0.0, 1.0 );
         roughMask.assign( smoothstep( -SURFACE_TRANSITION_M, SURFACE_TRANSITION_M, zoneSD.r.add( c.roughWidth ) ) );
         const edgeWarp = mx_noise_float( vec3( worldX.mul( 0.045 ), worldZ.mul( 0.036 ), 317.0 ) )
           .sub( 0.5 ).mul( 2.8 );
         const edgeSD = zoneSD.r.add( edgeWarp );
-        const clearForFairway = smoothstep( -2.4, 0.6, edgeSD );
+        // Match Terrain.turfZoneMasks' maintained/native shoulder exactly.  Blade
+        // roots are still discrete, but their height now converges continuously on
+        // the same smooth curve as the rendered rough instead of exposing candidate
+        // cells or the coarser CPU surface grid.
+        const clearForFairway = smoothstep( -2.0, 2.0, edgeSD );
         const clearForFringe = smoothstep( -SURFACE_TRANSITION_M, 0.0, zoneSD.g.add( c.fringeWidth ) );
         const clearForSand = smoothstep( -SURFACE_TRANSITION_M, 0.0, zoneSD.b );
         const clearForTee = smoothstep( -SURFACE_TRANSITION_M, 0.0, zoneSD.a );
         const cleared = clearForFairway.max( clearForFringe ).max( clearForSand ).max( clearForTee );
         hMax.assign( mix( BLADE_H.deepRough, BLADE_H.rough, roughMask )
-          .mul( float( 1 ).sub( cleared ) ) );
+          .mul( float( 1 ).sub( cleared ) ).mul( vegetationWeight ) );
 
         const dx = worldX.sub( cam.x );
         const dz = worldZ.sub( cam.z );
         const dist = dx.mul( dx ).add( dz.mul( dz ) ).sqrt();
+        lodClass.assign( dist.lessThan( radius.mul( GRASS_LOD_NEAR_RADIUS ) )
+          .select( uint( 0 ), dist.lessThan( radius.mul( GRASS_LOD_MID_RADIUS ) )
+            .select( uint( 1 ), uint( 2 ) ) ) );
         const { keepProb: baseKeepProb } = densityAtDistance( radius, dist );
         const keepProb = baseKeepProb.toVar();
+        keepProb.mulAssign( densityScale );
         If( baseKeepProb.lessThan( FAR_TIER_PEAK_KEEP ), () => {
           keepProb.maxAssign( farTierKeepAt( radius, dx, dz, cameraForward )
-            .mul( farSamplingScale ).min( 1.0 ) );
+            .mul( farTierScale ).mul( densityScale ).mul( farSamplingScale ).min( 1.0 ) );
         } );
         const macroCluster = mx_noise_float( vec3( worldX.mul( 0.075 ), worldZ.mul( 0.075 ), 31.7 ) ).mul( 0.5 ).add( 0.5 );
         const patchBreak = mx_noise_float( vec3( worldX.mul( 0.19 ), worldZ.mul( 0.19 ), 43.1 ) ).mul( 0.5 ).add( 0.5 );
         ecological.assign( mix( macroCluster, patchBreak, 0.28 ) );
         const colony = smoothstep( 0.25, 0.72, ecological );
         tuft.assign( smoothstep( 0.18, 0.84, mix( hE, ecological, roughMask ) ) );
-        const tuftDensity = mix( 0.54, 1.24, tuft );
-        const coverageRange = mix( ROUGH_COVERAGE_MIN, ROUGH_COVERAGE_MAX, ecological );
-        const roughCoverage = coverageRange.mul( mix( ROUGH_COLONY_FLOOR, 1.0, colony ) );
-        const densityTarget = keepProb.mul( tuftDensity ).mul( roughCoverage ).toVar();
+        // Keep the canopy statistically varied without letting low-frequency noise
+        // carve bare holes beside tall clumps. The authored extrema remain in the
+        // expression for the conservative tile bound, while the ecological field is
+        // compressed into a broad middle band for a continuous close carpet.
+        const densityBlend = smoothstep( 0.10, 0.90, ecological ).mul( 0.34 ).add( 0.33 );
+        const tuftDensity = mix( 0.54, 1.24, densityBlend );
+        const coverageRange = mix( ROUGH_COVERAGE_MIN, ROUGH_COVERAGE_MAX, densityBlend );
+        const colonyCoverage = mix( ROUGH_COLONY_FLOOR, 1.0, colony );
+        const roughCoverage = coverageRange.mul( mix( colonyCoverage, 1.0, 0.65 ) );
+        const densityTarget = keepProb.mul( tuftDensity ).mul( roughCoverage )
+          .mul( vegetationWeight ).toVar();
         // Outside authored dense-canopy overlap this branch is false, leaving the
         // canonical density expression bit-for-bit intact. Inside connected forest
         // footprints it retires only stable world-cell candidates and never changes
@@ -717,54 +841,71 @@ export class Grass {
         const ecologicalWidth = mix( hE, tuft, 0.30 )
           .add( ecological.sub( 0.5 ).mul( 0.20 ) ).clamp( 0.0, 1.0 );
         widthBase.assign( mix( ROUGH_BLADE_WIDTH_MIN_M, ROUGH_BLADE_WIDTH_MAX_M, ecologicalWidth ) );
-        alive.assign( inBounds.and( growable ).and( hMax.greaterThan( 0.002 ) )
+        alive.assign( inBounds.and( turfCandidate ).and( hMax.greaterThan( 0.002 ) )
           .and( keepCandidate ).select( uint( 1 ), uint( 0 ) ) );
         } );
         } );
       } );
 
-      // Work-efficient Blelloch exclusive scan. It preserves the exact stable lane
-      // order and one atomic reservation per 256 candidates, but performs 510 shared
-      // adds instead of Hillis-Steele's 1,793. Barrier count is unchanged.
-      scan.element( lid ).assign( alive );
-      workgroupBarrier();
-      for ( let offset = 1; offset < WORKGROUP; offset <<= 1 ) {
-        const index = lid.add( uint( 1 ) ).mul( uint( offset * 2 ) ).sub( uint( 1 ) );
-        If( index.lessThan( uint( WORKGROUP ) ), () => {
-          scan.element( index ).addAssign( scan.element( index.sub( uint( offset ) ) ) );
+      // Compact each geometric complexity class into its fixed triangle-budget
+      // reservation. Reusing one work-efficient scan keeps atomics at three per
+      // workgroup rather than one per blade, while contiguous class ranges let one
+      // mesh issue three indexed indirect commands with different topology.
+      const dst = uint( MAX_VISIBLE_BLADE_RECORDS ).toVar();
+      for ( let lod = 0; lod < 3; lod ++ ) {
+        const tierAlive = alive.equal( uint( 1 ) ).and( lodClass.equal( uint( lod ) ) )
+          .select( uint( 1 ), uint( 0 ) );
+        scan.element( lid ).assign( tierAlive );
+        workgroupBarrier();
+        for ( let offset = 1; offset < WORKGROUP; offset <<= 1 ) {
+          const index = lid.add( uint( 1 ) ).mul( uint( offset * 2 ) ).sub( uint( 1 ) );
+          If( index.lessThan( uint( WORKGROUP ) ), () => {
+            scan.element( index ).addAssign( scan.element( index.sub( uint( offset ) ) ) );
+          } );
+          workgroupBarrier();
+        }
+        If( lid.equal( uint( 0 ) ), () => {
+          total.element( uint( 0 ) ).assign( scan.element( uint( WORKGROUP - 1 ) ) );
+          scan.element( uint( WORKGROUP - 1 ) ).assign( uint( 0 ) );
+        } );
+        workgroupBarrier();
+        for ( let offset = WORKGROUP >> 1; offset >= 1; offset >>= 1 ) {
+          const index = lid.add( uint( 1 ) ).mul( uint( offset * 2 ) ).sub( uint( 1 ) );
+          If( index.lessThan( uint( WORKGROUP ) ), () => {
+            const left = scan.element( index.sub( uint( offset ) ) ).toVar();
+            scan.element( index.sub( uint( offset ) ) ).assign( scan.element( index ) );
+            scan.element( index ).addAssign( left );
+          } );
+          workgroupBarrier();
+        }
+        If( lid.equal( uint( 0 ) ), () => {
+          base.element( uint( 0 ) ).assign( atomicAdd(
+            lodCounters.element( uint( lod ) ), total.element( uint( 0 ) ),
+          ) );
+        } );
+        workgroupBarrier();
+        const tierSlot = base.element( uint( 0 ) ).add( scan.element( lid ) );
+        If( tierAlive.equal( uint( 1 ) ), () => {
+          If( tierSlot.lessThan( uint( GRASS_LOD_CAPACITIES[ lod ] ) ), () => {
+            dst.assign( tierSlot.add( uint( GRASS_LOD_OFFSETS[ lod ] ) ) );
+          } ).Else( () => {
+            atomicStore( overflow.element( uint( 0 ) ), uint( 1 ) );
+          } );
         } );
         workgroupBarrier();
       }
-      If( lid.equal( uint( 0 ) ), () => {
-        total.element( uint( 0 ) ).assign( scan.element( uint( WORKGROUP - 1 ) ) );
-        scan.element( uint( WORKGROUP - 1 ) ).assign( uint( 0 ) );
-      } );
-      workgroupBarrier();
-      for ( let offset = WORKGROUP >> 1; offset >= 1; offset >>= 1 ) {
-        const index = lid.add( uint( 1 ) ).mul( uint( offset * 2 ) ).sub( uint( 1 ) );
-        If( index.lessThan( uint( WORKGROUP ) ), () => {
-          const left = scan.element( index.sub( uint( offset ) ) ).toVar();
-          scan.element( index.sub( uint( offset ) ) ).assign( scan.element( index ) );
-          scan.element( index ).addAssign( left );
-        } );
-        workgroupBarrier();
-      }
-      If( lid.equal( uint( 0 ) ), () => {
-        base.element( uint( 0 ) ).assign( atomicAdd( visibleCounter.element( uint( 0 ) ), total.element( uint( 0 ) ) ) );
-      } );
-      workgroupBarrier();
 
-      const dst = base.element( uint( 0 ) ).add( scan.element( lid ) );
       If( alive.equal( uint( 1 ) ), () => {
-        If( dst.lessThan( uint( MAX_VISIBLE_BLADES ) ), () => {
+        If( dst.lessThan( uint( MAX_VISIBLE_BLADE_RECORDS ) ), () => {
           const bladeColorNode = ( name ) => {
             const color = c.bladeColor[ name ];
             return vec3( color.r, color.g, color.b );
           };
           const surfaceColor = mix( bladeColorNode( 'deepRough' ), bladeColorNode( 'rough' ), roughMask );
           const groundY = this._sampleHeight( uvx, uvz );
-          const baseHeight = hMax.mul( float( 0.38 ).add( hD.mul( 0.68 ) )
-            .mul( mix( 0.72, 1.22, tuft ) ).mul( heightClass ) );
+          const visibleHeight = hMax.mul( heightClass.mul( 0.68 ).add( 0.24 ).clamp( 0.58, 1.0 ) );
+          const rootBurial = visibleHeight.mul( ROOT_BURY_FRACTION );
+          const baseHeight = visibleHeight.add( rootBurial );
           // A low-frequency heading makes each colony feel wind-set while hA
           // keeps its blades from aligning into visible rows.
           const orient = hA.mul( 6.2831853 ).add( ecological.sub( 0.5 ).mul( 0.55 ) );
@@ -777,12 +918,12 @@ export class Grass {
           // variation only; no AO/emissive term is introduced for the grass pass.
           const age = mix( hD, ecological, 0.45 );
           const colourVariation = vec3(
-            mix( 0.86, 1.16, age ),
-            mix( 0.90, 1.08, mix( hE, age, 0.35 ) ),
-            mix( 0.74, 1.03, mix( hD, hE, 0.50 ) ),
+            mix( 0.93, 1.08, age ),
+            mix( 0.94, 1.08, mix( hE, age, 0.35 ) ),
+            mix( 0.84, 1.01, mix( hD, hE, 0.50 ) ),
           );
-          const colour = surfaceColor.mul( float( 0.72 ).add( hD.mul( 0.38 ) )
-            .mul( mix( 0.84, 1.10, tuft ) ) ).mul( colourVariation );
+          const colour = surfaceColor.mul( float( 0.86 ).add( hD.mul( 0.20 ) )
+            .mul( mix( 0.94, 1.04, tuft ) ) ).mul( colourVariation );
           // Store world-stable rooted blade inputs. Camera-dependent current/previous
           // LOD state below is computed once per survivor and packed for exact temporal
           // reconstruction, so the velocity attachment represents prior geometry too.
@@ -796,24 +937,26 @@ export class Grass {
           const currentWind = this.environment.windAt( windAnchor, this.environment.time ).xz;
           const previousWind = this.environment.windAt( windAnchor, this.environment.previousTime ).xz;
           const facing = vec2( orientSin.negate(), orientCos );
-          const lodAt = ( cameraPosition, forwardAxis ) => {
+          const lodAt = ( cameraPosition, forwardAxis, radius, densityScale, farTierScale ) => {
             const lodDx = worldX.sub( cameraPosition.x );
             const lodDz = worldZ.sub( cameraPosition.z );
             const lodDistance = lodDx.mul( lodDx ).add( lodDz.mul( lodDz ) ).sqrt().max( 0.001 );
             const { progress, keepProb: baseLodKeep } = densityAtDistance( radius, lodDistance );
             const lodKeep = baseLodKeep.toVar();
+            lodKeep.mulAssign( densityScale );
             If( baseLodKeep.lessThan( FAR_TIER_PEAK_KEEP ), () => {
               lodKeep.maxAssign( farTierKeepAt( radius, lodDx, lodDz, forwardAxis )
-                .mul( farSamplingScale ).min( 1.0 ) );
+                .mul( farTierScale ).mul( densityScale ).mul( farSamplingScale ).min( 1.0 ) );
             } );
             const fade = smoothstep( hC.sub( DENSITY_FEATHER ), hC.add( DENSITY_FEATHER ), lodKeep );
             const viewDirection = vec2( lodDx.negate(), lodDz.negate() ).div( lodDistance );
             const edge = float( 1 ).sub( facing.dot( viewDirection ).abs() );
+            const edgeCompensation = mix( float( 1 ), float( EDGE_WIDTH_COMPENSATION ), edge.mul( edge ) );
             const widthScale = mix( float( 1 ), MAX_WIDTH_RAMP, progress )
-              .mul( fade ).mul( float( 1 ).add( edge.mul( edge ).mul( 2.0 ) ) );
+              .mul( fade ).mul( edgeCompensation );
             return vec2( fade, widthScale.div( MAX_WIDTH_RAMP * 3.0 ) );
           };
-          const currentLod = lodAt( cam, cameraForward );
+          const currentLod = lodAt( cam, cameraForward, radius, densityScale, farTierScale );
           // Position-only LOD is identical while the camera is stationary (including
           // projection jitter). Skip its second sqrt/curve/view solve in that common
           // case; a coherent uniform branch restores the exact previous-camera solve
@@ -821,8 +964,16 @@ export class Grass {
           const previousLod = currentLod.toVar();
           const footprintChanged = cam.x.notEqual( previousCam.x ).or( cam.z.notEqual( previousCam.z ) )
             .or( cameraForward.x.notEqual( previousCameraForward.x ) )
-            .or( cameraForward.y.notEqual( previousCameraForward.y ) );
-          If( footprintChanged, () => { previousLod.assign( lodAt( previousCam, previousCameraForward ) ); } );
+            .or( cameraForward.y.notEqual( previousCameraForward.y ) )
+            .or( radius.notEqual( previousRadius ) )
+            .or( densityScale.notEqual( previousDensityScale ) )
+            .or( farTierScale.notEqual( previousFarTierScale ) );
+          If( footprintChanged, () => {
+            previousLod.assign( lodAt(
+              previousCam, previousCameraForward, previousRadius,
+              previousDensityScale, previousFarTierScale,
+            ) );
+          } );
           recordId.element( dst ).assign( uvec3(
             tile.mul( uint( CANDIDATES_PER_TILE ) ).add( localCandidate ),
             packUnorm4x8( vec4( currentWind, previousWind ).div( 32.0 ).add( 0.5 ) ),
@@ -837,20 +988,34 @@ export class Grass {
 
   _buildDrawFinalizeCompute() {
     return Fn( () => {
-      const count = atomicLoad( this._visibleCounter.element( uint( 0 ) ) );
-      const bad = atomicLoad( this._overflow.element( uint( 0 ) ) ).greaterThan( uint( 0 ) ).or( count.greaterThan( uint( MAX_VISIBLE_BLADES ) ) );
+      const nearCount = atomicLoad( this._lodCounters.element( uint( 0 ) ) ).toVar();
+      const midCount = atomicLoad( this._lodCounters.element( uint( 1 ) ) ).toVar();
+      const farCount = atomicLoad( this._lodCounters.element( uint( 2 ) ) ).toVar();
+      const lodCounts = [ nearCount, midCount, farCount ];
+      const count = nearCount.add( midCount ).add( farCount );
+      const triangleCount = nearCount.mul( uint( GRASS_LOD_TRIANGLES[ 0 ] ) )
+        .add( midCount.mul( uint( GRASS_LOD_TRIANGLES[ 1 ] ) ) )
+        .add( farCount.mul( uint( GRASS_LOD_TRIANGLES[ 2 ] ) ) );
+      const bad = atomicLoad( this._overflow.element( uint( 0 ) ) ).greaterThan( uint( 0 ) )
+        .or( count.greaterThan( uint( MAX_VISIBLE_BLADE_RECORDS ) ) )
+        .or( nearCount.greaterThan( uint( GRASS_LOD_CAPACITIES[ 0 ] ) ) )
+        .or( midCount.greaterThan( uint( GRASS_LOD_CAPACITIES[ 1 ] ) ) )
+        .or( farCount.greaterThan( uint( GRASS_LOD_CAPACITIES[ 2 ] ) ) )
+        .or( triangleCount.greaterThan( uint( GRASS_TRIANGLE_BUDGET ) ) );
       If( bad, () => {
-        // Deliberately do not clamp. A vanished grass canopy is an obvious failure,
-        // while a silent partial canopy is temporal corruption disguised as success.
+        // Deliberately do not clamp. A vanished canopy is an obvious budget fault;
+        // silently truncating one geometric tier would create a moving LOD hole.
         atomicStore( this._overflow.element( uint( 0 ) ), uint( 1 ) );
-        this._drawArgs.element( uint( 1 ) ).assign( uint( 0 ) );
-      } ).Else( () => {
-        this._drawArgs.element( uint( 1 ) ).assign( count );
       } );
-      this._drawArgs.element( uint( 0 ) ).assign( uint( BLADE_INDEX_COUNT ) );
-      this._drawArgs.element( uint( 2 ) ).assign( uint( 0 ) );
-      this._drawArgs.element( uint( 3 ) ).assign( uint( 0 ) );
-      this._drawArgs.element( uint( 4 ) ).assign( uint( 0 ) );
+      for ( let lod = 0; lod < 3; lod ++ ) {
+        const arg = lod * 5;
+        const lodCount = lodCounts[ lod ];
+        this._drawArgs.element( uint( arg ) ).assign( uint( GRASS_LOD_INDEX_COUNTS[ lod ] ) );
+        this._drawArgs.element( uint( arg + 1 ) ).assign( bad.select( uint( 0 ), lodCount ) );
+        this._drawArgs.element( uint( arg + 2 ) ).assign( uint( GRASS_LOD_FIRST_INDICES[ lod ] ) );
+        this._drawArgs.element( uint( arg + 3 ) ).assign( uint( 0 ) );
+        this._drawArgs.element( uint( arg + 4 ) ).assign( uint( GRASS_LOD_OFFSETS[ lod ] ) );
+      }
     } )().compute( 1 );
   }
 
@@ -861,7 +1026,7 @@ export class Grass {
       const y = row / BLADE_SEGMENTS;
       // z=0/1 selects the two crossed world-space blade planes in the vertex
       // function. Keeping this in the existing position attribute avoids a new
-      // per-instance stream and preserves the one indirect draw.
+      // per-instance stream and lets one render item issue all three indirect commands.
       pos.push( -0.5, y, 0, 0.5, y, 0, -0.5, y, 1, 0.5, y, 1 );
       // Canonical ribbon UVs required by the production Phong lighting path. This
       // is a 16-vertex static attribute only: u follows side and v follows the
@@ -869,17 +1034,26 @@ export class Grass {
       uv.push( 0, y, 1, y, 0, y, 1, y );
     }
     const idx = [];
-    for ( let row = 0; row < BLADE_SEGMENTS; row ++ ) {
-      const a = row * 4, b = a + 1, c = a + 4, d = a + 5;
-      const e = a + 2, f = a + 3, g = a + 6, h = a + 7;
+    const pushRibbonSegment = ( rowA, rowB ) => {
+      const a = rowA * 4, b = a + 1, c = rowB * 4, d = c + 1;
+      const e = a + 2, f = a + 3, g = c + 2, h = c + 3;
       idx.push( a, c, b, b, c, d, e, g, f, f, g, h );
-    }
+    };
+    // Near: all three longitudinal segments (12 triangles).
+    pushRibbonSegment( 0, 1 );
+    pushRibbonSegment( 1, 2 );
+    pushRibbonSegment( 2, 3 );
+    // Mid: preserve the rooted shoulder and tip with two segments (8 triangles).
+    pushRibbonSegment( 0, 2 );
+    pushRibbonSegment( 2, 3 );
+    // Far: the same two crossed real blades at one quad per plane (4 triangles).
+    pushRibbonSegment( 0, 3 );
     const geo = new InstancedBufferGeometry();
     geo.setAttribute( 'position', new BufferAttribute( new Float32Array( pos ), 3 ) );
     geo.setAttribute( 'uv', new BufferAttribute( new Float32Array( uv ), 2 ) );
     geo.setIndex( new BufferAttribute( new Uint16Array( idx ), 1 ) );
-    geo.instanceCount = MAX_VISIBLE_BLADES; // indirect args own the actual count.
-    geo.setIndirect( this._drawArgsAttr );
+    geo.instanceCount = MAX_VISIBLE_BLADE_RECORDS; // indirect args own the actual counts.
+    geo.setIndirect( this._drawArgsAttr, [ 0, 20, 40 ] );
     return geo;
   }
 
@@ -910,6 +1084,11 @@ export class Grass {
     const sideZ = mix( shape.y, shape.x.negate(), plane );
     const packedWind = unpackUnorm4x8( state.y ).sub( 0.5 ).mul( 32.0 );
     const packedLod = unpackUnorm4x8( state.z );
+    // The anchor lane stores the full root-to-tip span. Recover the stable buried
+    // portion here so the visible tip remains at the same authored height while
+    // the lower ribbon disappears naturally into the terrain.
+    const rootBurial = anchor.w.mul( ROOT_BURY_ANCHOR_FRACTION );
+    const rootedBaseY = anchor.y.sub( rootBurial );
     const bladePosition = ( wind, lodFade, normalizedWidth ) => {
       const H = anchor.w.mul( lodFade );
       // A coarse rough blade carries most of its width through the lower
@@ -923,7 +1102,7 @@ export class Grass {
       const authoredBend = leanDirection.mul( shape.w ).mul( bendT ).mul( H );
       const windBend = wind.mul( H ).mul( 0.028 ).mul( bendT );
       const bend = authoredBend.add(windBend);
-      return vec3( anchor.x.add( side.mul( width ).mul( sideX ) ).add( bend.x ), anchor.y.add( t.mul( H ) ), anchor.z.add( side.mul( width ).mul( sideZ ) ).add( bend.y ) );
+      return vec3( anchor.x.add( side.mul( width ).mul( sideX ) ).add( bend.x ), rootedBaseY.add( t.mul( H ) ), anchor.z.add( side.mul( width ).mul( sideZ ) ).add( bend.y ) );
     };
     const current = bladePosition( packedWind.xy, packedLod.x, packedLod.y );
     const previous = bladePosition( packedWind.zw, packedLod.z, packedLod.w );
@@ -952,19 +1131,40 @@ export class Grass {
     // transforming the interpolated object normal. Hoist the matrix work to the 16
     // blade vertices and retain the one required post-interpolation normalize per
     // fragment; dense crossed-ribbon overdraw no longer pays a matrix multiply.
+    const bladeLift = bladeRow.mul( 1.296 ).sub( bladeRow.mul( bladeRow ).mul( 0.296 ) ).clamp( 0.0, 1.0 );
     const bladeNormalView = transformNormalToView( vec3(
       round.mul( sideX ).sub( sideZ.mul( 0.22 ) ),
-      0.72,
+      mix( 0.68, 0.78, bladeLift ),
       round.mul( sideZ ).add( sideX.mul( 0.22 ) ),
     ) ).toVarying( 'vGrassViewNormal' );
     mat.normalNode = bladeNormalView.normalize();
     // The colour curve only changes at the four authored blade rows. Evaluate those
     // values in the vertex stage and interpolate the resulting pigment, rather than
     // recomputing a quadratic for every fragment in the dense crossed canopy.
-    const bladeLift = bladeRow.mul( 1.296 ).sub( bladeRow.mul( bladeRow ).mul( 0.296 ) ).clamp( 0.0, 1.0 );
     const bladeColor = colour.xyz.mul( mix( 0.88, 1.0, bladeLift ) )
       .toVarying( 'vGrassBladeColor' );
     mat.colorNode = bladeColor;
+    // The old ribbon was opaque from edge to edge, so thousands of intersecting
+    // cards merged into a woven wall at close range. Keep the same fixed geometry
+    // and world identity, but shape its coverage in the existing UVs like a leaf:
+    // broad near the root, narrower toward the tip, with a stable per-blade width
+    // bias from the already packed acceptance hash. Alpha test is deterministic;
+    // it introduces no stochastic coverage that could shimmer through TRAA.
+    const bladeUv = uv();
+    const bladeEdge = bladeUv.x.sub( 0.5 ).abs().mul( 2.0 );
+    const leafHalfWidth = mix( 0.66, 0.28, bladeLift )
+      .mul( mix( 0.90, 1.10, colour.w ) );
+    const leafCoverage = float( 1 ).sub( smoothstep( leafHalfWidth, 1.0, bladeEdge ) );
+    // Far LOD already has a true tapered silhouette because its one segment joins
+    // the full-width root row to the narrow authored tip row. Applying the close
+    // leaf cutout again creates two sub-pixel edges inside that real edge and makes
+    // a stationary horizon crawl under projection jitter. Keep its geometric blade
+    // solid; near and middle topology retain the detailed leaf-shaped coverage.
+    const farGeometry = instanceIndex.greaterThanEqual( uint( GRASS_LOD_OFFSETS[ 2 ] ) );
+    mat.opacityNode = farGeometry.select( float( 1 ), leafCoverage );
+    mat.alphaTestNode = 0.30;
+    mat.transparent = false;
+    mat.alphaHash = false;
     mat.shininessNode = float( 4.0 );
     mat.specularNode = vec3( this.uSpecular.mul( 0.04 ) );
     // Prevent TSL from optimizing the stable-id stream away from the pipeline.
@@ -974,10 +1174,14 @@ export class Grass {
 
   update( _time, camera = this.camera ) {
     const cam = camera;
+    const firstUpdate = !this._motionReady;
     cam.updateMatrixWorld();
     if ( this._motionReady ) {
       this.uPreviousCameraPosition.value.copy( this.uCameraPosition.value );
       this.uPreviousCameraForwardXZ.value.copy( this.uCameraForwardXZ.value );
+      this.uPreviousRadius.value = this.uRadius.value;
+      this.uPreviousDensityScale.value = this.uDensityScale.value;
+      this.uPreviousFarTierScale.value = this.uFarTierScale.value;
     }
     this.uCameraPosition.value.copy( cam.position );
     cam.getWorldDirection( this._cameraForwardScratch );
@@ -987,16 +1191,24 @@ export class Grass {
       this._cameraForwardScratch.z / forwardLength,
     );
     this.uViewProjection.value.multiplyMatrices( cam.projectionMatrix, cam.matrixWorldInverse );
-    if ( !this._motionReady ) {
+    if ( firstUpdate ) {
       this.uPreviousCameraPosition.value.copy( cam.position );
       this.uPreviousCameraForwardXZ.value.copy( this.uCameraForwardXZ.value );
     }
     this._motionReady = true;
 
     // Low chase/aim cameras need the full field most: shrinking it to 70% brought a
-    // hard, camera-centred boundary into the foreground. Density and width LOD already
-    // bound the distant cost, so radius must remain a stable world-space promise.
-    this.uRadius.value = this.radius;
+    // hard, camera-centred boundary into the foreground. The optional policy scales
+    // the same world-stable field only within bounded workload limits; it never
+    // changes candidate identities or reallocates the fixed record buffers.
+    this.uRadius.value = this.radius * this.workloadPolicy.radiusScale;
+    this.uDensityScale.value = this.workloadPolicy.densityScale;
+    this.uFarTierScale.value = this.workloadPolicy.farTierScale;
+    if ( firstUpdate ) {
+      this.uPreviousRadius.value = this.uRadius.value;
+      this.uPreviousDensityScale.value = this.uDensityScale.value;
+      this.uPreviousFarTierScale.value = this.uFarTierScale.value;
+    }
     // Ordered GPU submissions are required: each stage consumes only GPU-written
     // buffers from the prior stage. No count crosses the CPU/GPU boundary.
     this.renderer.compute( this._clearCompute );
@@ -1010,22 +1222,37 @@ export class Grass {
   // frame path never calls this and never branches on CPU-visible grass state.
   async readDiagnostics() {
     const overflowData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._overflow.value));
-    const visibleData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._visibleCounter.value));
+    const lodData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._lodCounters.value));
     const activeTileData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._tileCounter.value));
+    const triangleCount = lodData.reduce(( sum, count, lod ) => (
+      sum + count * GRASS_LOD_TRIANGLES[ lod ]
+    ), 0);
     return {
       overflow: overflowData[0],
-      visibleCount: visibleData[0],
-      capacity: MAX_VISIBLE_BLADES,
+      visibleCount: lodData.reduce(( sum, count ) => sum + count, 0),
+      capacity: MAX_VISIBLE_BLADE_RECORDS,
+      triangleCount,
+      triangleBudget: GRASS_TRIANGLE_BUDGET,
+      lod: {
+        counts: Array.from( lodData ),
+        trianglesPerBlade: [ ...GRASS_LOD_TRIANGLES ],
+        capacities: [ ...GRASS_LOD_CAPACITIES ],
+        nearRadius: this.radius * GRASS_LOD_NEAR_RADIUS,
+        midRadius: this.radius * GRASS_LOD_MID_RADIUS,
+      },
       activeTileCount: activeTileData[0],
       lodCameraPosition: this.uCameraPosition.value.toArray(),
       lodCameraForwardXZ: this.uCameraForwardXZ.value.toArray(),
       nominalRadius: this.radius,
+      effectiveRadius: this.uRadius.value,
+      workloadPolicy: { ...this.workloadPolicy },
       fullDensityRadius: this.radius * DENSITY_NEAR_RADIUS,
       baseTerminalRadius: this.radius * (
         DENSITY_NEAR_RADIUS + ( DENSITY_FAR_RADIUS - DENSITY_NEAR_RADIUS )
           * ( 1 - Math.pow( DENSITY_FEATHER / ( 1.08 + DENSITY_FEATHER ), 1 / DENSITY_CURVE_POWER ) )
       ),
       farTierStartRadius: this.radius * FAR_TIER_START_RADIUS,
+      farTierFadeStartRadius: this.radius * FAR_TIER_FADE_START_RADIUS,
       farTierTerminalRadius: this.radius * FAR_TIER_TERMINAL_RADIUS,
       farTierLateralRadius: this.radius * FAR_TIER_TERMINAL_RADIUS / FAR_TIER_LATERAL_SCALE,
     };
@@ -1046,7 +1273,7 @@ export class Grass {
       this._tileHeightBounds.value,
       this._activeTiles.value,
       this._tileCounter.value,
-      this._visibleCounter.value,
+      this._lodCounters.value,
       this._overflow.value,
       this._recordAnchor.value,
       this._recordShape.value,

@@ -22,6 +22,9 @@ create geometric substitutes.
    `../golf-course-authoring/references/engine.md` before editing the course.
 5. Inspect `public/assets/environment/catalog.json`. Use only cataloged IDs and
    respect each entry's biome, dimensions, slope, spacing, grounding, and provenance.
+   When `biomeTransitions` exist, inspect `classify_biome`/compiled transition
+   weights and habitat metadata; retire vegetation on sand/water weights and use
+   ecotone weights to blend compatible communities without changing play physics.
 6. Classify the prompt on four axes: biome, realistic/spectacle/hybrid,
    sparse/balanced/lush density, and manicured/naturalized finish. Infer only
    when the request is silent.

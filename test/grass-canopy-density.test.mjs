@@ -59,7 +59,7 @@ test('packed canopy field reuses the existing R8 fetch and preserves outside-can
     'candidate compute must retain exactly one grass-field sample');
   assert.match(source, /data\[ i \] \|= GRASS_GROWABLE_BIT/);
   assert.match(source, /packedGround\.mod\( GRASS_GROWABLE_BIT \)\.div\( CANOPY_MASK_MAX \)/);
-  assert.match(source, /packedGround\.greaterThanEqual\( GRASS_GROWABLE_BIT \)/);
+  assert.match(source, /const turfCandidate = packedGround\.greaterThanEqual\( GRASS_GROWABLE_BIT \)/);
 
   const outsidePacked = 128;
   assert.equal(outsidePacked % 128, 0, 'outside-canopy texels decode an exact zero mask');

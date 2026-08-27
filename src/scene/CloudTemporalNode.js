@@ -81,6 +81,19 @@ export class CloudTemporalNode extends TempNode {
 
   getSourceMetadataNode() { return this._historySourceNode; }
 
+  setResolutionScale(resolutionScale) {
+    const next = Number(resolutionScale);
+    if (!Number.isFinite(next) || next < 0.0625 || next > 1) {
+      throw new RangeError('CloudTemporalNode resolutionScale must be between 0.0625 and 1.');
+    }
+    if (Math.abs(next - this.resolutionScale) < 1e-6) return false;
+    this.resolutionScale = next;
+    // The next updateBefore resizes both ping-pong targets and starts current-only;
+    // history from a differently sampled grid must not survive a scale change.
+    this.reset();
+    return true;
+  }
+
   _nameAttachments(target, phase) {
     target.textures[0].name = CLOUD_TRANSPORT_ATTACHMENT;
     target.textures[1].name = CLOUD_SOURCE_ATTACHMENT;

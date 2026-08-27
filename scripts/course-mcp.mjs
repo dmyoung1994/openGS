@@ -19,6 +19,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeCourse, CONTOURS } from '../src/course/course.js';
+import {
+  BIOME_TRANSITION_PROFILE_IDS, classifyBiomeAt,
+} from '../src/course/BiomeRegistry.js';
+import { signedDistanceToFeature } from '../src/course/featureGeometry.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -44,23 +48,23 @@ function classify(x, z, c) {
   if (Math.abs(x - c.tee.x) < c.tee.boxHalfX && z < c.tee.z1 && z > c.tee.z0) near.push('tee');
   const feats = [];
   for (const g of c.greens) {
-    const d = Math.hypot(x - g.x, z - g.z);
+    const d = Math.max(0, -signedDistanceToFeature(g, x, z));
     if (d < g.r + c.fringeW + 2) feats.push({ kind: 'green', d: +d.toFixed(1), green: g });
   }
   for (const b of c.bunkers) {
-    const d = Math.hypot(x - b.x, z - b.z);
+    const d = Math.max(0, -signedDistanceToFeature(b, x, z));
     if (d < b.r + 3) feats.push({ kind: b.pot ? 'pot-bunker' : 'bunker', d: +d.toFixed(1), bunker: b });
   }
   for (const p of c.ponds) {
-    const d = Math.hypot(x - p.x, z - p.z);
+    const d = Math.max(0, -signedDistanceToFeature(p, x, z));
     if (d < p.r + 3) feats.push({ kind: 'water', d: +d.toFixed(1), pond: p });
   }
   let surface = 'fairway';
   if (Math.abs(x - c.tee.x) < c.tee.boxHalfX && z < c.tee.z1 && z > c.tee.z0) surface = 'tee';
   else {
-    for (const g of c.greens) { const d = Math.hypot(x - g.x, z - g.z); if (d < g.r) { surface = 'green'; break; } if (d < g.r + c.fringeW) surface = 'fringe'; }
-    if (surface === 'fairway') for (const p of c.ponds) { if (Math.hypot(x - p.x, z - p.z) < p.r) { surface = 'water'; break; } }
-    if (surface === 'fairway') for (const b of c.bunkers) { const sr = b.pot ? b.r * 0.72 : b.r; if (Math.hypot(x - b.x, z - b.z) < sr) { surface = 'sand'; break; } }
+    for (const g of c.greens) { const d = signedDistanceToFeature(g, x, z); if (d > 0) { surface = 'green'; break; } if (d + c.fringeW > 0) surface = 'fringe'; }
+    if (surface === 'fairway') for (const p of c.ponds) { if (signedDistanceToFeature(p, x, z) > 0) { surface = 'water'; break; } }
+    if (surface === 'fairway') for (const b of c.bunkers) { const inset = b.pot ? b.r * 0.28 : 0; if (signedDistanceToFeature(b, x, z) - inset > 0) { surface = 'sand'; break; } }
     if (surface === 'fairway') {
       const half = c.corridor.c0 + (-z) * c.corridor.k, ax = Math.abs(x);
       if (ax > half + c.corridor.rough) surface = 'deepRough';
@@ -68,7 +72,7 @@ function classify(x, z, c) {
     }
   }
   const half = c.corridor.c0 + (-z) * c.corridor.k;
-  return { x, z, surface, fairwayHalfWidthM: +half.toFixed(1), nearby: feats.sort((a, b) => a.d - b.d) };
+  return { x, z, surface, fairwayHalfWidthM: +half.toFixed(1), biome: classifyBiomeAt(c, x, z), nearby: feats.sort((a, b) => a.d - b.d) };
 }
 
 // Design sanity checks used by validate/set. These are warnings, not hard errors —
@@ -94,6 +98,9 @@ const SCHEMA_DOC = `course.json — FEATURE spec (the engine bakes all terrain f
 Coordinate system: metres. x = lateral (right is +x). z = down-range: the tee sits near z≈2 and the course runs toward NEGATIVE z. A 150-yard green is at z ≈ -137 (yards * -0.9144). y (elevation) is computed automatically.
 
 Fields:
+- meta.schema: exactly 3. Older courses require explicit migration.
+- biome: primary registered biome. biomeTransitions[]: semantic visual/ecological transitions that never change playable surface physics.
+- biomeTransitions[]: {id,from,to,boundary,profile,seed,widthScale,priority}. boundary is {kind:"course-edge",sides:[min-x|max-x|min-z|max-z]} or a validated inland {kind:"polygon-region",points:[{x,z},...]}. profile ∈ [${BIOME_TRANSITION_PROFILE_IDS.join(', ')}].
 - bounds {minX,maxX,minZ,maxZ}
 - tee {x,z,boxHalfX,z0,z1}
 - corridor {c0,k,rough}: fairway half-width(m) = c0 + (-z)*k; then a rough band of width \`rough\`; beyond that deep rough.
@@ -101,8 +108,9 @@ Fields:
 - greens[]: {yards (z auto-derived as -yards*0.9144 if z omitted), x, r (~6-12 m), contour}. contour ∈ [${CONTOURS.join(', ')}]. One legible contour per green; vary them across the set.
 - bunkers[]: {x, z, r (m), depth (m below grade), pot (bool)}. Cut INTO grade, no raised rim. pot = small (r≲4), deep (depth≳1.5), steep revetted links pit.
 - ponds[]: {x, z, r, depth}.
+- environment: catalog-backed placements, scatter, assemblies, and edge dressing.
 
-Not authorable here yet: individual trees/props (the tree line is procedural), raw terrain height, materials.`;
+Not authorable: raw terrain height or materials.`;
 
 // ---------------------------------------------------------------- tools ---
 
@@ -121,9 +129,18 @@ const TOOLS = [
       const { course } = await readCourse();
       const n = normalizeCourse(course);
       return text(JSON.stringify({
-        summary: `${n.meta.name || 'Course'} — ${n.greens.length} greens, ${n.bunkers.length} bunkers, ${n.ponds.length} water`,
+        summary: `${n.meta.name || 'Course'} — ${n.greens.length} greens, ${n.bunkers.length} bunkers, ${n.ponds.length} water, ${n.biomeTransitions.length} biome transitions`,
         course,
       }, null, 2));
+    },
+  },
+  {
+    name: 'classify_biome',
+    description: 'Classify semantic biome/profile/habitat weights at a world point without changing its playable surface physics.',
+    inputSchema: { type: 'object', properties: { x: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'z'] },
+    run: async ({ x, z }) => {
+      const { course } = await readCourse();
+      return text(JSON.stringify(classifyBiomeAt(normalizeCourse(course), x, z), null, 2));
     },
   },
   {

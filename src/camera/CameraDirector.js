@@ -4,6 +4,7 @@ const GRAVITY = 9.80665;
 const CHASE_MIN_DOWN_PITCH = 0;
 const DESCENT_MIN_DOWN_PITCH = 4 * Math.PI / 180;
 const RETURN_DURATION = 3.6;
+const RESULT_ORBIT_RATE = 0.025;
 
 // Cinematic camera. A damped rig chases a desired pose through four continuous
 // phases: address, rising flight, landing reveal, and the result orbit. Automatic
@@ -52,12 +53,12 @@ export class CameraDirector {
     // Start directly on the target line behind the ball so the opening composition
     // reads straight down-range rather than as an offset over-the-shoulder view.
     this.pos.copy(ballPos).addScaledVector(this.aim, -4.5);
-    // A 2 m camera looking almost level put the ball below the 40-degree vertical
-    // frustum on wide displays. Keep a golfer-height lens, then pitch it down just
-    // enough to hold the ball in the lower third without losing the target line.
+    // Keep a golfer-height lens and pitch it down enough to hold the physical ball
+    // just above the floating address control. The focal point is below grade only
+    // to define that broadcast pitch; the visible target line remains down-range.
     this.pos.y += 1.45;
     this.look.copy(ballPos).addScaledVector(this.aim, 30);
-    this.look.y = ballPos.y + 0.25;
+    this.look.y = ballPos.y - 2.5;
   }
 
   onLaunch(ball) {
@@ -131,15 +132,15 @@ export class CameraDirector {
     const rising = v.y > 0.5;
     this.phase = rising ? 'chase' : 'descent';
 
-    // Stay close enough to read the physical ball and tracer as the subjects.
-    // Iron-speed shots target about 9 m and driver-speed shots cap at 11 m rather
-    // than the former 42 m; the faster flight spring bounds velocity-induced lag.
-    const dist = Math.min(5 + hs * 0.08, 11);
+    // Stay close enough to read the physical ball while leaving enough baseline
+    // to see the trajectory bend. A camera almost directly behind the velocity
+    // vector collapses a real parabolic tracer into a straight HUD-like stripe.
+    const dist = Math.min(6 + hs * 0.08, 12.5);
     this.pos.copy(p).addScaledVector(hv, -dist);
-    // A small trajectory-relative broadcast offset reveals the arc instead of
-    // looking straight down its tangent. It naturally follows shaped shots rather
-    // than applying an incorrect fixed world-X bias.
-    this._flightSide.set(hv.z, 0, -hv.x).multiplyScalar(rising ? -2.4 : -1.4);
+    // A trajectory-relative broadcast offset reveals the arc instead of looking
+    // straight down its tangent. It follows shaped shots and remains deterministic
+    // without introducing a second camera path or a fixed world-X composition.
+    this._flightSide.set(hv.z, 0, -hv.x).multiplyScalar(-7.0);
     this.pos.add(this._flightSide);
 
     if (rising) {
@@ -155,7 +156,7 @@ export class CameraDirector {
     // estimated landing point. Terrain is sampled when available, so the reveal reads
     // correctly over elevated greens and rolling fairways rather than assuming y=0.
     const altitude = Math.max(0, p.y - this._launchY);
-    this.pos.y = this._launchY + 6 + altitude * 0.72;
+    this.pos.y = this._launchY + 2.4 + altitude * 0.78;
 
     let landingX = p.x;
     let landingZ = p.z;
@@ -176,20 +177,30 @@ export class CameraDirector {
 
   onRest(ball) {
     this.phase = 'result';
-    this._resultAngle = Math.atan2(ball.velocity.x || 1, ball.velocity.z || -1) + 2.4;
+    // Settle into a three-quarter rear view of the real shot line. Rest velocity is
+    // normally zero, so deriving this pose from it made identical shots land in an
+    // arbitrary world-relative composition.
+    const heading = Math.atan2(this._launchDir.x, this._launchDir.z);
+    this._resultAngle = heading + Math.PI + 0.55;
   }
 
   _result(dt, ball) {
-    this._resultAngle += dt * 0.15;
+    // The result card persists for ten seconds. A restrained drift keeps the scene
+    // alive without turning that readable hold into a fast, arcade-style orbit.
+    this._resultAngle += dt * RESULT_ORBIT_RATE;
     const p = ball.position;
-    const r = 6;
+    // A wider, golfer-height orbit keeps the landing area, course, and horizon in
+    // the result composition. The former six-metre / 2.4-metre pose looked almost
+    // straight down at turf, leaving the results surface with no environment to
+    // optically integrate into.
+    const r = 13;
     this.pos.set(
       p.x + Math.sin(this._resultAngle) * r,
-      p.y + 2.4,
+      p.y + 2.0,
       p.z + Math.cos(this._resultAngle) * r,
     );
     this.look.copy(p);
-    this.look.y += 0.1;
+    this.look.y += 0.5;
   }
 
   _snap() {

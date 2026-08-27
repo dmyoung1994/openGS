@@ -78,6 +78,16 @@ test('TRAA keeps stationary sky history stable across deterministic jitter', asy
   assert.match(source, /if \( this\._jitterAppliedThisFrame \)/);
 });
 
+test('stationary cloudy scenes retain projection jitter for hard tree silhouettes', async () => {
+  const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
+  assert.match(source, /aa\.cameraJitterEnabled = true/,
+    'cloud transport must not disable geometry sample accumulation at setup');
+  assert.match(source, /this\._traa\.cameraJitterEnabled = !this\._cameraMoving/,
+    'only real camera motion may disable projection jitter');
+  assert.doesNotMatch(source, /cameraJitterEnabled = this\.weatherSky\?\.cloudsEnabled/,
+    'cloud coverage may not force hard one-sample tree edges');
+});
+
 test('TRAA avoids duplicate neighborhood reads for accepted static history', async () => {
   const source = await readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8');
   assert.match(source, /const needsVarianceClip = hasValidHistory\.and\(/);

@@ -1,26 +1,14 @@
-// Club/ball launch-metric input panel plus the results HUD. Pure DOM overlay;
-// it hands a plain params object to the sim on "Hit" and renders shot results.
-
-// Tour/robot launch data, roughly TrackMan averages. These double as the
-// calibration reference for the physics (a "Driver" hit should carry ~275 yds).
-const PRESETS = {
-  'Driver (tour)':   { ballSpeed: 167, launchAngle: 10.9, spinRate: 2686, spinAxis: -2, azimuth: 0 },
-  'Driver (amateur)':{ ballSpeed: 133, launchAngle: 12.5, spinRate: 3200, spinAxis: 3, azimuth: 0 },
-  '3-wood':          { ballSpeed: 158, launchAngle: 9.2,  spinRate: 3655, spinAxis: -1, azimuth: 0 },
-  '5-iron':          { ballSpeed: 132, launchAngle: 14.3, spinRate: 5361, spinAxis: 0, azimuth: 0 },
-  '7-iron':          { ballSpeed: 120, launchAngle: 16.3, spinRate: 7097, spinAxis: 0, azimuth: 0 },
-  '9-iron':          { ballSpeed: 108, launchAngle: 20.4, spinRate: 8647, spinAxis: 0, azimuth: 0 },
-  'Pitching wedge':  { ballSpeed: 102, launchAngle: 24.2, spinRate: 9304, spinAxis: 0, azimuth: 0 },
-  'Big slice':       { ballSpeed: 150, launchAngle: 13,   spinRate: 3400, spinAxis: 14, azimuth: -3 },
-  'Towering draw':   { ballSpeed: 160, launchAngle: 12,   spinRate: 2900, spinAxis: -9, azimuth: 2 },
-};
+// Launch-input lab plus the player-facing shot presentation. The development
+// controls remain available without occupying the simulator view; address,
+// flight, and result states all consume the same authoritative shot data.
+import { DEVELOPMENT_LAUNCH_PRESETS } from '../input/DevelopmentLaunchMonitorAdapter.js';
 
 const FIELDS = [
   { key: 'ballSpeed', label: 'Ball speed', unit: 'mph', min: 40, max: 200, step: 1 },
   { key: 'launchAngle', label: 'Launch angle', unit: '°', min: 0, max: 50, step: 0.1 },
-  { key: 'azimuth', label: 'Launch direction', unit: '°', min: -20, max: 20, step: 0.5 },
+  { key: 'launchDirection', label: 'Launch direction (L/R)', unit: '°', min: -30, max: 30, step: 0.5, directional: true },
   { key: 'spinRate', label: 'Spin rate', unit: 'rpm', min: 0, max: 12000, step: 50 },
-  { key: 'spinAxis', label: 'Spin axis (tilt)', unit: '°', min: -30, max: 30, step: 0.5 },
+  { key: 'spinAxis', label: 'Spin axis (L/R)', unit: '°', min: -60, max: 60, step: 0.5, directional: true },
 ];
 
 const ENV_FIELDS = [
@@ -28,8 +16,6 @@ const ENV_FIELDS = [
   { key: 'windDir', label: 'Wind from', unit: '°', min: 0, max: 360, step: 5, def: 0 },
   { key: 'altitude', label: 'Altitude', unit: 'm', min: 0, max: 3000, step: 50, def: 0 },
   { key: 'temperatureC', label: 'Temp', unit: '°C', min: -5, max: 45, step: 1, def: 15 },
-  // Percent here, 0-1 in the environment frame. 70 is the validator's ceiling
-  // (EnvironmentFrameState clamps coverage to [0, 0.7]); 0 is clear sky.
   { key: 'cloudCover', label: 'Cloud cover', unit: '%', min: 0, max: 70, step: 5, def: 38 },
 ];
 
@@ -43,55 +29,132 @@ export class MetricsPanel {
   constructor({ onHit, onEnvironmentChange }) {
     this.onHit = onHit;
     this.onEnvironmentChange = onEnvironmentChange;
-    this.values = { ...PRESETS['7-iron'] };
+    this.values = { ...DEVELOPMENT_LAUNCH_PRESETS['7-iron'] };
     this.env = Object.fromEntries([
       ...ENV_FIELDS.map((f) => [f.key, f.def]),
       ...ENV_SELECTS.map((f) => [f.key, f.def]),
     ]);
+    this.shotParams = null;
     this._injectStyles();
     this._build();
     this.applyPreset('7-iron');
+    this.showAddress();
   }
 
-  getParams() { return { ...this.values, club: this.club }; }
+  getLaunchInput() {
+    return {
+      ...this.values,
+      // This stays private development metadata. The player presentation has no
+      // club field, and real providers may omit it until their SDK supplies one.
+      optional: this.club ? { clubLabel: this.club } : undefined,
+    };
+  }
+
+  getParams() {
+    return {
+      ballSpeed: this.values.ballSpeed,
+      launchAngle: this.values.launchAngle,
+      azimuth: this.values.launchDirection,
+      spinRate: this.values.spinRate,
+      spinAxis: this.values.spinAxis,
+      club: this.club,
+    };
+  }
   getEnv() { return { ...this.env }; }
 
   applyPreset(name) {
-    const p = PRESETS[name];
-    if (!p) return;
-    this.club = name;                    // remembered so the sim can gate club-specific FX (e.g. divots)
-    Object.assign(this.values, p);
-    for (const f of FIELDS) this._setField(f.key, this.values[f.key] ?? 0);
+    const preset = DEVELOPMENT_LAUNCH_PRESETS[name];
+    if (!preset) return;
+    // Retained only as simulation metadata for club-specific physical effects.
+    // The player-facing UI intentionally has no club field until a real source
+    // supplies one.
+    this.club = name;
+    Object.assign(this.values, preset);
+    for (const field of FIELDS) this._setField(field.key, this.values[field.key] ?? 0);
   }
 
-  showResult(r) {
-    const rows = [
-      ['Carry', `${r.carryYards.toFixed(1)} yds`],
-      ['Total', `${r.totalYards.toFixed(1)} yds`],
-      ['Apex', `${(r.apexMeters * 3.28084).toFixed(0)} ft`],
-      ['Offline', `${(r.offlineYards >= 0 ? 'R ' : 'L ') + Math.abs(r.offlineYards).toFixed(1)} yds`],
-      ['Descent', `${r.descentDeg.toFixed(0)}°`],
-      ['Landing', `${r.landingSpeedMph.toFixed(0)} mph`],
-      ['Lie', r.surface],
-    ];
-    this.hud.innerHTML = rows
-      .map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`)
-      .join('');
-    this.hud.classList.add('show');
+  beginShot(params = this.getParams()) {
+    this.shotParams = Object.freeze({ ...params });
+    this.setLive('');
+    this._setState('flight');
+    this.showFlight({ carryYards: 0, heightFeet: 0 });
+  }
+
+  showFlight({ carryYards, heightFeet, totalYards = 0, landed = false }) {
+    this._setText('gs-flight-carry', `${Math.max(0, carryYards).toFixed(0)}`);
+    this._setText('gs-flight-secondary-label', landed ? 'Total' : 'Height');
+    this._setText('gs-flight-secondary', `${Math.max(0, landed ? totalYards : heightFeet).toFixed(0)}`);
+    this._setText('gs-flight-secondary-unit', landed ? 'yd' : 'ft');
+    this._setText('gs-flight-ball-speed', `${Math.max(0, this.shotParams?.ballSpeed ?? 0).toFixed(0)}`);
+    if (this.state !== 'flight') this._setState('flight');
+  }
+
+  showResult(result) {
+    const shot = this.shotParams ?? this.getParams();
+    const offline = formatOffline(result.offlineYards);
+    const rollout = Math.max(0, result.totalYards - result.carryYards);
+    this._setText('gs-result-carry', result.carryYards.toFixed(1));
+    this._setText('gs-result-total', result.totalYards.toFixed(1));
+    this._setText('gs-result-offline', offline.value);
+    this._setText('gs-result-offline-unit', offline.unit);
+
+    const values = {
+      speed: `${fmt(shot.ballSpeed)} mph`,
+      launch: `${fmt(shot.launchAngle)}°`,
+      spin: `${Math.round(shot.spinRate).toLocaleString('en-US')} rpm`,
+      axis: formatDirectionalDegrees(shot.spinAxis),
+      apex: `${(result.apexMeters * 3.28084).toFixed(0)} ft`,
+      descent: `${result.descentDeg.toFixed(0)}°`,
+      landing: `${result.landingSpeedMph.toFixed(0)} mph`,
+      rollout: `${rollout.toFixed(1)} yd`,
+    };
+    for (const [key, value] of Object.entries(values)) this._setText(`gs-result-${key}`, value);
+    this.setLive('');
+    this._setState('results');
+  }
+
+  showAddress() {
+    this.setLive('');
+    this._setState('address');
   }
 
   setLive(text) {
-    this.live.textContent = text;
+    const clean = String(text ?? '').replace(/^\s*[—-]\s*|\s*[—-]\s*$/g, '');
+    this.status.textContent = clean;
+    this.root.classList.toggle('has-status', Boolean(clean));
+  }
+
+  _setState(state) {
+    this.state = state;
+    this.root.dataset.state = state;
+  }
+
+  _setText(id, value) {
+    const element = this.root.querySelector(`#${id}`);
+    if (element) element.textContent = value;
   }
 
   // ---- DOM ----------------------------------------------------------------
 
   _build() {
-    const panel = document.createElement('div');
+    const labToggle = document.createElement('button');
+    labToggle.id = 'gs-lab-toggle';
+    labToggle.type = 'button';
+    labToggle.setAttribute('aria-controls', 'gs-launch-lab');
+    labToggle.setAttribute('aria-expanded', 'false');
+    labToggle.textContent = 'Lab';
+    document.body.appendChild(labToggle);
+
+    const panel = document.createElement('section');
+    panel.id = 'gs-launch-lab';
     panel.className = 'gs-panel';
+    panel.setAttribute('aria-label', 'Launch controls');
     panel.innerHTML = `
-      <div class="gs-title">Launch Monitor</div>
-      <label class="gs-preset">Club
+      <div class="gs-lab-head">
+        <div><div class="gs-title">Shot Lab</div><div class="gs-lab-sub">Development inputs</div></div>
+        <button class="gs-lab-close" type="button" aria-label="Close launch controls">×</button>
+      </div>
+      <label class="gs-preset">Test profile
         <select id="gs-preset"></select>
       </label>
       <div id="gs-fields"></div>
@@ -99,65 +162,105 @@ export class MetricsPanel {
         <summary>Conditions</summary>
         <div id="gs-env"></div>
       </details>
-      <button id="gs-hit">Hit &nbsp;▸</button>
+      <button id="gs-hit" type="button">Hit shot</button>
       <div class="gs-hint">Space to hit · R to reset view</div>
     `;
     document.body.appendChild(panel);
 
-    const sel = panel.querySelector('#gs-preset');
-    for (const name of Object.keys(PRESETS)) {
-      const o = document.createElement('option');
-      o.value = o.textContent = name;
-      sel.appendChild(o);
+    const select = panel.querySelector('#gs-preset');
+    for (const name of Object.keys(DEVELOPMENT_LAUNCH_PRESETS)) {
+      const option = document.createElement('option');
+      option.value = option.textContent = name;
+      select.appendChild(option);
     }
-    sel.value = '7-iron';
-    sel.addEventListener('change', () => this.applyPreset(sel.value));
+    select.value = '7-iron';
+    select.addEventListener('change', () => this.applyPreset(select.value));
 
-    const fieldsEl = panel.querySelector('#gs-fields');
-    for (const f of FIELDS) fieldsEl.appendChild(this._field(f, this.values, f.key));
+    const fields = panel.querySelector('#gs-fields');
+    for (const field of FIELDS) fields.appendChild(this._field(field, this.values, field.key));
 
-    const envEl = panel.querySelector('#gs-env');
-    for (const f of ENV_FIELDS) {
-      envEl.appendChild(this._field(f, this.env, f.key, f.def, () => {
+    const environment = panel.querySelector('#gs-env');
+    for (const field of ENV_FIELDS) {
+      environment.appendChild(this._field(field, this.env, field.key, field.def, () => {
         this.onEnvironmentChange?.(this.getEnv());
       }));
     }
-    for (const f of ENV_SELECTS) envEl.appendChild(this._selectField(f));
+    for (const field of ENV_SELECTS) environment.appendChild(this._selectField(field));
 
     panel.querySelector('#gs-hit').addEventListener('click', () => this.onHit?.());
+    const setLabOpen = (open) => {
+      panel.classList.toggle('open', open);
+      labToggle.setAttribute('aria-expanded', String(open));
+    };
+    labToggle.addEventListener('click', () => setLabOpen(!panel.classList.contains('open')));
+    panel.querySelector('.gs-lab-close').addEventListener('click', () => setLabOpen(false));
+    window.addEventListener('keydown', (event) => {
+      if (event.code === 'Escape' && panel.classList.contains('open')) setLabOpen(false);
+    });
 
-    // Results HUD.
-    const hud = document.createElement('div');
-    hud.className = 'gs-hud';
-    document.body.appendChild(hud);
-    this.hud = hud;
+    const root = document.createElement('div');
+    root.className = 'gs-shot-ui';
+    root.dataset.state = 'address';
+    root.innerHTML = `
+      <button class="gs-ready gs-glass" data-shot-view="address" type="button">
+        <span class="gs-ready-title">Ready to hit</span>
+        <span class="gs-ready-sub">Hit shot</span>
+        <span class="gs-ready-line" aria-hidden="true"></span>
+      </button>
 
-    // Live tracer readout (top center).
-    const live = document.createElement('div');
-    live.className = 'gs-live';
-    document.body.appendChild(live);
-    this.live = live;
+      <div class="gs-flight-strip gs-glass" data-shot-view="flight" aria-live="polite">
+        ${liveMetric('Carry', 'gs-flight-carry', 'yd')}
+        ${liveMetric('Height', 'gs-flight-secondary', 'ft', 'gs-flight-secondary-label', 'gs-flight-secondary-unit')}
+        ${liveMetric('Ball speed', 'gs-flight-ball-speed', 'mph')}
+      </div>
 
+      <section class="gs-results gs-glass" data-shot-view="results" aria-label="Shot results">
+        <div class="gs-result-hero">
+          ${heroMetric('Carry', 'gs-result-carry', 'yd')}
+          ${heroMetric('Total', 'gs-result-total', 'yd')}
+          ${heroMetric('Offline', 'gs-result-offline', '', 'gs-result-offline-unit')}
+        </div>
+        <div class="gs-result-rule"></div>
+        <div class="gs-result-data" aria-label="Shot data">
+          ${resultMetric('Ball speed', 'gs-result-speed')}
+          ${resultMetric('Launch', 'gs-result-launch')}
+          ${resultMetric('Spin', 'gs-result-spin')}
+          ${resultMetric('Spin axis', 'gs-result-axis')}
+          ${resultMetric('Apex', 'gs-result-apex')}
+          ${resultMetric('Descent', 'gs-result-descent')}
+          ${resultMetric('Landing', 'gs-result-landing')}
+          ${resultMetric('Rollout', 'gs-result-rollout')}
+        </div>
+      </section>
+
+      <div class="gs-shot-status gs-glass" role="status"></div>
+    `;
+    document.body.appendChild(root);
+    root.querySelector('.gs-ready').addEventListener('click', () => this.onHit?.());
+
+    this.root = root;
+    this.status = root.querySelector('.gs-shot-status');
+    this.panel = panel;
     this._fieldEls = {};
-    panel.querySelectorAll('[data-key]').forEach((el) => {
-      this._fieldEls[el.dataset.key] = el;
+    panel.querySelectorAll('[data-key]').forEach((element) => {
+      this._fieldEls[element.dataset.key] = element;
     });
   }
 
-  _field(f, store, key, def, onInput) {
+  _field(field, store, key, def, onInput) {
     const wrap = document.createElement('div');
     wrap.className = 'gs-field';
-    const val = store[key] ?? def ?? 0;
+    const value = store[key] ?? def ?? 0;
     wrap.innerHTML = `
-      <div class="gs-field-top"><span>${f.label}</span><output>${fmt(val)} ${f.unit}</output></div>
-      <input type="range" min="${f.min}" max="${f.max}" step="${f.step}" value="${val}" data-key="${key}">
+      <div class="gs-field-top"><span>${field.label}</span><output>${formatFieldValue(field, value)}</output></div>
+      <input type="range" min="${field.min}" max="${field.max}" step="${field.step}" value="${value}" data-key="${key}">
     `;
     const input = wrap.querySelector('input');
-    const out = wrap.querySelector('output');
+    const output = wrap.querySelector('output');
     input.addEventListener('input', () => {
-      const v = parseFloat(input.value);
-      store[key] = v;
-      out.textContent = `${fmt(v)} ${f.unit}`;
+      const value = parseFloat(input.value);
+      store[key] = value;
+      output.textContent = formatFieldValue(field, value);
       onInput?.();
     });
     return wrap;
@@ -177,53 +280,199 @@ export class MetricsPanel {
     return wrap;
   }
 
-  _setField(key, v) {
-    const el = this._fieldEls?.[key];
-    if (!el) return;
-    el.value = v;
-    el.dispatchEvent(new Event('input'));
+  _setField(key, value) {
+    const element = this._fieldEls?.[key];
+    if (!element) return;
+    element.value = value;
+    element.dispatchEvent(new Event('input'));
   }
 
   _injectStyles() {
     if (document.getElementById('gs-style')) return;
-    const s = document.createElement('style');
-    s.id = 'gs-style';
-    s.textContent = `
-      .gs-panel{position:fixed;top:16px;left:16px;width:280px;padding:16px;z-index:20;
-        background:rgba(14,20,26,.82);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);
-        border-radius:14px;color:#e7f0eb;font:500 14px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-        box-shadow:0 12px 40px rgba(0,0,0,.4)}
-      .gs-title{font-weight:750;letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:rgba(231,240,235,.82);margin-bottom:12px}
-      .gs-preset{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:rgba(231,240,235,.92)}
-      .gs-preset select{flex:1;background:#0d151b;color:#dbe7e0;border:1px solid rgba(255,255,255,.12);
-        border-radius:8px;padding:6px 8px;font:500 13px -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
-      .gs-field{margin-bottom:11px}
-      .gs-field-top{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
-      .gs-field-top span{color:rgba(231,240,235,.78)}.gs-field-top output{font-variant-numeric:tabular-nums;font-weight:700;color:#9aebae}
-      .gs-field input[type=range]{width:100%;accent-color:#4caf72;height:16px}
-      .gs-select-field{display:flex;align-items:center;justify-content:space-between;gap:12px}
-      .gs-select-field .gs-field-top{margin:0}.gs-select-field select{min-width:112px;background:#0d151b;color:#dbe7e0;
-        border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;font:500 12px system-ui}
-      .gs-env{margin:6px 0 12px}.gs-env summary{cursor:pointer;font-size:12px;color:rgba(231,240,235,.78);padding:4px 0}
-      #gs-hit{width:100%;padding:11px;border:0;border-radius:10px;cursor:pointer;
-        background:linear-gradient(180deg,#39b56a,#2b8a50);color:#04160c;font-weight:800;font-size:14px;letter-spacing:.03em}
-      #gs-hit:hover{filter:brightness(1.08)}#gs-hit:active{transform:translateY(1px)}
-      .gs-hint{margin-top:9px;font-size:11px;color:rgba(231,240,235,.62);text-align:center}
-      .gs-hud{position:fixed;top:16px;right:16px;width:190px;z-index:20;padding:14px 16px;
-        background:rgba(14,20,26,.82);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);
-        border-radius:14px;color:#dbe7e0;font:13px system-ui;opacity:0;transform:translateY(-6px);
-        transition:opacity .4s,transform .4s}
-      .gs-hud.show{opacity:1;transform:none}
-      .gs-hud .row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06)}
-      .gs-hud .row:last-child{border:0}.gs-hud .row span{opacity:.6}.gs-hud .row b{color:#8fe0a6;font-variant-numeric:tabular-nums}
-      .gs-live{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:20;
-        font:600 15px system-ui;color:#eafff0;text-shadow:0 2px 8px rgba(0,0,0,.6);
-        font-variant-numeric:tabular-nums;pointer-events:none}
+    const style = document.createElement('style');
+    style.id = 'gs-style';
+    style.textContent = `
+      :root {
+        --shot-font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --shot-white: rgba(255,255,255,.97);
+        --shot-muted: rgba(255,255,255,.70);
+        --shot-green: #a3e7b3;
+        --shot-glass-border: rgba(255,255,255,.44);
+        --shot-glass-top: rgba(255,255,255,.105);
+        --shot-glass-middle: rgba(255,255,255,.018);
+        --shot-glass-bottom: rgba(0,0,0,.055);
+      }
+      .gs-shot-ui { position: fixed; inset: 0; z-index: 55; pointer-events: none;
+        color: var(--shot-white); font-family: var(--shot-font); font-variant-numeric: tabular-nums; }
+      .gs-glass, #gs-lab-toggle { border: 1px solid var(--shot-glass-border);
+        background:
+          radial-gradient(120% 95% at 16% -14%, rgba(255,255,255,.16), transparent 52%),
+          linear-gradient(180deg,var(--shot-glass-top),var(--shot-glass-middle) 47%,var(--shot-glass-bottom));
+        -webkit-backdrop-filter: blur(12px) saturate(1.24) brightness(.90);
+        backdrop-filter: blur(12px) saturate(1.24) brightness(.90);
+        box-shadow: 0 18px 46px rgba(2,8,4,.16), inset 0 1px 0 rgba(255,255,255,.58),
+          inset 0 -1px 0 rgba(0,0,0,.16), inset 1px 0 0 rgba(255,255,255,.10);
+        text-shadow: 0 1px 3px rgba(0,0,0,.30); }
+      .gs-shot-ui [data-shot-view] { position: absolute; opacity: 0; visibility: hidden;
+        transform: translate(-50%,12px) scale(.985); transition: opacity .28s ease, transform .42s cubic-bezier(.2,.75,.25,1), visibility .28s; }
+      .gs-shot-ui[data-state="address"] [data-shot-view="address"],
+      .gs-shot-ui[data-state="flight"] [data-shot-view="flight"],
+      .gs-shot-ui[data-state="results"] [data-shot-view="results"] {
+        opacity: 1; visibility: visible; transform: translate(-50%,0) scale(1); }
+      /* Rest is a hard telemetry ownership boundary. Retire the live strip in the
+         same style update instead of leaving two backdrop-filtered panes stacked
+         during a crossfade; Chromium can alternate their WebGPU backdrop captures
+         while the result camera continues moving. */
+      .gs-shot-ui[data-state="results"] [data-shot-view="flight"] {
+        opacity: 0; visibility: hidden; transition: none; }
+
+      #gs-lab-toggle { position: fixed; top: 16px; left: 16px; z-index: 61; min-width: 70px;
+        padding: 10px 18px; border-radius: 999px; color: var(--shot-white); cursor: pointer;
+        font: 600 14px/1 var(--shot-font); letter-spacing: .01em; opacity: .72;
+        transition: opacity .2s, background .2s, transform .2s; }
+      #gs-lab-toggle:hover, #gs-lab-toggle[aria-expanded="true"] { opacity: 1;
+        background-color: rgba(255,255,255,.10); transform: translateY(-1px); }
+
+      .gs-ready { left: 50%; bottom: 26px; width: min(360px,calc(100vw - 32px)); height: 98px;
+        border-radius: 28px; color: var(--shot-white); cursor: pointer; pointer-events: auto;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+        font-family: var(--shot-font); }
+      .gs-ready-title { font-size: 21px; line-height: 1.2; font-weight: 630; letter-spacing: -.015em; }
+      .gs-ready-sub { font-size: 13px; color: var(--shot-muted); }
+      .gs-ready-line { position: absolute; left: 46px; right: 46px; bottom: 8px; height: 2px;
+        border-radius: 2px; background: var(--shot-green); opacity: .78; }
+
+      .gs-flight-strip { left: 50%; bottom: 18px; width: min(570px,calc(100vw - 32px)); min-height: 82px;
+        border-radius: 26px; display: grid; grid-template-columns: repeat(3,1fr);
+        align-items: center; overflow: hidden; }
+      .gs-live-metric { min-width: 0; padding: 14px 30px; position: relative; }
+      .gs-live-metric + .gs-live-metric::before { content: ''; position: absolute; left: 0; top: 19px; bottom: 19px;
+        width: 1px; background: rgba(255,255,255,.25); }
+      .gs-live-label, .gs-result-label, .gs-data-label { display: block; font-size: 13px; line-height: 1.2;
+        font-weight: 520; color: var(--shot-muted); }
+      .gs-live-value { display: inline-block; margin-top: 4px; font-size: 31px; line-height: 1; font-weight: 650;
+        letter-spacing: -.03em; color: var(--shot-white); }
+      .gs-live-unit, .gs-result-unit { margin-left: 5px; font-size: 13px; color: var(--shot-muted); }
+
+      .gs-results { left: 50%; bottom: 16px; width: min(1180px,calc(100vw - 32px)); min-height: 238px;
+        padding: 24px 32px 22px; border-radius: 30px;
+        /* Keep the held data optically stable over the moving result orbit. The
+           layered translucent fill retains the liquid-glass depth, but this one
+           large surface does not repeatedly recapture/blur the WebGPU canvas. */
+        background:
+          radial-gradient(120% 95% at 16% -14%,rgba(255,255,255,.14),transparent 52%),
+          linear-gradient(180deg,rgba(24,43,31,.86),rgba(8,20,13,.82));
+        -webkit-backdrop-filter: none; backdrop-filter: none;
+        transform: translate(-50%,0); transition: opacity .18s ease, visibility .18s; }
+      .gs-result-hero { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); max-width: 760px; }
+      .gs-hero-metric { min-width: 0; padding-right: 28px; }
+      .gs-hero-metric + .gs-hero-metric { border-left: 1px solid rgba(255,255,255,.26); padding-left: 28px; }
+      .gs-result-value { display: inline-block; margin-top: 5px; font-size: clamp(34px,4vw,50px); line-height: .98;
+        font-weight: 640; letter-spacing: -.04em; color: var(--shot-white); }
+      .gs-hero-metric:last-child .gs-result-value { color: var(--shot-green); }
+      .gs-result-rule { height: 1px; margin: 20px 0 17px; background: linear-gradient(90deg,rgba(255,255,255,.34),rgba(255,255,255,.11) 72%,transparent); }
+      .gs-result-data { display: grid; grid-template-columns: repeat(8,minmax(0,1fr)); gap: 18px; }
+      .gs-data-value { display: block; margin-top: 5px; font-size: 18px; line-height: 1.1; font-weight: 590;
+        color: var(--shot-white); white-space: nowrap; }
+
+      .gs-shot-status { position: absolute; left: 50%; top: 92px; transform: translateX(-50%);
+        padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; }
+      .gs-shot-ui.has-status .gs-shot-status { opacity: 1; }
+
+      .gs-panel { position: fixed; top: 68px; left: 16px; width: 292px; max-height: calc(100vh - 84px); overflow: auto;
+        padding: 16px; z-index: 62; color: var(--shot-white); font: 500 14px/1.35 var(--shot-font);
+        background: linear-gradient(180deg,rgba(22,37,29,.78),rgba(9,18,13,.74));
+        border: 1px solid rgba(255,255,255,.24); border-radius: 22px;
+        -webkit-backdrop-filter: blur(22px) saturate(1.1); backdrop-filter: blur(22px) saturate(1.1);
+        box-shadow: 0 20px 60px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.18);
+        opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-8px) scale(.98);
+        transition: opacity .22s, transform .32s cubic-bezier(.2,.75,.25,1), visibility .22s; }
+      .gs-panel.open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+      .gs-lab-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
+      .gs-title { font-weight: 680; font-size: 17px; letter-spacing: -.01em; }
+      .gs-lab-sub { margin-top: 2px; color: var(--shot-muted); font-size: 11px; }
+      .gs-lab-close { width: 30px; height: 30px; border: 1px solid rgba(255,255,255,.18); border-radius: 50%;
+        background: rgba(255,255,255,.07); color: var(--shot-white); cursor: pointer; font: 300 22px/1 var(--shot-font); }
+      .gs-preset { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px;
+        font-size: 12px; color: var(--shot-muted); }
+      .gs-preset select, .gs-select-field select { min-width: 0; background: rgba(4,12,7,.38); color: var(--shot-white);
+        border: 1px solid rgba(255,255,255,.17); border-radius: 9px; padding: 6px 8px; font: 500 12px var(--shot-font); }
+      .gs-preset select { flex: 1; }
+      .gs-field { margin-bottom: 10px; }
+      .gs-field-top { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 3px; font-size: 11px; }
+      .gs-field-top span { color: var(--shot-muted); }
+      .gs-field-top output { color: var(--shot-white); font-weight: 650; font-variant-numeric: tabular-nums; }
+      .gs-field input[type=range] { width: 100%; height: 15px; accent-color: var(--shot-green); }
+      .gs-select-field { display: flex; align-items: center; justify-content: space-between; }
+      .gs-select-field .gs-field-top { margin: 0; }
+      .gs-env { margin: 7px 0 12px; }
+      .gs-env summary { padding: 4px 0 8px; cursor: pointer; color: var(--shot-muted); font-size: 12px; }
+      #gs-hit { width: 100%; padding: 11px; border: 1px solid rgba(255,255,255,.22); border-radius: 12px;
+        background: rgba(126,226,154,.82); color: #092012; cursor: pointer; font: 700 13px var(--shot-font); }
+      .gs-hint { margin-top: 9px; color: rgba(245,250,246,.48); text-align: center; font-size: 10px; }
+
+      body:not([data-view="practice"]) .gs-shot-ui,
+      body:not([data-view="practice"]) #gs-lab-toggle,
+      body:not([data-view="practice"]) #gs-launch-lab { display: none !important; }
+      @media (max-width: 900px) {
+        .gs-results { padding: 20px 22px 18px; }
+        .gs-result-data { grid-template-columns: repeat(4,minmax(0,1fr)); row-gap: 14px; }
+      }
+      @media (max-width: 620px) {
+        #gs-lab-toggle { top: 10px; left: 10px; }
+        .gs-panel { top: 58px; left: 10px; width: calc(100vw - 20px); }
+        .gs-result-hero { gap: 0; }
+        .gs-hero-metric { padding-right: 12px; }
+        .gs-hero-metric + .gs-hero-metric { padding-left: 12px; }
+        .gs-result-label { font-size: 11px; }
+        .gs-result-value { font-size: clamp(27px,9vw,38px); }
+        .gs-result-unit { display: block; margin: 3px 0 0; }
+        .gs-result-data { grid-template-columns: repeat(2,minmax(0,1fr)); }
+        .gs-live-metric { padding: 13px 16px; }
+        .gs-live-value { font-size: 26px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .gs-shot-ui [data-shot-view], .gs-panel, #gs-lab-toggle { transition-duration: .01ms; }
+      }
+      @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+        .gs-glass, #gs-lab-toggle { background: rgba(18,25,21,.92); -webkit-backdrop-filter: none;
+          backdrop-filter: none; text-shadow: none; }
+      }
     `;
-    document.head.appendChild(s);
+    document.head.appendChild(style);
   }
 }
 
-function fmt(v) {
-  return Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(v % 1 ? 1 : 0);
+function liveMetric(label, id, unit, labelId = '', unitId = '') {
+  const labelAttribute = labelId ? ` id="${labelId}"` : '';
+  const unitAttribute = unitId ? ` id="${unitId}"` : '';
+  return `<div class="gs-live-metric"><span${labelAttribute} class="gs-live-label">${label}</span><span id="${id}" class="gs-live-value">0</span><span${unitAttribute} class="gs-live-unit">${unit}</span></div>`;
+}
+
+function heroMetric(label, id, unit, unitId = '') {
+  const idAttribute = unitId ? ` id="${unitId}"` : '';
+  return `<div class="gs-hero-metric"><span class="gs-result-label">${label}</span><span id="${id}" class="gs-result-value">—</span><span${idAttribute} class="gs-result-unit">${unit}</span></div>`;
+}
+
+function resultMetric(label, id) {
+  return `<div class="gs-data-metric"><span class="gs-data-label">${label}</span><span id="${id}" class="gs-data-value">—</span></div>`;
+}
+
+function formatOffline(value) {
+  const direction = value >= 0 ? 'R' : 'L';
+  return { value: `${direction} ${Math.abs(value).toFixed(1)}`, unit: 'yd' };
+}
+
+function fmt(value) {
+  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(value % 1 ? 1 : 0);
+}
+
+export function formatDirectionalDegrees(value) {
+  if (!Number.isFinite(value)) throw new TypeError('direction must be finite');
+  if (value === 0) return '0°';
+  return `${fmt(Math.abs(value))}° ${value < 0 ? 'L' : 'R'}`;
+}
+
+function formatFieldValue(field, value) {
+  return field.directional ? formatDirectionalDegrees(value) : `${fmt(value)} ${field.unit}`;
 }

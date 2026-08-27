@@ -77,7 +77,16 @@ export class Minimap {
       const j = Math.min(map.height - 1, Math.round(((y + 0.5) / h) * (map.height - 1)));
       for (let x = 0; x < w; x++) {
         const i = Math.min(map.width - 1, Math.round(((x + 0.5) / w) * (map.width - 1)));
-        const [r, g, b] = colFor(zoneAt(map, i, j, terrain.zones));
+        let [r, g, b] = colFor(zoneAt(map, i, j, terrain.zones));
+        const wx = map.bounds.minX + (i + 0.5) / map.texelsPerM;
+        const wz = map.bounds.minZ + (j + 0.5) / map.texelsPerM;
+        const transition = terrain.classifyBiomeAt?.(wx, wz)?.weights;
+        if (transition) {
+          const sand = Math.min(1, transition.drySand + transition.wetSand);
+          const water = Math.min(1, transition.shallowShelf + transition.deepOcean);
+          r = r * (1 - sand) + 194 * sand; g = g * (1 - sand) + 176 * sand; b = b * (1 - sand) + 128 * sand;
+          r = r * (1 - water) + 18 * water; g = g * (1 - water) + 91 * water; b = b * (1 - water) + 118 * water;
+        }
         const k = (y * w + x) * 4;
         img.data[k] = r; img.data[k + 1] = g; img.data[k + 2] = b; img.data[k + 3] = 255;
       }

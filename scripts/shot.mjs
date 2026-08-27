@@ -22,8 +22,9 @@
 // prints the mean sRGB of a few regions, which is how you answer "is the ground
 // actually black" with a number instead of an opinion.
 import { launch } from 'puppeteer-core';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
 import { decodePNG } from './lib/png.mjs';
 
@@ -94,28 +95,37 @@ else url.searchParams.set('asset', asset);
 if (!game && cameraPose) url.searchParams.set('cam', cameraPose.join(','));
 if (!game && cameraLook) url.searchParams.set('look', cameraLook.join(','));
 
-const browser = await launch({
-  executablePath: chrome,
-  headless: false,
-  args: [
-    // The whole point: a window Chrome will not throttle even though nobody is looking.
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    '--window-position=-4000,-4000',
-    `--window-size=${w},${h + 90}`,
-    '--enable-unsafe-webgpu',
-    '--hide-scrollbars',
-    '--mute-audio',
-  ],
-  defaultViewport: { width: w, height: h },
-});
+const userDataDir = await mkdtemp(join(tmpdir(), 'golfsim-shot-chrome-'));
+let browser;
+try {
+  browser = await launch({
+    executablePath: chrome,
+    headless: false,
+    userDataDir,
+    args: [
+      // The whole point: a window Chrome will not throttle even though nobody is looking.
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--window-position=-4000,-4000',
+      `--window-size=${w},${h + 90}`,
+      '--enable-unsafe-webgpu',
+      '--hide-scrollbars',
+      '--mute-audio',
+    ],
+    defaultViewport: { width: w, height: h },
+  });
+} catch (error) {
+  await rm(userDataDir, { recursive: true, force: true });
+  throw error;
+}
 
 const page = await browser.newPage();
 const logs = [];
 page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
-page.on('requestfailed', (r) => logs.push(`[404] ${r.url()}`));
+page.on('requestfailed', (r) => logs.push(`[requestfailed] ${r.url()} — ${r.failure()?.errorText || 'request failed'}`));
+page.on('response', (r) => { if (r.status() >= 400) logs.push(`[http] ${r.status()} ${r.url()}`); });
 
 try {
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -123,10 +133,47 @@ try {
   // Wait for the scene, then let --eval run against it before we start counting frames,
   // so an isolating tweak ("hide the blades and show me just the ground") is one flag
   // rather than a temporary source edit.
-  await page.waitForFunction(
-    (g) => (g ? window.golf?.sm?._ready : window.viewer?.current?.terrain),
-    { timeout: 60000, polling: 100 }, game,
-  );
+  try {
+    await page.waitForFunction(
+      (g) => (g ? window.golfBootstrap?.ready === true : window.viewer?.current?.terrain),
+      { timeout: 90000, polling: 100 }, game,
+    );
+  } catch (error) {
+    const state = await page.evaluate((g) => g ? ({
+      stage: window.golfBootstrap?.stage ?? null,
+      error: window.golfBootstrap?.diagnostics?.error ?? null,
+      stages: Array.from(window.golfBootstrap?.diagnostics?.stages ?? [], (entry) => ({ ...entry })),
+    }) : ({ viewerReady: Boolean(window.viewer?.current?.terrain) }), game).catch(() => null);
+    throw new Error(`Render readiness failed: ${JSON.stringify(state)}; ${error.message}`);
+  }
+  const qaPreflight = await page.evaluate((gameView) => {
+    const owner = gameView ? window.golf : window.viewer;
+    const sm = owner?.sm;
+    const backend = sm?.renderer?.backend;
+    return {
+      pageIdentity: { href: location.href, pathname: location.pathname, title: document.title, canvas: Boolean(document.querySelector('canvas')) },
+      bootstrap: gameView ? {
+        ready: window.golfBootstrap?.ready === true,
+        stage: window.golfBootstrap?.stage ?? null,
+        error: window.golfBootstrap?.diagnostics?.error ?? null,
+      } : null,
+      renderer: {
+        webgpuRenderer: sm?.renderer?.isWebGPURenderer === true,
+        webgpuBackend: backend?.isWebGPUBackend === true,
+        webglBackend: backend?.isWebGLBackend === true,
+        fallbackAdapter: backend?.isFallbackAdapter === true,
+      },
+      evaluatorCamera: gameView ? window.golf?.evaluatorCamera?.version ?? null : null,
+    };
+  }, game);
+  if (!qaPreflight.pageIdentity.canvas
+      || !qaPreflight.renderer.webgpuRenderer
+      || !qaPreflight.renderer.webgpuBackend
+      || qaPreflight.renderer.webglBackend
+      || qaPreflight.renderer.fallbackAdapter
+      || (game && (!qaPreflight.bootstrap?.ready || qaPreflight.evaluatorCamera !== '1.0'))) {
+    throw new Error(`Strict WebGPU preflight failed: ${JSON.stringify(qaPreflight)}`);
+  }
   if (game && (cameraPose || cameraLook)) {
     if (!cameraPose || !cameraLook) throw new Error('Game capture requires --cam and --look together.');
     await page.evaluate(({ position, lookAt, fov }) => {
@@ -174,6 +221,33 @@ try {
   // catches camera cuts, repeated temporal resets, and viewport churn that a frozen
   // evaluator-camera probe cannot exercise.
   if (shotTransitionSequence || shotFlightSequence) {
+    // Investor-facing continuous captures use the renderer's highest authored
+    // presentation contract by default. Dynamic sub-native scaling is useful for
+    // live device adaptation, but it turns narrow trunks and the tracer into
+    // avoidable one-pixel stair steps in recorded footage.
+    const captureQualityMode = String(arg('capture-quality', 'ultra'));
+    const captureRenderScale = Number(arg('capture-scale', 1));
+    if (captureRenderScale !== undefined && !Number.isFinite(captureRenderScale)) {
+      throw new Error('--capture-scale must be finite');
+    }
+    const presentationLock = await page.evaluate(({ mode, renderScale }) => {
+      const quality = window.golf?.quality;
+      if (typeof quality?.acquirePresentationLock !== 'function'
+          || typeof quality?.releasePresentationLock !== 'function') {
+        throw new Error('Quality presentation-lock API is unavailable.');
+      }
+      return quality.acquirePresentationLock({ mode, renderScale });
+    }, { mode: captureQualityMode, renderScale: captureRenderScale });
+    console.log(`presentation-lock ${JSON.stringify(presentationLock.presentationLock)}`);
+    // Applying a production render-resolution policy can invalidate/reallocate the
+    // full-screen targets on the following frame. Let that one intentional change
+    // settle before launch so every recorded shot frame has the same signature.
+    await page.evaluate(() => new Promise((resolve) => {
+      let frame = 0;
+      const tick = () => (++frame >= 4 ? resolve() : requestAnimationFrame(tick));
+      requestAnimationFrame(tick);
+    }));
+    try {
     // The engine API owns camera/live scene state, but the existing narrow public
     // shot boundary is the launch-monitor control. Dispatch it in-page so an
     // off-screen browser never depends on hit-testing an overlaid element.
@@ -246,6 +320,11 @@ try {
     if (jitteredMotionFrames.length) {
       throw new Error(`Shot transition exposed projection jitter on ${jitteredMotionFrames.length} moving-camera frames.`);
     }
+    } finally {
+      await page.evaluate((lockId) => {
+        window.golf.quality.releasePresentationLock(lockId);
+      }, presentationLock.presentationLock.id);
+    }
   }
 
   // Wait for real drawn frames, not for a timer. `viewer.frames` only advances inside
@@ -299,6 +378,38 @@ try {
   await mkdir(dirname(out), { recursive: true });
   const buf = await canvas.screenshot();
   await writeFile(out, buf);
+  const rendered = decodePNG(buf);
+  let nearBlack = 0;
+  let luminance = 0;
+  let luminanceSq = 0;
+  for (let pixel = 0; pixel < rendered.width * rendered.height; pixel++) {
+    const index = pixel * rendered.channels;
+    const value = 0.2126 * rendered.pixels[index]
+      + 0.7152 * rendered.pixels[index + 1]
+      + 0.0722 * rendered.pixels[index + 2];
+    luminance += value;
+    luminanceSq += value * value;
+    if (value < 4) nearBlack++;
+  }
+  const pixelCount = rendered.width * rendered.height;
+  const meanLuminance = luminance / pixelCount;
+  const luminanceStdDev = Math.sqrt(Math.max(0, luminanceSq / pixelCount - meanLuminance ** 2));
+  const nonBlank = nearBlack / pixelCount < 0.99 && luminanceStdDev > 1;
+  const healthErrors = logs.filter((entry) => /^\[(pageerror|requestfailed|http|error)\]/.test(entry));
+  console.log(`qa ${JSON.stringify({
+    ...qaPreflight,
+    content: {
+      width: rendered.width,
+      height: rendered.height,
+      nonBlank,
+      nearBlackPct: +(100 * nearBlack / pixelCount).toFixed(3),
+      meanLuminance: +meanLuminance.toFixed(2),
+      luminanceStdDev: +luminanceStdDev.toFixed(2),
+    },
+    health: { consoleNetworkErrors: healthErrors },
+  })}`);
+  if (!nonBlank) throw new Error('Rendered screenshot is blank or lacks meaningful image variation.');
+  if (healthErrors.length) throw new Error(`Console/network health failed: ${healthErrors.join('; ')}`);
 
   // Isolated asset silhouette probe. Compare the fully rendered subject against
   // the same production-lit scene with only that subject hidden; unlike a colour
@@ -492,5 +603,9 @@ try {
   const noise = /Autofill|DevTools|Download the React|has been renamed/;
   const interesting = logs.filter((l) => !noise.test(l));
   if (interesting.length) console.log('console:\n  ' + interesting.join('\n  '));
-  await browser.close();
+  try {
+    await browser.close();
+  } finally {
+    await rm(userDataDir, { recursive: true, force: true });
+  }
 }

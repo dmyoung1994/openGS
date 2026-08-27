@@ -19,22 +19,86 @@ import { BallLie } from './scene/BallLie.js';
 import { renderedBallSitDepth } from './scene/NearTurfPolicy.js';
 import { airDensity, airViscosity } from './physics/constants.js';
 import { loadCourse } from './course/course.js';
-import { MPH_TO_MS, DEG_TO_RAD, mph as toMph, M_TO_YARD } from './util/units.js';
+import { MPH_TO_MS, DEG_TO_RAD, M_TO_YARD } from './util/units.js';
 import {
   ENVIRONMENT_FRAME_STATE_VERSION, ENVIRONMENT_WIND_ALGORITHM_VERSION,
   EnvironmentFrameState,
 } from './environment/EnvironmentFrameState.js';
 import { EnvironmentGpuBindings } from './environment/EnvironmentGpuBindings.js';
+import { VisualQualityController } from './scene/VisualQualityController.js';
+import {
+  ENVIRONMENT_TIMELINE_ALGORITHM_VERSION,
+  ENVIRONMENT_TIMELINE_VERSION,
+  EnvironmentTimeline,
+  toEnvironmentFrameStateConfig,
+} from './environment/EnvironmentTimeline.js';
 import { createRng } from './util/random.js';
 import {
   loadEnvironmentCatalog, verifyEnvironmentCatalogAssets, collectEnvironmentAssetIds,
 } from './environment/EnvironmentCatalog.js';
+import { createVisualAssetResidency } from './assets/VisualAssetResidency.js';
+import { launchShotToBallParams } from './input/LaunchMonitorInput.js';
+import { DevelopmentLaunchMonitorAdapter } from './input/DevelopmentLaunchMonitorAdapter.js';
 
 // Clear alpine late-morning key from the left/downrange: a 37° elevation keeps
 // the source plausible while its lateral component gives terrain relief and
 // tree shadows a readable rake across the broadcast route. Every daylight
 // consumer receives this same authored direction through EnvironmentGpuBindings.
 const SUN = new Vector3(-0.72, 0.60, -0.32).normalize();
+const QUALITY_OUTPUT_PIXEL_CAPS = Object.freeze({
+  battery: 2_300_000,
+  balanced: 3_700_000,
+  quality: 5_760_000,
+  ultra: 8_300_000,
+});
+const VISUAL_ASSET_MANIFEST_URL = '/assets/visual-quality-manifest.json';
+const VISUAL_ASSET_VARIANT_FOR_MODE = Object.freeze({
+  critical: 'critical',
+  battery: 'critical',
+  balanced: 'balanced',
+  quality: 'quality',
+  ultra: 'ultra',
+});
+// Grass is the one scene workload with a safe, public runtime policy hook. Keep
+// the same material/compute graph and only reduce the bounded rough/deep-rough
+// population on lower modes. Maintained fairway and green turf are unaffected.
+const QUALITY_GRASS_WORKLOADS = Object.freeze({
+  battery: Object.freeze({ densityScale: 0.58, radiusScale: 0.68, farTierScale: 0.28 }),
+  balanced: Object.freeze({ densityScale: 0.74, radiusScale: 0.82, farTierScale: 0.55 }),
+  quality: Object.freeze({ densityScale: 0.90, radiusScale: 0.94, farTierScale: 0.82 }),
+  ultra: Object.freeze({ densityScale: 1.00, radiusScale: 1.00, farTierScale: 1.00 }),
+});
+const QUALITY_TREE_WORKLOADS = Object.freeze({
+  battery: 'battery',
+  balanced: 'balanced',
+  quality: 'quality',
+  ultra: 'ultra',
+});
+// WeatherSky keeps one volumetric representation across every mode. Quality only
+// selects one of its fixed ray/probe/detail budgets, and graph ownership changes at
+// the same infrequent mode boundary as the other runtime workloads.
+const QUALITY_WEATHER_WORKLOADS = Object.freeze({
+  battery: 'conservative',
+  balanced: 'balanced',
+  quality: 'high',
+  ultra: 'high',
+});
+const TIMELINE_RENDER_UPDATE_SECONDS = 2;
+const RESULT_HOLD_MS = 10_000;
+const MAX_ENVIRONMENT_WIND_SPEED_MPS = 15.6464;
+const DEFAULT_TIMELINE_LOCATION = Object.freeze({
+  latitude: 46.5,
+  longitude: 7.5,
+  elevationMeters: 1200,
+});
+const DEFAULT_TIMELINE_CLOCK = Object.freeze({
+  date: '2026-06-21',
+  time: '14:00:00.000Z',
+  // Real-time playback keeps the daylight continuous without turning every
+  // animation frame into a PMREM rebuild. Captures and time-lapse tooling can
+  // explicitly choose a faster rate through window.golf.timeline.
+  playback: Object.freeze({ paused: false, rate: 1 }),
+});
 const startupQuery = new URL(window.location.href).searchParams;
 const coursePath = startupQuery.get('course') === 'premium-range' ? '/premium-range.json' : '/course.json';
 
@@ -47,6 +111,13 @@ const bootstrapStartedAt = performance.now();
 const bootstrapDiagnostics = {
   stage: 'webgpu-initializing', completed: 0, total: 0, error: null,
   stages: [],
+  visualAssets: {
+    manifest: 'pending',
+    critical: 'pending',
+    activeVariant: null,
+    criticalRequiredFiles: 0,
+    criticalVerifiedFiles: 0,
+  },
 };
 function setBootstrapStage(stage, { detail = '', completed = 0, total = 0 } = {}) {
   bootstrapDiagnostics.stage = stage;
@@ -74,11 +145,293 @@ window.golfBootstrap = Object.freeze({
   get elapsedMs() { return Math.round(performance.now() - bootstrapStartedAt); },
 });
 let lighting;
+// Declared before the initial quality application: WebGPU is ready before the
+// course exists, so the first pass must be able to record the pending policy
+// without touching a not-yet-initialized lexical binding.
+let range = null;
+let qualityController = null;
+let appliedQualityState = null;
+let visualAssetResidency = null;
+let visualAssetManifestReady = Promise.resolve(null);
+let visualCriticalAssetsReady = Promise.resolve(null);
+let visualAssetManifestError = null;
+let visualCriticalAssetError = null;
+let visualAssetCriticalReady = false;
+let visualAssetCriticalPlan = null;
+let visualAssetCriticalVerified = new Set();
+let visualAssetActiveVariant = null;
+const visualAssetRequestPromises = new Map();
+const visualAssetRequestRecords = new Map();
+
+function setVisualAssetBootstrapStatus(patch) {
+  bootstrapDiagnostics.visualAssets = {
+    ...bootstrapDiagnostics.visualAssets,
+    ...patch,
+  };
+}
+
+function visualAssetVariantForMode(mode) {
+  return VISUAL_ASSET_VARIANT_FOR_MODE[mode] ?? 'balanced';
+}
+
+function visualAssetRequestKey(variantName, includeOptional) {
+  return `${variantName}:${includeOptional ? 'all' : 'required'}`;
+}
+
+function visualAssetRequestDiagnostic(variantName, includeOptional) {
+  const record = visualAssetRequestRecords.get(
+    visualAssetRequestKey(variantName, includeOptional),
+  );
+  return record ? { ...record } : null;
+}
+
+/**
+ * Start one manifest profile request and retain only JSON-safe request state.
+ * VisualAssetResidency owns file/profile coalescing; this wrapper only connects
+ * it to runtime mode changes and keeps optional failures observable without
+ * turning them into a placeholder or a startup fallback.
+ */
+function requestVisualAssetProfile(
+  variantName,
+  { includeOptional = variantName !== 'critical', projectedNeed, signal, onStage, background = false } = {},
+) {
+  const variant = visualAssetVariantForMode(variantName);
+  const key = visualAssetRequestKey(variant, includeOptional);
+  if (visualAssetRequestPromises.has(key)) return visualAssetRequestPromises.get(key);
+
+  if (!visualAssetResidency) {
+    const error = new Error('Visual asset residency is not initialized.');
+    const rejected = Promise.reject(error);
+    rejected.catch(() => {});
+    return rejected;
+  }
+
+  const record = {
+    variant,
+    includeOptional,
+    state: 'loading',
+    requestedAt: performance.now(),
+    completedAt: null,
+    error: null,
+  };
+  visualAssetRequestRecords.set(key, record);
+  const options = { includeOptional };
+  if (projectedNeed !== undefined) options.projectedNeed = projectedNeed;
+  if (signal !== undefined) options.signal = signal;
+  if (onStage !== undefined) options.onStage = onStage;
+
+  let request;
+  try {
+    request = visualAssetResidency.request(variant, options);
+  } catch (error) {
+    request = Promise.reject(error);
+  }
+  const promise = Promise.resolve(request)
+    .then((snapshot) => {
+      record.state = 'ready';
+      record.completedAt = performance.now();
+      return snapshot;
+    })
+    .catch((error) => {
+      record.state = 'failed';
+      record.completedAt = performance.now();
+      record.error = String(error?.message || error);
+      throw error;
+    });
+  visualAssetRequestPromises.set(key, promise);
+  if (background) promise.catch(() => {});
+  return promise;
+}
+
+function requestActiveVisualAssets() {
+  if (!visualAssetResidency || !qualityController) return null;
+  const activeMode = qualityController.snapshot().activeMode;
+  const variant = visualAssetVariantForMode(activeMode);
+  visualAssetActiveVariant = variant;
+  setVisualAssetBootstrapStatus({ activeVariant: variant });
+  // Battery maps to the required-only critical profile. Every richer profile
+  // includes its optional authored derivatives, but this promise is deliberately
+  // detached from the first-frame barrier.
+  return requestVisualAssetProfile(variant, {
+    includeOptional: variant !== 'critical',
+    background: true,
+  });
+}
+
+function visualAssetReadiness(variantName = null, options = {}) {
+  const requestedModeOrVariant = variantName ?? qualityController?.snapshot()?.activeMode ?? 'critical';
+  const variant = visualAssetVariantForMode(requestedModeOrVariant);
+  const includeOptional = options.includeOptional ?? variant !== 'critical';
+  return requestVisualAssetProfile(variant, {
+    ...options,
+    includeOptional,
+  });
+}
+
+function visualAssetDiagnostics() {
+  const quality = qualityController?.snapshot?.() ?? null;
+  const activeMode = quality?.activeMode ?? null;
+  const activeVariant = activeMode ? visualAssetVariantForMode(activeMode) : visualAssetActiveVariant;
+  return {
+    version: 1,
+    manifest: {
+      url: VISUAL_ASSET_MANIFEST_URL,
+      state: visualAssetResidency ? 'validated' : visualAssetManifestError ? 'failed' : 'loading',
+      version: visualAssetResidency?.manifest?.version ?? null,
+      manifestId: visualAssetResidency?.manifest?.manifestId ?? null,
+      error: visualAssetManifestError ? String(visualAssetManifestError?.message || visualAssetManifestError) : null,
+    },
+    startup: {
+      criticalReady: visualAssetCriticalReady,
+      criticalRequiredFiles: visualAssetCriticalPlan?.files.length ?? 0,
+      criticalVerifiedFiles: visualAssetCriticalVerified.size,
+      error: visualCriticalAssetError ? String(visualCriticalAssetError?.message || visualCriticalAssetError) : null,
+    },
+    active: {
+      mode: activeMode,
+      variant: activeVariant,
+      readiness: visualAssetResidency && activeVariant
+        ? visualAssetResidency.snapshot(activeVariant)
+        : null,
+      request: activeVariant
+        ? visualAssetRequestDiagnostic(activeVariant, activeVariant !== 'critical')
+        : null,
+    },
+    critical: {
+      readiness: visualAssetResidency ? visualAssetResidency.snapshot('critical') : null,
+      request: visualAssetRequestDiagnostic('critical', false),
+    },
+    residency: visualAssetResidency?.snapshot() ?? null,
+  };
+}
+
+const visualAssetsApi = Object.freeze({
+  diagnostics: visualAssetDiagnostics,
+  snapshot: visualAssetDiagnostics,
+  request: visualAssetReadiness,
+  readiness: visualAssetReadiness,
+  ready: visualAssetReadiness,
+});
+
+function qualityOutputPixelCap(mode) {
+  return QUALITY_OUTPUT_PIXEL_CAPS[mode] ?? QUALITY_OUTPUT_PIXEL_CAPS.balanced;
+}
+
+function applyVisualQuality(snapshot = qualityController?.snapshot()) {
+  if (!qualityController || !snapshot) return snapshot;
+  const outputPixelCap = qualityOutputPixelCap(snapshot.activeMode);
+  const previous = appliedQualityState;
+  const modeChanged = !previous || previous.activeMode !== snapshot.activeMode;
+  const resolutionChanged = !previous
+    || previous.activeMode !== snapshot.activeMode
+    || previous.renderScale !== snapshot.renderScale
+    || previous.outputPixelCap !== outputPixelCap;
+  if (resolutionChanged) {
+    sm.setRenderResolution({ outputPixelCap, internalRenderScale: snapshot.renderScale });
+  }
+
+  const grass = range?.grass;
+  const grassPolicy = QUALITY_GRASS_WORKLOADS[snapshot.activeMode]
+    ?? QUALITY_GRASS_WORKLOADS.balanced;
+  const grassChanged = Boolean(
+    grass?.setWorkloadPolicy
+    && (!previous
+      || previous.activeMode !== snapshot.activeMode
+      || previous.grassTarget !== grass),
+  );
+  if (grassChanged) {
+    // Grass.setWorkloadPolicy is deliberately bounded by its own normalizer and
+    // updates uniforms on the next Range.update; no graph or GPU allocation churn.
+    grass.setWorkloadPolicy(grassPolicy);
+  }
+
+  const treePolicy = QUALITY_TREE_WORKLOADS[snapshot.activeMode] ?? 'balanced';
+  const treeChanged = Boolean(
+    range?.setTreeWorkloadPolicy
+    && (!previous
+      || previous.activeMode !== snapshot.activeMode
+      || previous.treeTarget !== range),
+  );
+  if (treeChanged) {
+    range.setTreeWorkloadPolicy(treePolicy);
+    sm.invalidateTemporalHistory('tree workload policy');
+  }
+
+  const weatherPolicy = QUALITY_WEATHER_WORKLOADS[snapshot.activeMode] ?? 'balanced';
+  const weatherChanged = Boolean(
+    sm.weatherSky?.workload
+    && typeof sm.setWeatherSkyWorkload === 'function'
+    && (!previous
+      || previous.activeMode !== snapshot.activeMode
+      || previous.weatherTarget !== sm.weatherSky
+      || previous.weatherPolicy !== weatherPolicy),
+  );
+  if (weatherChanged) sm.setWeatherSkyWorkload(weatherPolicy);
+
+  if (resolutionChanged || grassChanged || treeChanged || weatherChanged || !previous) {
+    appliedQualityState = {
+      activeMode: snapshot.activeMode,
+      renderScale: snapshot.renderScale,
+      outputPixelCap,
+      grassTarget: grassChanged ? grass : previous?.grassTarget ?? null,
+      grassPolicy: grassChanged ? { ...grassPolicy } : previous?.grassPolicy ?? null,
+      treeTarget: treeChanged ? range : previous?.treeTarget ?? null,
+      treePolicy: treeChanged ? treePolicy : previous?.treePolicy ?? null,
+      weatherTarget: weatherChanged ? sm.weatherSky : previous?.weatherTarget ?? null,
+      weatherPolicy: weatherChanged ? weatherPolicy : previous?.weatherPolicy ?? null,
+    };
+  }
+  if (modeChanged && visualAssetCriticalReady) requestActiveVisualAssets();
+  return snapshot;
+}
+
+function qualitySnapshot() {
+  const snapshot = qualityController.snapshot();
+  return {
+    ...snapshot,
+    renderResolution: sm.readRenderResolutionDiagnostics(),
+    runtimeWorkloads: {
+      grass: range?.grass?.workloadPolicy ? { ...range.grass.workloadPolicy } : null,
+      trees: range?.treeWorkloadDiagnostics?.() ?? null,
+      waterReflections: range?.waterReflection?.diagnostics?.() ?? null,
+      weatherSky: sm.readWeatherSkyDiagnostics?.() ?? null,
+      supported: ['grass', 'trees', 'shadows', 'waterReflections', 'weatherSky'],
+      unsupported: [],
+    },
+  };
+}
+
+const qualityApi = Object.freeze({
+  setMode(mode, options) {
+    const snapshot = qualityController.setMode(mode, options ?? undefined);
+    applyVisualQuality(snapshot);
+    // A requested mode can change while its resolved active mode stays the
+    // same (for example auto -> quality). Let residency coalesce the request.
+    if (visualAssetCriticalReady) requestActiveVisualAssets();
+    return qualitySnapshot();
+  },
+  setRenderScale(scale) {
+    applyVisualQuality(qualityController.setRenderScale(scale));
+    return qualitySnapshot();
+  },
+  acquirePresentationLock(options) {
+    applyVisualQuality(qualityController.acquirePresentationLock(options));
+    return qualitySnapshot();
+  },
+  releasePresentationLock(lockId) {
+    applyVisualQuality(qualityController.releasePresentationLock(lockId));
+    return qualitySnapshot();
+  },
+  snapshot: qualitySnapshot,
+  // Workload consumers included in qualitySnapshot diagnostics must not call the
+  // full snapshot recursively. This view exposes controller policy only.
+  policySnapshot: () => qualityController.snapshot(),
+});
 
 function showFatalEnvironmentError(error) {
   console.error('Required environment initialization failed.', error);
   bootstrapDiagnostics.error = String(error?.message || error);
-  setBootstrapStage('failed', { detail: 'Required course assets could not be verified. Reload after fixing the asset or course.' });
+  setBootstrapStage('failed', { detail: 'Required environment or visual assets could not be verified. Reload after fixing the asset or course.' });
   let notice = document.getElementById('environment-fatal');
   if (!notice) {
     notice = document.createElement('div');
@@ -96,8 +449,78 @@ function showFatalEnvironmentError(error) {
 try {
   setBootstrapStage('webgpu-initializing', { detail: 'Acquiring the strict WebGPU device…' });
   await sm.initialize();
-  setBootstrapStage('webgpu-ready', { detail: 'WebGPU ready. Reading the environment manifest…' });
+  const navigatorHints = globalThis.navigator ?? {};
+  qualityController = new VisualQualityController({
+    environmentTier: sm.environmentTier,
+    hardwareConcurrency: navigatorHints.hardwareConcurrency,
+    deviceMemoryGiB: navigatorHints.deviceMemory,
+  });
+  applyVisualQuality();
+  setBootstrapStage('webgpu-ready', { detail: 'WebGPU ready. Loading the visual asset manifest…' });
   lighting = new Lighting(sm.scene, SUN, sm.environmentTier);
+
+  // Load and validate the renderer-independent visual manifest only after the
+  // strict WebGPU device exists. This path verifies bytes; it never creates a
+  // second loader, mutates an authored GLB, or supplies a visual substitute.
+  setVisualAssetBootstrapStatus({ manifest: 'loading' });
+  setBootstrapStage('visual-manifest-loading', {
+    detail: 'Loading and validating the versioned visual asset manifest…',
+  });
+  visualAssetManifestReady = createVisualAssetResidency(VISUAL_ASSET_MANIFEST_URL);
+  try {
+    visualAssetResidency = await visualAssetManifestReady;
+    setVisualAssetBootstrapStatus({
+      manifest: 'validated',
+      manifestVersion: visualAssetResidency.manifest.version,
+      manifestId: visualAssetResidency.manifest.manifestId,
+    });
+  } catch (error) {
+    visualAssetManifestError = error;
+    setVisualAssetBootstrapStatus({ manifest: 'failed' });
+    throw error;
+  }
+
+  // Critical is required-only by design. It is the startup/readiness barrier;
+  // the single optional critical entry and every richer profile remain outside
+  // the first valid frame contract.
+  visualAssetCriticalPlan = visualAssetResidency.plan('critical', { includeOptional: false });
+  visualAssetCriticalVerified = new Set();
+  setVisualAssetBootstrapStatus({
+    critical: 'loading',
+    criticalRequiredFiles: visualAssetCriticalPlan.files.length,
+    criticalVerifiedFiles: 0,
+  });
+  setBootstrapStage('visual-critical-assets', {
+    detail: `Verifying ${visualAssetCriticalPlan.files.length} required visual asset${visualAssetCriticalPlan.files.length === 1 ? '' : 's'}…`,
+    completed: 0,
+    total: visualAssetCriticalPlan.files.length,
+  });
+  visualCriticalAssetsReady = requestVisualAssetProfile('critical', {
+    includeOptional: false,
+    onStage: ({ stage, fileId }) => {
+      if (stage === 'verified' && fileId) visualAssetCriticalVerified.add(fileId);
+      setVisualAssetBootstrapStatus({ criticalVerifiedFiles: visualAssetCriticalVerified.size });
+      setBootstrapStage('visual-critical-assets', {
+        detail: `Verifying ${visualAssetCriticalPlan.files.length} required visual asset${visualAssetCriticalPlan.files.length === 1 ? '' : 's'}…`,
+        completed: visualAssetCriticalVerified.size,
+        total: visualAssetCriticalPlan.files.length,
+      });
+    },
+  }).then((snapshot) => {
+    visualAssetCriticalReady = true;
+    setVisualAssetBootstrapStatus({ critical: 'ready', criticalVerifiedFiles: visualAssetCriticalPlan.files.length });
+    setBootstrapStage('visual-critical-ready', {
+      detail: 'Required visual assets verified. Continuing with progressive quality residency…',
+      completed: visualAssetCriticalPlan.files.length,
+      total: visualAssetCriticalPlan.files.length,
+    });
+    return snapshot;
+  }).catch((error) => {
+    visualCriticalAssetError = error;
+    setVisualAssetBootstrapStatus({ critical: 'failed' });
+    throw error;
+  });
+  await visualCriticalAssetsReady;
 } catch (error) {
   showFatalEnvironmentError(error);
   throw error;
@@ -129,6 +552,10 @@ const director = new CameraDirector(sm.camera);
 let environmentState = null;
 let environmentBindings = null;
 let environmentTickRemainder = 0;
+let environmentTickCount = 0;
+let environmentTimeline = null;
+let environmentTimelineIso = null;
+let environmentTimelineRenderRemainder = 0;
 let env = null;
 
 // Broken alpine cumulus is the authored default: a low, sparse layer above the
@@ -138,11 +565,24 @@ let env = null;
 // because WeatherSky then compiles the clear analytic sky with no cloud grade at all.
 const DEFAULT_CLOUD_COVERAGE = 0.26;
 
+function hydrateEnvironmentState(state, tickCount) {
+  const ticks = Math.max(0, Math.floor(Number.isFinite(tickCount) ? tickCount : 0));
+  if (ticks === 0) return state;
+  // Reconstruct both sides of the temporal pair at the absolute fixed-tick
+  // position. This lets a timeline update replace the authored daylight config
+  // without resetting wind phase or making foliage jump back to time zero.
+  if (ticks > 1) state.advanceFixedTicks(ticks - 1);
+  state.advanceFixedTicks(1);
+  return state;
+}
+
 function makeEnvironmentState(seed, {
   windSpeedMph = 0, windDirectionDegrees = 0, cloudCoverage = DEFAULT_CLOUD_COVERAGE,
+  timelineSnapshot = environmentTimeline?.snapshot(),
+  tickCount = environmentTickCount,
 } = {}) {
   const azimuth = Math.atan2(SUN.x, SUN.z);
-  return new EnvironmentFrameState({
+  const fallbackConfig = {
     version: ENVIRONMENT_FRAME_STATE_VERSION,
     algorithmVersion: ENVIRONMENT_WIND_ALGORITHM_VERSION,
     seed: seed >>> 0,
@@ -151,14 +591,9 @@ function makeEnvironmentState(seed, {
       azimuthRadians: (azimuth + Math.PI * 2) % (Math.PI * 2),
       elevationRadians: Math.asin(SUN.y),
       intensity: 85000,
-      // At this ~37 degree solar elevation, a mildly warm 5200–5600 K source
-      // gives sunlit rock/turf separation without turning the shared atmosphere
-      // into a golden-hour preset.
       color: { r: 1.0, g: 0.955, b: 0.87 },
     },
     atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.0 },
-    // Higher, lighter broken alpine cumulus. Smaller parcels leave blue channels
-    // between crowns and keep the mountain silhouette readable from address.
     clouds: { coverage: cloudCoverage, density: 0.44, baseHeight: 1100, thickness: 1200, advectionScale: 1.0 },
     wind: {
       speed: windSpeedMph * MPH_TO_MS,
@@ -170,13 +605,35 @@ function makeEnvironmentState(seed, {
       gustSpatialFrequency: 0.035,
       gustTemporalFrequency: 0.27,
     },
-  });
+  };
+  const timelineConfig = timelineSnapshot
+    ? toEnvironmentFrameStateConfig(timelineSnapshot, { seed: seed >>> 0, tickSeconds: 1 / 120 })
+    : fallbackConfig;
+  const windSpeed = Math.min(MAX_ENVIRONMENT_WIND_SPEED_MPS, Math.max(0, windSpeedMph * MPH_TO_MS));
+  const windDirectionRadians = Math.min(Math.PI * 2, Math.max(0, windDirectionDegrees * DEG_TO_RAD));
+  const config = {
+    ...timelineConfig,
+    clouds: {
+      ...timelineConfig.clouds,
+      // Conditions-panel cloud coverage remains authoritative. Timeline weather
+      // can still supply the other atmospheric/cloud parameters continuously.
+      coverage: cloudCoverage,
+    },
+    wind: {
+      ...timelineConfig.wind,
+      // The panel owns shot conditions. These values are deliberately copied into
+      // the timeline-derived frame so physics and GPU wind share one answer.
+      speed: windSpeed,
+      directionRadians: windDirectionRadians,
+      turbulenceStrength: Math.min(1.4, windSpeed * 0.12),
+    },
+  };
+  return hydrateEnvironmentState(new EnvironmentFrameState(config), tickCount);
 }
 
-// `range` and `ball` are (re)created every time the course spec changes — the
-// prompt-driven builder edits course.json, and the whole course is rebuilt from it.
+// `ball` and the camera helpers are (re)created every time the course spec changes
+// — the prompt-driven builder edits course.json, and the whole course is rebuilt.
 // Kept as `let` so every closure below sees the current instance after a rebuild.
-let range = null;
 let ball = null;
 let freeCam = null;
 let evaluatorCamera = null;
@@ -185,9 +642,150 @@ let flying = false;
 let _resetTimer = null;
 let _rangeRetentionProbe = null;
 
+// The Lab is a provider adapter, not a privileged simulation path. Future SDK
+// integrations map their packets into LaunchMonitorAdapter and subscribe this same
+// canonical handoff; Ball.launch never needs provider-specific branches.
+const launchMonitor = new DevelopmentLaunchMonitorAdapter();
+launchMonitor.subscribeShots((shot) => hit(launchShotToBallParams(shot)));
+await launchMonitor.connect();
 const panel = new MetricsPanel({ onHit: hit, onEnvironmentChange: previewEnvironment });
 const turfPanel = new TurfPanel();
 const minimap = new Minimap();   // M to toggle; drawn from the same baked zone field as the turf
+
+const launchMonitorApi = Object.freeze({
+  snapshot: () => launchMonitor.snapshot(),
+  connect: () => launchMonitor.connect(),
+  disconnect: () => launchMonitor.disconnect(),
+  ingest: (shot, options) => launchMonitor.ingest(shot, options),
+  submit: (shot, options) => launchMonitor.ingest(shot, options),
+  get state() { return launchMonitor.state; },
+  get capabilities() { return launchMonitor.capabilities; },
+});
+
+function createEnvironmentTimeline(seed) {
+  const previous = environmentTimeline?.snapshot();
+  const conditions = panel.getEnv();
+  return new EnvironmentTimeline({
+    version: ENVIRONMENT_TIMELINE_VERSION,
+    algorithmVersion: ENVIRONMENT_TIMELINE_ALGORITHM_VERSION,
+    ...DEFAULT_TIMELINE_LOCATION,
+    date: previous?.date ?? DEFAULT_TIMELINE_CLOCK.date,
+    time: previous?.time ?? DEFAULT_TIMELINE_CLOCK.time,
+    playback: previous?.playback ?? DEFAULT_TIMELINE_CLOCK.playback,
+    seed: seed >>> 0,
+    tickSeconds: 1 / 120,
+    weather: {
+      atmosphere: {
+        turbidity: 2.3,
+        rayleigh: 1.7,
+        mieCoefficient: 0.005,
+        mieDirectionalG: 0.76,
+        exposure: 1.0,
+      },
+      clouds: {
+        coverage: conditions.cloudCover / 100,
+        density: 0.44,
+        baseHeight: 1100,
+        thickness: 1200,
+        advectionScale: 1.0,
+      },
+      wind: {
+        speed: Math.min(MAX_ENVIRONMENT_WIND_SPEED_MPS, conditions.windSpeed * MPH_TO_MS),
+        directionRadians: conditions.windDir * DEG_TO_RAD,
+        referenceHeight: 10,
+        shearExponent: 0.18,
+        gustStrength: 0.28,
+        turbulenceStrength: Math.min(1.4, conditions.windSpeed * MPH_TO_MS * 0.12),
+        gustSpatialFrequency: 0.035,
+        gustTemporalFrequency: 0.27,
+      },
+    },
+  });
+}
+
+function updateTerrainSun() {
+  if (range?.terrain?.uSunDir && environmentBindings?.sunDirection?.value) {
+    range.terrain.uSunDir.value.copy(environmentBindings.sunDirection.value);
+  }
+}
+
+function syncTimelineEnvironment(snapshot = environmentTimeline?.snapshot(), { force = false } = {}) {
+  if (!snapshot || !range || !ball || !environmentBindings || flying) return snapshot;
+  if (!force && snapshot.iso === environmentTimelineIso) return snapshot;
+  const conditions = panel.getEnv();
+  environmentState = makeEnvironmentState(range.environmentSeed, {
+    windSpeedMph: conditions.windSpeed,
+    windDirectionDegrees: conditions.windDir,
+    cloudCoverage: conditions.cloudCover / 100,
+    timelineSnapshot: snapshot,
+    tickCount: environmentTickCount,
+  });
+  environmentBindings.update(environmentState);
+  updateTerrainSun();
+  sm.refreshWeatherSkyClouds();
+  environmentTimelineIso = snapshot.iso;
+  environmentTimelineRenderRemainder = 0;
+  return snapshot;
+}
+
+function requireEnvironmentTimeline() {
+  if (!environmentTimeline) throw new Error('Environment timeline is not ready.');
+  return environmentTimeline;
+}
+
+const timelineApi = Object.freeze({
+  play(rate) {
+    const timeline = requireEnvironmentTimeline();
+    const snapshot = timeline.play(rate);
+    return syncTimelineEnvironment(snapshot, { force: true }) ?? snapshot;
+  },
+  pause() {
+    const timeline = requireEnvironmentTimeline();
+    const snapshot = timeline.pause();
+    return syncTimelineEnvironment(snapshot, { force: true }) ?? snapshot;
+  },
+  resume(rate) {
+    const timeline = requireEnvironmentTimeline();
+    const snapshot = timeline.resume(rate);
+    return syncTimelineEnvironment(snapshot, { force: true }) ?? snapshot;
+  },
+  seek(value) {
+    const timeline = requireEnvironmentTimeline();
+    const snapshot = timeline.seek(value);
+    return syncTimelineEnvironment(snapshot, { force: true }) ?? snapshot;
+  },
+  advance(seconds) {
+    const timeline = requireEnvironmentTimeline();
+    const snapshot = timeline.advance(seconds);
+    return syncTimelineEnvironment(snapshot, { force: true }) ?? snapshot;
+  },
+  advanceSimulation(seconds) {
+    const timeline = requireEnvironmentTimeline();
+    const snapshot = timeline.advanceSimulation(seconds);
+    return syncTimelineEnvironment(snapshot, { force: true }) ?? snapshot;
+  },
+  setPlaybackRate(rate) {
+    const timeline = requireEnvironmentTimeline();
+    timeline.setPlaybackRate(rate);
+    return timeline.snapshot();
+  },
+  snapshot() { return requireEnvironmentTimeline().snapshot(); },
+  // The timeline clock remains independently inspectable through snapshot(), but
+  // this boundary must return the state actually consumed by physics and GPU. The
+  // Conditions panel intentionally overrides timeline wind/cloud coverage, and an
+  // in-flight shot must never expose a newer daylight config to a caller using this
+  // value for deterministic replay.
+  frameStateConfig() {
+    requireEnvironmentTimeline();
+    return environmentState?.config ?? environmentTimeline.frameStateConfig();
+  },
+  get config() { return requireEnvironmentTimeline().config; },
+  get paused() { return requireEnvironmentTimeline().paused; },
+  get playbackRate() { return requireEnvironmentTimeline().playbackRate; },
+  get currentTime() { return requireEnvironmentTimeline().currentTime; },
+  get epochMilliseconds() { return requireEnvironmentTimeline().epochMilliseconds; },
+  get shotLocked() { return flying; },
+});
 
 // Attach the physics event handlers to a (freshly built) ball.
 function wireBall(b) {
@@ -199,14 +797,13 @@ function wireBall(b) {
     flying = false;
     director.onRest(b);
     panel.showResult(r);
-    panel.setLive('');
     // Driving range: hold the rotating result view, then glide back to the tee for
     // the next shot (so you hit from the mat every time). Skipped if a new shot is
     // already in the air, the free-fly cam is active, or we've left the range view.
     clearTimeout(_resetTimer);
     _resetTimer = setTimeout(() => {
       if (!flying && !freeCam?.active && shell.view === 'practice') toAddress({ smooth: true });
-    }, 4000);
+    }, RESULT_HOLD_MS);
   });
   b.on('hazard', (event) => {
     panel.setLive('— in the water —');
@@ -291,7 +888,7 @@ function toAddress({ smooth = false } = {}) {
   lighting.follow(ball.position.x, ball.position.z);
   if (smooth) director.returnToAddress(ball.position, new Vector3(0, 0, -1));
   else director.setAddress(ball.position, new Vector3(0, 0, -1));
-  panel.setLive('');
+  panel.showAddress();
   // Only explicit/initial address changes are cuts. The automatic result return keeps
   // temporal history because CameraDirector continuously damps the whole move.
   if (!smooth) sm.invalidateTemporalHistory('address camera cut');
@@ -311,11 +908,25 @@ function buildCourse(course) {
     range.dispose();
   }
   flying = false;
+  const seedChanged = !environmentTimeline || environmentTimeline.config.seed !== course.environmentSeed;
+  if (seedChanged) {
+    environmentTimeline = createEnvironmentTimeline(course.environmentSeed);
+    environmentTimelineIso = null;
+    environmentTimelineRenderRemainder = 0;
+    environmentTickRemainder = 0;
+    environmentTickCount = 0;
+    environmentState = null;
+  }
   if (!environmentState || environmentState.config.seed !== course.environmentSeed) {
     // Carry the panel's current cloud setting across a course rebuild so a slider
     // change is not silently reverted by loading an edited course.json.
+    const conditions = panel.getEnv();
     environmentState = makeEnvironmentState(course.environmentSeed, {
-      cloudCoverage: panel.getEnv().cloudCover / 100,
+      windSpeedMph: conditions.windSpeed,
+      windDirectionDegrees: conditions.windDir,
+      cloudCoverage: conditions.cloudCover / 100,
+      timelineSnapshot: environmentTimeline.snapshot(),
+      tickCount: environmentTickCount,
     });
     if (environmentBindings) environmentBindings.update(environmentState);
     else environmentBindings = new EnvironmentGpuBindings(environmentState);
@@ -326,12 +937,16 @@ function buildCourse(course) {
       groundFirmness: panel.getEnv().groundFirmness,
     });
     sm.configureWeather(environmentBindings, sm.skyManifest);
+    environmentTimelineIso = environmentTimeline.snapshot().iso;
   }
   range = new Range(sm.scene, sm.camera, course, {
     renderer: sm.renderer, motionHistory: sm.motionHistory, lighting,
     environmentTier: sm.environmentTier, environment: environmentBindings,
     environmentCatalog,
   });
+  // Initial quality selection happens before Range construction. Apply the pending
+  // mode once the grass workload hook exists, and repeat this after every rebuild.
+  applyVisualQuality();
   ball = new Ball(range.terrain, env);
   wireBall(ball);
   // Free-fly cam persists across rebuilds (keeps its listeners); just re-point its
@@ -342,7 +957,8 @@ function buildCourse(course) {
   else freeCam.terrain = range.terrain;
   turfPanel.attach(range.terrain);   // live turf sliders (G) follow the rebuilt terrain
   minimap.attach(range.terrain);     // re-rasterise the hole for the new course
-  range.terrain.uSunDir.value.copy(SUN);   // canopy self-shadow marches toward the real key light
+  range.terrain.uSunDir.value.copy(SUN); // compatibility baseline before shared daylight is installed
+  updateTerrainSun();   // canopy self-shadow marches toward the shared daylight key
   // Dense supplemental blades improve long-grass macro views. Mown surfaces never
   // enable these helpers; their scale-correct PBR/parallax material remains continuous.
   for (const l of ballLie) {
@@ -356,10 +972,8 @@ function buildCourse(course) {
     new BallLie({ terrain: range.terrain, camera: sm.camera, motionHistory: sm.motionHistory, environment: environmentBindings, count: 7000, radius: 0.5, inner: 0.0, follow: 'camera' }),
   ];
   for (const l of ballLie) sm.scene.add(l.mesh);
-  divotPrepopDone = false;   // new terrain → re-stamp the used-tee divots once the renderer is live
   toAddress();
 }
-let divotPrepopDone = false;
 
 try {
   environmentCatalog = await environmentCatalogReady;
@@ -397,6 +1011,11 @@ try {
   await sm.weatherSky.ready;
   sm.rebuildDaylightPmrem();
   setBootstrapStage('ready', { detail: 'Range ready.' });
+  // Richer authored variants are deliberately requested only after the first
+  // complete production frame is eligible to present. Detaching the promise is
+  // not enough if a large background transfer competes with course GLBs during
+  // startup; this ordering keeps progressive residency truly post-critical.
+  requestActiveVisualAssets();
 } catch (error) {
   showFatalEnvironmentError(error);
   throw error;
@@ -430,6 +1049,7 @@ async function rebuildCourseFromDisk() {
     await sm.weatherSky.ready;
     sm.rebuildDaylightPmrem();
     setBootstrapStage('ready', { detail: 'Range ready.' });
+    requestActiveVisualAssets();
     document.getElementById('environment-fatal')?.remove();
     if (wasRunning || recoverFatalPause) sm.resumeRendering();
   } catch (error) {
@@ -443,16 +1063,23 @@ async function rebuildCourseFromDisk() {
 function applyEnvironmentConditions(conditions) {
   if (!range || !ball || !environmentBindings) return;
   const rho = airDensity({ altitude: conditions.altitude, temperatureC: conditions.temperatureC });
+  environmentTickRemainder = 0;
+  environmentTickCount = 0;
+  const timelineSnapshot = environmentTimeline?.snapshot();
   environmentState = makeEnvironmentState(range.environmentSeed, {
     windSpeedMph: conditions.windSpeed,
     windDirectionDegrees: conditions.windDir,
     cloudCoverage: conditions.cloudCover / 100,
+    timelineSnapshot,
+    tickCount: 0,
   });
   environmentBindings.update(environmentState);
+  updateTerrainSun();
   // The coverage uniform is already live for the next frame. This only rebuilds the
   // sky node on the clear/cloudy boundary, where the shader itself has to change.
   sm.refreshWeatherSkyClouds();
-  environmentTickRemainder = 0;
+  environmentTimelineIso = timelineSnapshot?.iso ?? environmentTimelineIso;
+  environmentTimelineRenderRemainder = 0;
   env = makeEnv({
     rho,
     viscosity: airViscosity(conditions.temperatureC),
@@ -471,18 +1098,30 @@ function previewEnvironment(conditions) {
   applyEnvironmentConditions(conditions);
 }
 
-function hit() {
+function hit(params = null) {
   if (flying || !ball) return;
+  if (!params) {
+    try {
+      launchMonitor.emitShot(panel.getLaunchInput());
+    } catch (error) {
+      panel.setLive(`Launch input unavailable: ${error?.message || error}`);
+    }
+    return;
+  }
   clearTimeout(_resetTimer);            // a new shot cancels any pending auto-reset
-  const params = panel.getParams();
-
+  // A launch-monitor shot arriving during the result hold is the user's request
+  // for the next ball. Return its physical origin to the tee before launch; the
+  // previous implementation could otherwise hit again from the landing position.
+  if (director.phase === 'result' || director.phase === 'return') {
+    toAddress();
+  }
   // Freeze a fresh deterministic environment at the exact shot boundary. This is
   // intentionally the same path used by the at-rest visual preview.
   applyEnvironmentConditions(panel.getEnv());
 
   tracer.promoteActiveToWhite();
   tracer.reset();
-  panel.hud.classList.remove('show');
+  panel.beginShot(params);
   ball.launch(params);
   tracer.push(ball.start);
   director.onLaunch(ball);
@@ -596,7 +1235,9 @@ fpsEl.id = 'gs-fps';
 fpsEl.style.cssText = 'font:700 13px/1.3 ui-monospace,SFMono-Regular,monospace;color:#dff2e1;'
   + 'background:rgba(14,20,26,.72);padding:4px 8px;border-radius:6px;pointer-events:none;';
 (document.getElementById('gs-topright') || document.body).appendChild(fpsEl);
+fpsEl.style.display = 'none';
 let _fpsLast = performance.now(), _fpsN = 0, _fpsAcc = 0, _fps = 0;
+let _qualityLastFrameAt = null;
 function updateFpsMeter() {
   const now = performance.now();
   _fpsAcc += (now - _fpsLast) / 1000; _fpsLast = now; _fpsN++;
@@ -611,15 +1252,79 @@ function updateFpsMeter() {
   }
 }
 
-// Main update.
-sm.onUpdate((dt, t) => {
-  environmentTickRemainder += dt;
+function ingestQualityFrame() {
+  const now = performance.now();
+  if (!qualityController || !Number.isFinite(now) || sm.renderingPaused) {
+    // Native timestamp capture steps production frames synchronously while the
+    // animation loop is paused. Those diagnostic submissions are not presentation
+    // cadence, so reset the wall clock instead of teaching Auto that they are very
+    // fast live frames.
+    _qualityLastFrameAt = Number.isFinite(now) ? now : null;
+    return;
+  }
+  // Measure presentation cadence independently of simulation time. In particular,
+  // evaluatorCamera.freeze() intentionally reports a zero simulation dt while the
+  // live WebGPU animation loop continues; those presented frames must still drive
+  // Auto quality and its 30/60 fps contracts.
+  const frameMs = Number.isFinite(_qualityLastFrameAt)
+    ? Math.max(0, now - _qualityLastFrameAt)
+    : null;
+  _qualityLastFrameAt = now;
+  if (!(frameMs > 0)) return;
+  const snapshot = qualityController.ingestSample({
+    frameMs,
+    atMs: Number.isFinite(now) ? now : undefined,
+  });
+  applyVisualQuality(snapshot);
+}
+
+function updateEnvironment(dt) {
+  if (!environmentState || !environmentBindings) return;
+
+  const timelineSnapshot = environmentTimeline?.advance(dt);
+  const timelineChanged = Boolean(
+    timelineSnapshot && timelineSnapshot.iso !== environmentTimelineIso,
+  );
+  environmentTimelineRenderRemainder += Math.max(0, dt);
+  environmentTickRemainder += Math.max(0, dt);
   const environmentTicks = Math.floor(environmentTickRemainder / environmentState.config.tickSeconds);
   if (environmentTicks > 0) {
     environmentTickRemainder -= environmentTicks * environmentState.config.tickSeconds;
+    environmentTickCount += environmentTicks;
+  }
+
+  if (flying) {
+    // The active shot owns the exact EnvironmentFrameState it launched with.
+    // Advancing its fixed phase is deterministic; timeline daylight changes are
+    // intentionally held out of the physics/render bindings until the ball rests.
+    if (environmentTicks > 0) {
+      environmentState.advanceFixedTicks(environmentTicks);
+      environmentBindings.update(environmentState);
+    }
+    return;
+  }
+
+  const shouldSyncTimeline = timelineChanged
+    && environmentTimelineRenderRemainder >= TIMELINE_RENDER_UPDATE_SECONDS;
+  if (shouldSyncTimeline) {
+    syncTimelineEnvironment(timelineSnapshot);
+    return;
+  }
+
+  // With a paused timeline this is the normal path: keep the fixed wind phase
+  // moving without changing the daylight signature, so PMREM/shadow scheduling
+  // stays quiet. A running timeline is likewise advanced between its bounded
+  // daylight updates.
+  if (environmentTicks > 0) {
     environmentState.advanceFixedTicks(environmentTicks);
     environmentBindings.update(environmentState);
   }
+}
+
+// Main update.
+sm.onUpdate((dt, t) => {
+  ingestQualityFrame();
+  updateEnvironment(dt);
   // Thumbnail grab: let the current camera settle for a few frames, then capture its
   // real render. Never override the live camera for thumbnail generation.
   if (_thumbCountdown > 0) { _thumbCountdown--; if (_thumbCountdown === 0) thumbCapture(); }
@@ -632,14 +1337,23 @@ sm.onUpdate((dt, t) => {
       return;
     }
     syncBallMesh();
-    // One bounded point upload per presented frame. The GPU owns history,
-    // smoothing, ribbon expansion, and indirect draw count.
-    if (flying) tracer.push(ball.position);
-
-    const speed = ball.velocity.length();
-    const dist = Math.hypot(ball.position.x - ball.start.x, ball.position.z - ball.start.z) * M_TO_YARD;
-    const height = (ball.position.y - ball.start.y) * 3.28084;
-    panel.setLive(`${dist.toFixed(0)} yds   ·   ${height.toFixed(0)} ft   ·   ${toMph(speed).toFixed(0)} mph`);
+    // Ball.update can synchronously emit rest and switch the UI to final results.
+    // Never let the remainder of that same animation frame overwrite the terminal
+    // state with stale flight telemetry.
+    if (flying) {
+      // One bounded point upload per presented frame. The GPU owns history,
+      // smoothing, ribbon expansion, and indirect draw count.
+      tracer.push(ball.position);
+      const dist = Math.hypot(ball.position.x - ball.start.x, ball.position.z - ball.start.z) * M_TO_YARD;
+      const height = (ball.position.y - ball.start.y) * 3.28084;
+      const landed = ball.carryYards > 0;
+      panel.showFlight({
+        carryYards: landed ? ball.carryYards : dist,
+        heightFeet: height,
+        totalYards: dist,
+        landed,
+      });
+    }
 
     lighting.follow(ball.position.x, ball.position.z);
   }
@@ -658,9 +1372,7 @@ sm.onUpdate((dt, t) => {
   range.update(t);
   updateNearTurf(t);
   minimap.update(ball.position, sm.camera);
-  // Stamp the "used tee" divots on the GPU once the WebGPU backend is live (the
-  // update loop only runs after renderer.init, so it's safe here).
-  if (!divotPrepopDone && range) { range.terrain.prepopulateDivots(sm.renderer); divotPrepopDone = true; }
+  // Startup turf remains pristine. Only the shot-completion path stamps divots.
   evaluatorCamera.notifyFrame(sm.renderer.info.frame);
 });
 
@@ -699,6 +1411,10 @@ dismissLoadingAfterRendererReady();
 window.golf = {
   get ball() { return ball; },
   get range() { return range; },
+  quality: qualityApi,
+  visualAssets: visualAssetsApi,
+  timeline: timelineApi,
+  launchMonitor: launchMonitorApi,
   tracer,
   get freeCam() { return freeCam; },
   evaluatorCamera,
@@ -709,7 +1425,7 @@ window.golf = {
   // Resolves only after metadata, course-referenced binary hashes, runtime
   // decodes, and shared atmosphere readiness. Unused catalog derivatives are
   // deliberately outside this first-frame contract.
-  get environmentReady() { return Promise.all([environmentCatalogReady, environmentAssetIntegrityReady, range?.assetsReady, sm.weatherSky?.ready]); },
+  get environmentReady() { return Promise.all([environmentCatalogReady, environmentAssetIntegrityReady, visualAssetManifestReady, visualCriticalAssetsReady, range?.assetsReady, sm.weatherSky?.ready]); },
   get environmentLoadError() { return environmentLoadError; },
   refreshThumb: requestThumb,
   rebuild: rebuildCourseFromDisk,

@@ -3,10 +3,10 @@ import { surface } from '../physics/groundInteraction.js';
 
 // THE canonical gameplay-colour -> turf-albedo transform.
 //
-// Every surface that draws grass has to agree on this exactly, or blades stop
-// matching the ground they stand in. Terrain.js (ground) and Grass.js (blades) both
-// import from here; they used to carry duplicate copies under a "MUST stay identical"
-// comment, which is exactly the arrangement that lets them drift.
+// Every surface that draws grass derives from this one pigment family, or blades stop
+// matching the ground they stand in. Terrain.js (undercoat) and Grass.js (blades) both
+// import from here; the undercoat applies one calibrated lighting compensation after
+// the shared base because its upward normal receives substantially more sky fill.
 //
 // The numbers come from measuring a photographed sunlit fairway: turf sits at roughly
 // H 80 deg (0.22 — a YELLOW-green, not a pure green), S 0.20, L 0.36. An earlier
@@ -40,10 +40,15 @@ const ALBEDO_OF = { deepRough: 'rough' };
 // photograph puts it.
 const LIFT = { rough: 1.43 };
 
-// One shared pigment transform for the geometric rough blades and the terrain
-// directly beneath them. Keeping this here prevents a dense green canopy from
-// revealing a greyer substrate through normal inter-blade gaps.
+// Shared source pigment for geometric rough blades and the calibrated terrain
+// undercoat derived below.
 export const TURF_BLADE_SATURATION = 1.28;
+// The upward-facing substrate receives more sky fill than the crossed blade canopy.
+// Matching their raw albedo therefore still leaves pale yellow-green gaps between
+// the lit, self-shadowed blades. This restrained undercoat grade compensates for the
+// measured production lighting difference without changing density or blade pigment.
+export const TURF_UNDERCOAT_SATURATION = 1.80;
+export const TURF_UNDERCOAT_LIGHTNESS = 0.74;
 
 // Current fairway reels cut about 100 in / 2.54 m per pass. Alternating light/dark
 // lays therefore repeat every two passes (5.08 m), not at the former stylized 14 m
@@ -88,5 +93,17 @@ export function turfBladeBase(name, out = new Color()) {
   turfBase(name, out);
   out.getHSL(_hsl, SRGBColorSpace);
   out.setHSL(_hsl.h, Math.min(_hsl.s * TURF_BLADE_SATURATION, 1), _hsl.l, SRGBColorSpace);
+  return out;
+}
+
+export function turfUndercoatBase(name, out = new Color()) {
+  turfBladeBase(name, out);
+  out.getHSL(_hsl, SRGBColorSpace);
+  out.setHSL(
+    _hsl.h,
+    Math.min(_hsl.s * TURF_UNDERCOAT_SATURATION, 1),
+    _hsl.l * TURF_UNDERCOAT_LIGHTNESS,
+    SRGBColorSpace,
+  );
   return out;
 }

@@ -9,10 +9,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "benchmark:env": "node scripts/benchmark-environment.mjs",
+    "benchmark:visual-quality": "node scripts/benchmark-visual-quality.mjs",
     "benchmark:robustness": "node scripts/benchmark-environment-robustness.mjs",
+    "validate:flight": "node scripts/validate-ball-flight.mjs",
+    "capture:sizzle": "node scripts/capture-sizzle-reel.mjs",
     "capture:foliage": "node scripts/capture-generated-foliage-matrix.mjs",
     "promote:foliage": "node tools/foliage-pipeline/promote-pack.mjs",
     "verify:no-fallback-browser": "node scripts/verify-no-fallback-browser.mjs",
+    "verify:visual-assets": "node scripts/verify-visual-assets.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

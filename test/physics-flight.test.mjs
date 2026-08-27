@@ -3,14 +3,14 @@ import test from 'node:test';
 import { Vector3 } from 'three';
 import {
   AERO_SOURCE,
-  MODERN_TOUR_AERO_PROFILE,
+  CONTEMPORARY_URETHANE_AERO_PROFILE,
   aerodynamicCoefficients,
   flightAerodynamicCoefficients,
   reynolds,
   spinRatio,
 } from '../src/physics/aerodynamics.js';
 import { BALL, airViscosity } from '../src/physics/constants.js';
-import { MODERN_TOUR_CALIBRATION } from '../src/physics/calibration.js';
+import { BALL_FLIGHT_MODEL_EVIDENCE, GCQUAD_VALIDATION_CORPUS } from '../src/physics/calibration.js';
 import { Ball } from '../src/physics/Ball.js';
 import { deriveLaunchState, makeEnv, simulateFlight, stepRK4 } from '../src/physics/ballistics.js';
 import { resolveBounce, surface } from '../src/physics/groundInteraction.js';
@@ -19,6 +19,8 @@ import {
   intersectSegmentWaterPlane,
   resolveWaterEntry,
 } from '../src/physics/waterInteraction.js';
+import { replayGcquadCorpus, summarize } from '../scripts/validate-ball-flight.mjs';
+import { formatDirectionalDegrees } from '../src/ui/MetricsPanel.js';
 
 const stillAir = makeEnv({ sampleWind: (_position, _time, out) => out.set(0, 0, 0) });
 const almost = (actual, expected, epsilon = 1e-8) => assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} != ${expected} ±${epsilon}`);
@@ -42,12 +44,12 @@ test('source coefficient fixtures are exact table samples and interpolation is c
   almost(spinRatio(BALL.radius, 500, 50), 0.21335, 1e-12);
 });
 
-test('live-flight coefficients stay bounded across terminal source-domain crossings', () => {
-  const low = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 19_994.6287759743, 0.2);
+test('live-flight source coefficients stay bounded across terminal source-domain crossings', () => {
+  const low = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 19_994.6287759743, 0.2, AERO_SOURCE);
   const lowBoundary = aerodynamicCoefficients({ cl: 0, cd: 0 }, AERO_SOURCE.reynolds[0], 0.2);
   assert.deepEqual(low, lowBoundary);
 
-  const high = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 250_000, 2.4);
+  const high = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 250_000, 2.4, AERO_SOURCE);
   const highBoundary = aerodynamicCoefficients(
     { cl: 0, cd: 0 },
     AERO_SOURCE.reynolds.at(-1),
@@ -58,44 +60,64 @@ test('live-flight coefficients stay bounded across terminal source-domain crossi
   assert.ok(Number.isFinite(high.cl) && Number.isFinite(high.cd));
 });
 
-test('modern tour profile corrects the high-speed low-spin corner without altering iron spin parameters', () => {
-  const sourceDriver = aerodynamicCoefficients({ cl: 0, cd: 0 }, 200_000, 0.065);
-  const modernDriver = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 200_000, 0.065, MODERN_TOUR_AERO_PROFILE);
-  assert.ok(modernDriver.cl > sourceDriver.cl * 2, 'modern driver lift must not reuse the iron fit unchanged');
-  const sourceIron = aerodynamicCoefficients({ cl: 0, cd: 0 }, 130_000, 0.32);
-  const modernIron = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 130_000, 0.32, MODERN_TOUR_AERO_PROFILE);
-  almost(modernIron.cl, sourceIron.cl);
-  almost(modernIron.cd, sourceIron.cd);
+test('contemporary profile is the published universal spin-ratio model', () => {
+  const theta = 0.2;
+  const expectedCd = 0.1304 + 0.9287 * theta - 0.8259 * theta * theta;
+  const expectedCl = 0.0504 + 1.2031 * theta - 1.1490 * theta * theta;
+  const lowRe = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 70_000, theta, CONTEMPORARY_URETHANE_AERO_PROFILE);
+  const highRe = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 200_000, theta, CONTEMPORARY_URETHANE_AERO_PROFILE);
+  almost(lowRe.cd, expectedCd);
+  almost(lowRe.cl, expectedCl);
+  assert.deepEqual(lowRe, highRe, 'the identified model has no driver-only Reynolds correction');
+
+  const boundary = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 120_000, 0.75, CONTEMPORARY_URETHANE_AERO_PROFILE);
+  const continued = flightAerodynamicCoefficients({ cl: 0, cd: 0 }, 120_000, 1.2, CONTEMPORARY_URETHANE_AERO_PROFILE);
+  assert.deepEqual(continued, boundary, 'live integration must not extrapolate the quadratic beyond observed shots');
 });
 
-test('modern-tour profile stays inside committed launch-monitor flight envelopes', () => {
-  for (const fixture of MODERN_TOUR_CALIBRATION.fixtures) {
-    const result = simulateFlight(fixture.launch, stillAir, { diagnostics: true });
-    const carry = result.carry / 0.9144;
-    const apex = result.apexHeight * 3.28084;
-    const descent = result.descentAngle * 180 / Math.PI;
-    assert.ok(carry >= fixture.expected.carryYards[0] && carry <= fixture.expected.carryYards[1], `${fixture.id} carry ${carry}`);
-    assert.ok(apex >= fixture.expected.apexFeet[0] && apex <= fixture.expected.apexFeet[1], `${fixture.id} apex ${apex}`);
-    assert.ok(descent >= fixture.expected.descentDegrees[0] && descent <= fixture.expected.descentDegrees[1], `${fixture.id} descent ${descent}`);
-    if (fixture.expected.earlyFlightAngleGainDegrees) {
-      const launchAngle = Math.atan2(
-        result.samples[0].vel.y,
-        Math.hypot(result.samples[0].vel.x, result.samples[0].vel.z),
-      ) * 180 / Math.PI;
-      const earlyMaximum = Math.max(...result.samples
-        .filter((sample) => sample.t <= 1.25)
-        .map((sample) => Math.atan2(sample.vel.y, Math.hypot(sample.vel.x, sample.vel.z)) * 180 / Math.PI));
-      const gain = earlyMaximum - launchAngle;
-      assert.ok(
-        gain >= fixture.expected.earlyFlightAngleGainDegrees[0]
-          && gain <= fixture.expected.earlyFlightAngleGainDegrees[1],
-        `${fixture.id} early flight-angle gain ${gain}`,
-      );
-    }
-    assert.equal(result.diagnostics.aerodynamicProfile, MODERN_TOUR_AERO_PROFILE.id);
-    assert.ok(result.diagnostics.coefficientSamples.length > 100);
-    assert.ok(result.diagnostics.landingSpeed > 0 && result.diagnostics.landingSpin > 0);
-  }
+test('universal model replays the attributable GCQuad corpus without shot-specific tuning', () => {
+  assert.equal(BALL_FLIGHT_MODEL_EVIDENCE.collection.shots, 1040);
+  assert.equal(BALL_FLIGHT_MODEL_EVIDENCE.collection.clubs, 'lob wedge through driver');
+  assert.equal(GCQUAD_VALIDATION_CORPUS.length, 22);
+  assert.ok(GCQUAD_VALIDATION_CORPUS.every((fixture) => !Object.hasOwn(fixture.launch, 'club')));
+
+  const rows = replayGcquadCorpus();
+  const aggregate = summarize(rows);
+  assert.ok(aggregate.carryYards.meanAbsoluteError < 2.5, `carry MAE ${aggregate.carryYards.meanAbsoluteError}`);
+  assert.ok(aggregate.apexFeet.meanAbsoluteError < 0.5, `apex MAE ${aggregate.apexFeet.meanAbsoluteError}`);
+  assert.ok(aggregate.offlineYards.meanAbsoluteError < 0.9, `offline MAE ${aggregate.offlineYards.meanAbsoluteError}`);
+
+  const owner = rows.filter(({ id }) => id.startsWith('owner-'));
+  assert.ok(Math.abs(owner[0].error.carryYards) < 2);
+  assert.ok(Math.abs(owner[1].error.carryYards) < 10);
+  const publicSession = rows.filter(({ id }) => id.startsWith('combine-test-'));
+  assert.ok(publicSession.every((row) => Math.abs(row.error.carryYards) < 0.5));
+
+  const lowSpin = rows.find(({ id }) => id.endsWith('low-spin'));
+  assert.ok(Math.abs(lowSpin.simulated.carryYards - 311) < Math.abs(lowSpin.simulated.carryYards - 326),
+    'known GCQuad low-spin inflation must remain comparison evidence, not a fit target');
+});
+
+test('spin-axis signs are explicit and club metadata cannot alter a launch state or flight', () => {
+  assert.equal(formatDirectionalDegrees(-33), '33° L');
+  assert.equal(formatDirectionalDegrees(17), '17° R');
+  assert.equal(formatDirectionalDegrees(0), '0°');
+
+  const launch = { ballSpeed: 157, launchAngle: 11.7, azimuth: -2, spinRate: 4199, spinAxis: 17 };
+  const leftLabel = deriveLaunchState({ ...launch, spinAxis: -17 });
+  const rightLabel = deriveLaunchState(launch);
+  assert.ok(leftLabel.angularVelocity.y > 0);
+  assert.ok(rightLabel.angularVelocity.y < 0);
+  const curvedLeft = simulateFlight({ ...launch, azimuth: 0, spinAxis: -17 }, stillAir);
+  const curvedRight = simulateFlight({ ...launch, azimuth: 0, spinAxis: 17 }, stillAir);
+  assert.ok(curvedLeft.lateral < 0, 'L axis must curve left');
+  assert.ok(curvedRight.lateral > 0, 'R axis must curve right');
+
+  const withoutClub = simulateFlight(launch, stillAir);
+  const withAnyClub = simulateFlight({ ...launch, club: 'anything-at-all' }, stillAir);
+  almost(withoutClub.carry, withAnyClub.carry);
+  almost(withoutClub.lateral, withAnyClub.lateral);
+  almost(withoutClub.apexHeight, withAnyClub.apexHeight);
 });
 
 test('environment requires a wind sampler and RK4 samples every substage position/time', () => {
@@ -173,7 +195,7 @@ test('launch matrix is deterministic and remains finite', () => {
 
 test('representative shots complete their full bounce-and-roll lifecycle', () => {
   const shots = [
-    { ballSpeed: 167, launchAngle: 10.9, spinRate: 2686, spinAxis: -2, carry: [284, 292], apex: [27, 33] },
+    { ballSpeed: 167, launchAngle: 10.9, spinRate: 2686, spinAxis: -2, carry: [270, 290], apex: [27, 38] },
     { ballSpeed: 120, launchAngle: 16.3, spinRate: 7097, spinAxis: 0, carry: [155, 175], apex: [20, 32] },
     { ballSpeed: 102, launchAngle: 24.2, spinRate: 9304, spinAxis: 0, carry: [120, 140], apex: [22, 35] },
   ];

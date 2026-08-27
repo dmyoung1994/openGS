@@ -2,12 +2,24 @@
   "meta": {
     "name": "Practice Range",
     "mode": "realistic",
-    "schema": 2,
+    "schema": 3,
     "notes": "Augusta-inspired Southern parkland practice range with immaculate playable corridors, asymmetrical mature canopy framing, restrained native edges, and layered golfer-height depth."
   },
   "catalogVersion": 2,
   "placementAlgorithmVersion": 1,
   "biome": "temperate-maritime",
+  "biomeTransitions": [
+    {
+      "id": "resort-ocean-edge",
+      "from": "temperate-maritime",
+      "to": "marine-ocean",
+      "boundary": { "kind": "course-edge", "sides": ["min-x", "max-x", "min-z"] },
+      "profile": "natural-resort-beach",
+      "seed": 1843021,
+      "widthScale": 0.5,
+      "priority": 100
+    }
+  ],
   "environmentSeed": 1128746828,
   "bounds": { "minX": -110, "maxX": 110, "minZ": -340, "maxZ": 30 },
   "tee": { "x": 0, "z": 2, "boxHalfX": 3.2, "z0": -2, "z1": 6 },
@@ -75,25 +87,25 @@
   "environment": {
     "objectBudget": 700,
     "placements": [
-      { "id": "parkland-hero-left", "assetId": "polyhaven-tree-small-02", "x": -48, "z": -16, "rotationY": 5.55, "scale": 3.2 },
-      { "id": "parkland-hero-right", "assetId": "polyhaven-tree-small-02", "x": 48, "z": -14, "rotationY": 0.72, "scale": 3.05 },
-      { "id": "alpine-anchor-left-front", "assetId": "polyhaven-tree-small-02", "x": -60, "z": -70, "rotationY": 1.15, "scale": 1.2 },
-      { "id": "alpine-anchor-right-pond", "assetId": "polyhaven-tree-small-02", "x": 82, "z": -104, "rotationY": 4.35, "scale": 1.12 },
-      { "id": "alpine-anchor-left-mid", "assetId": "polyhaven-tree-small-02", "x": -72, "z": -205, "rotationY": 2.4, "scale": 1.25 },
-      { "id": "alpine-anchor-right-back", "assetId": "polyhaven-tree-small-02", "x": 72, "z": -250, "rotationY": 5.2, "scale": 1.15 },
-      { "id": "alpine-frame-left", "assetId": "polyhaven-tree-small-02", "x": -62, "z": -120, "rotationY": 0.72, "scale": 1.23 },
-      { "id": "alpine-frame-right", "assetId": "polyhaven-tree-small-02", "x": 68, "z": -152, "rotationY": 3.86, "scale": 1.2 },
-      { "id": "alpine-larch-accent-left-mid", "assetId": "polyhaven-tree-small-02", "x": -75, "z": -150, "rotationY": 1.4, "scale": 0.72 },
-      { "id": "alpine-larch-accent-right-front", "assetId": "polyhaven-tree-small-02", "x": 72, "z": -66, "rotationY": 3.9, "scale": 0.6 },
-      { "id": "alpine-larch-accent-left-back", "assetId": "polyhaven-tree-small-02", "x": -70, "z": -262, "rotationY": 5.6, "scale": 0.78 },
-      { "id": "alpine-midtier-left", "assetId": "polyhaven-tree-small-02", "x": -66, "z": -96, "rotationY": 2.1, "scale": 1.18 },
-      { "id": "alpine-midtier-right", "assetId": "polyhaven-tree-small-02", "x": 66, "z": -186, "rotationY": 4.4, "scale": 1.1 },
-      { "id": "alpine-understory-left-tee", "assetId": "polyhaven-tree-small-02", "x": -58, "z": -28, "rotationY": 5.3, "scale": 0.68 },
-      { "id": "alpine-understory-right-tee", "assetId": "polyhaven-tree-small-02", "x": 58, "z": -34, "rotationY": 1.1, "scale": 0.72 },
-      { "id": "alpine-understory-left-pond", "assetId": "polyhaven-tree-small-02", "x": -62, "z": -128, "rotationY": 2.9, "scale": 0.78 },
-      { "id": "alpine-understory-right-pond", "assetId": "polyhaven-tree-small-02", "x": 88, "z": -144, "rotationY": 4.8, "scale": 0.68 },
-      { "id": "alpine-understory-left-back", "assetId": "polyhaven-tree-small-02", "x": -64, "z": -226, "rotationY": 0.55, "scale": 0.75 },
-      { "id": "alpine-understory-right-back", "assetId": "polyhaven-tree-small-02", "x": 64, "z": -242, "rotationY": 3.7, "scale": 0.65 },
+      { "id": "parkland-hero-left", "assetId": "blendkit-palm-tree-medium-dense", "x": -48, "z": -16, "rotationY": 5.55, "scale": 1.05 },
+      { "id": "parkland-hero-right", "assetId": "blendkit-palm-tree-medium-dense", "x": 48, "z": -14, "rotationY": 0.72, "scale": 0.98 },
+      { "id": "alpine-anchor-left-front", "assetId": "blendkit-palm-tree-medium-dense", "x": -60, "z": -70, "rotationY": 1.15, "scale": 0.92 },
+      { "id": "alpine-anchor-right-pond", "assetId": "blendkit-palm-tree-medium-dense", "x": 82, "z": -104, "rotationY": 4.35, "scale": 0.9 },
+      { "id": "alpine-anchor-left-mid", "assetId": "blendkit-palm-tree-medium-dense", "x": -72, "z": -205, "rotationY": 2.4, "scale": 1.08 },
+      { "id": "alpine-anchor-right-back", "assetId": "blendkit-palm-tree-medium-dense", "x": 72, "z": -250, "rotationY": 5.2, "scale": 1.02 },
+      { "id": "alpine-frame-left", "assetId": "blendkit-palm-tree-medium-dense", "x": -62, "z": -120, "rotationY": 0.72, "scale": 1.0 },
+      { "id": "alpine-frame-right", "assetId": "blendkit-palm-tree-medium-dense", "x": 68, "z": -152, "rotationY": 3.86, "scale": 0.96 },
+      { "id": "alpine-larch-accent-left-mid", "assetId": "blendkit-palm-tree-medium-dense", "x": -75, "z": -150, "rotationY": 1.4, "scale": 0.78 },
+      { "id": "alpine-larch-accent-right-front", "assetId": "blendkit-palm-tree-medium-dense", "x": 72, "z": -66, "rotationY": 3.9, "scale": 0.72 },
+      { "id": "alpine-larch-accent-left-back", "assetId": "blendkit-palm-tree-medium-dense", "x": -70, "z": -262, "rotationY": 5.6, "scale": 0.82 },
+      { "id": "alpine-midtier-left", "assetId": "blendkit-palm-tree-medium-dense", "x": -66, "z": -96, "rotationY": 2.1, "scale": 0.94 },
+      { "id": "alpine-midtier-right", "assetId": "blendkit-palm-tree-medium-dense", "x": 66, "z": -186, "rotationY": 4.4, "scale": 0.91 },
+      { "id": "alpine-understory-left-tee", "assetId": "blendkit-palm-tree-medium-dense", "x": -58, "z": -28, "rotationY": 5.3, "scale": 0.74 },
+      { "id": "alpine-understory-right-tee", "assetId": "blendkit-palm-tree-medium-dense", "x": 58, "z": -34, "rotationY": 1.1, "scale": 0.78 },
+      { "id": "alpine-understory-left-pond", "assetId": "blendkit-palm-tree-medium-dense", "x": -62, "z": -128, "rotationY": 2.9, "scale": 0.8 },
+      { "id": "alpine-understory-right-pond", "assetId": "blendkit-palm-tree-medium-dense", "x": 88, "z": -144, "rotationY": 4.8, "scale": 0.75 },
+      { "id": "alpine-understory-left-back", "assetId": "blendkit-palm-tree-medium-dense", "x": -64, "z": -226, "rotationY": 0.55, "scale": 0.82 },
+      { "id": "alpine-understory-right-back", "assetId": "blendkit-palm-tree-medium-dense", "x": 64, "z": -242, "rotationY": 3.7, "scale": 0.76 },
       { "id": "fallen-trunk-left-front", "assetId": "polyhaven-dead-tree-trunk", "x": -62, "z": -55, "rotationY": 0.42, "scale": 1.08 },
       { "id": "fallen-trunk-right-mid", "assetId": "polyhaven-dead-tree-trunk", "x": 82, "z": -145, "rotationY": 2.65, "scale": 0.92 },
       { "id": "fallen-trunk-left-back", "assetId": "polyhaven-dead-tree-trunk", "x": -90, "z": -225, "rotationY": 5.55, "scale": 1.16 }
@@ -276,7 +288,7 @@
       },
       {
         "id": "forest-cluster-left-foreground",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 103841,
         "count": 9,
         "region": { "kind": "bounds", "minX": -84, "maxX": -55, "minZ": -112, "maxZ": 8 },
@@ -285,7 +297,7 @@
       },
       {
         "id": "forest-cluster-right-foreground",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 970301,
         "count": 8,
         "region": { "kind": "bounds", "minX": 55, "maxX": 82, "minZ": -78, "maxZ": 8 },
@@ -294,7 +306,7 @@
       },
       {
         "id": "forest-cluster-left-midground",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 516029,
         "count": 10,
         "region": { "kind": "bounds", "minX": -86, "maxX": -62, "minZ": -220, "maxZ": -132 },
@@ -303,7 +315,7 @@
       },
       {
         "id": "forest-cluster-right-midground",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 331907,
         "count": 9,
         "region": { "kind": "bounds", "minX": 84, "maxX": 100, "minZ": -220, "maxZ": -96 },
@@ -312,7 +324,7 @@
       },
       {
         "id": "forest-cluster-left-shoulder",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 128907,
         "count": 7,
         "region": { "kind": "bounds", "minX": -84, "maxX": -62, "minZ": -178, "maxZ": -130 },
@@ -321,7 +333,7 @@
       },
       {
         "id": "forest-cluster-right-shoulder",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 721643,
         "count": 6,
         "region": { "kind": "bounds", "minX": 84, "maxX": 100, "minZ": -170, "maxZ": -102 },
@@ -330,7 +342,7 @@
       },
       {
         "id": "grandfir-grove-left-tee",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 604117,
         "count": 6,
         "region": { "kind": "bounds", "minX": -82, "maxX": -60, "minZ": -60, "maxZ": -14 },
@@ -339,7 +351,7 @@
       },
       {
         "id": "grandfir-grove-right-mid",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 285093,
         "count": 6,
         "region": { "kind": "bounds", "minX": 84, "maxX": 103, "minZ": -132, "maxZ": -88 },
@@ -348,43 +360,43 @@
       },
       {
         "id": "forest-cluster-left-backdrop",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 418703,
         "count": 8,
-        "region": { "kind": "bounds", "minX": -82, "maxX": -62, "minZ": -326, "maxZ": -238 },
+        "region": { "kind": "bounds", "minX": -88, "maxX": -68, "minZ": -326, "maxZ": -238 },
         "minSpacing": 7,
         "semantic": "forest-cluster"
       },
       {
         "id": "forest-cluster-right-backdrop",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 759211,
         "count": 7,
-        "region": { "kind": "bounds", "minX": 64, "maxX": 84, "minZ": -322, "maxZ": -232 },
+        "region": { "kind": "bounds", "minX": 68, "maxX": 88, "minZ": -322, "maxZ": -232 },
         "minSpacing": 7,
         "semantic": "forest-cluster"
       },
       {
         "id": "grandfir-side-line-left",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 873541,
         "count": 42,
-        "region": { "kind": "bounds", "minX": -88, "maxX": -64, "minZ": -332, "maxZ": 12 },
+        "region": { "kind": "bounds", "minX": -92, "maxX": -68, "minZ": -332, "maxZ": 12 },
         "minSpacing": 7,
         "semantic": "forest-cluster"
       },
       {
         "id": "grandfir-side-line-right-pond",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 319867,
-        "count": 10,
+        "count": 2,
         "region": { "kind": "bounds", "minX": 84, "maxX": 104, "minZ": -152, "maxZ": -82 },
         "minSpacing": 7,
         "semantic": "forest-cluster"
       },
       {
         "id": "grandfir-side-line-right-front",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 319868,
         "count": 10,
         "region": { "kind": "bounds", "minX": 55, "maxX": 82, "minZ": -78, "maxZ": 12 },
@@ -393,10 +405,10 @@
       },
       {
         "id": "grandfir-side-line-right-back",
-        "assetIds": ["polyhaven-tree-small-02"],
+        "assetIds": ["blendkit-palm-tree-medium-dense"],
         "seed": 319869,
         "count": 24,
-        "region": { "kind": "bounds", "minX": 64, "maxX": 88, "minZ": -332, "maxZ": -155 },
+        "region": { "kind": "bounds", "minX": 68, "maxX": 92, "minZ": -332, "maxZ": -155 },
         "minSpacing": 7,
         "semantic": "forest-cluster"
       }

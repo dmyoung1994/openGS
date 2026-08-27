@@ -35,10 +35,12 @@ export class EnvironmentGpuBindings {
     this._changeListeners = new Set();
     this.daylightRevision = 0;
     this._daylightSignature = '';
+    this._frameState = state;
     this.update(state);
   }
 
   update(state) {
+    this._frameState = state;
     const snapshots = state.gpuUniformSnapshots();
     const current = snapshots.current.data;
     const previous = snapshots.previous.data;
@@ -71,6 +73,10 @@ export class EnvironmentGpuBindings {
     }
     for (const listener of this._changeListeners) listener(this);
     return this;
+  }
+
+  sampleWindCpu(position, time = this.time.value, out = { x: 0, y: 0, z: 0 }) {
+    return this._frameState.sampleWind(position, time, out);
   }
 
   _updateDaylightPalette(current) {

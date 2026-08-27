@@ -95,6 +95,6 @@ if (LIVE) {
 }
 
 server.listen(PORT, () => {
-  console.log(`\n  Claude GolfSim  ->  http://localhost:${PORT}`);
+  console.log(`\n  Rangeform  ->  http://localhost:${PORT}`);
   console.log(`  live-reload: ${LIVE ? 'on' : 'off'}   (LIVE=0 to disable)\n`);
 });

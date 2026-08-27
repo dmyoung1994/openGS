@@ -1,9 +1,11 @@
 import {
-  Mesh, MeshStandardNodeMaterial, Group, BufferGeometry, BufferAttribute,
+  Mesh, Group, BufferGeometry, BufferAttribute,
   TextureLoader, RepeatWrapping, SRGBColorSpace, NormalRGPacking,
 } from 'three';
+import { MeshStandardNodeMaterial } from 'three/webgpu';
 import { normalMap, texture, uv, vec2 } from 'three/tsl';
 import { Noise } from '../util/noise.js';
+import { signedDistanceToFeature } from '../course/featureGeometry.js';
 
 const _tex = new TextureLoader();
 const _edgeNoise = new Noise(11);
@@ -145,6 +147,71 @@ function conformingDisc(terrain, cx, cz, r, yOffset, { radial = 96, rings = 20, 
   geo.setIndex(idx);
   geo.computeVertexNormals();
   return geo;
+}
+
+// Fixed world-anchored detail patch for steep pot-bunker walls. It reuses the
+// same concentric-ring topology as the conforming sand overlay, but concentrates
+// rings at the wall/collar and follows the rounded outline rather than inventing
+// a second triangulation or circular authority.
+export function buildHazardPatchGeometry(feature, {
+  radial = 96, rings = 28, collarWidth = 0.16, yOffset = 0.010,
+  heightAt = null, normalAt = null,
+} = {}) {
+  if (radial < 96 || rings < 28) throw new RangeError('Pot-bunker patches require at least 96 angular segments and 28 radial rings.');
+  const boundaryAt = (angle) => {
+    if (!feature.shape?.length) return feature.r;
+    const dx = Math.cos(angle), dz = Math.sin(angle);
+    let low = 0, high = feature.r * 1.6;
+    for (let iteration = 0; iteration < 18; iteration++) {
+      const mid = (low + high) * 0.5;
+      if (signedDistanceToFeature(feature, feature.x + dx * mid, feature.z + dz * mid) >= 0) low = mid;
+      else high = mid;
+    }
+    return (low + high) * 0.5;
+  };
+  const centerHeight = heightAt ? heightAt(feature.x, feature.z) + yOffset : yOffset;
+  const positions = [feature.x, centerHeight, feature.z];
+  const normals = [];
+  const appendNormal = (x, z) => {
+    const normal = normalAt?.(x, z);
+    normals.push(normal?.x ?? 0, normal?.y ?? 1, normal?.z ?? 0);
+  };
+  appendNormal(feature.x, feature.z);
+  const uvArray = [0.5, 0.5];
+  for (let ring = 1; ring <= rings; ring++) {
+    const u = ring / rings;
+    const wallConcentrated = 1 - (1 - u) * (1 - u);
+    for (let segment = 0; segment < radial; segment++) {
+      const angle = segment / radial * Math.PI * 2;
+      const boundary = boundaryAt(angle);
+      const radius = boundary * wallConcentrated + collarWidth * Math.max(0, (u - 0.94) / 0.06);
+      const collarTaper = 1 - Math.max(0, (u - 0.90) / 0.10) * 0.78;
+      const x = feature.x + Math.cos(angle) * radius;
+      const z = feature.z + Math.sin(angle) * radius;
+      const height = heightAt ? heightAt(x, z) + yOffset * collarTaper : yOffset * collarTaper;
+      positions.push(x, height, z);
+      appendNormal(x, z);
+      uvArray.push(Math.cos(angle) * u * 0.5 + 0.5, Math.sin(angle) * u * 0.5 + 0.5);
+    }
+  }
+  const indices = [];
+  for (let segment = 0; segment < radial; segment++) indices.push(0, 1 + (segment + 1) % radial, 1 + segment);
+  for (let ring = 1; ring < rings; ring++) {
+    const inner = 1 + (ring - 1) * radial, outer = 1 + ring * radial;
+    for (let segment = 0; segment < radial; segment++) {
+      const next = (segment + 1) % radial;
+      indices.push(inner + segment, outer + next, outer + segment, inner + segment, inner + next, outer + next);
+    }
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
+  geometry.setAttribute('uv', new BufferAttribute(new Float32Array(uvArray), 2));
+  geometry.setIndex(indices);
+  if (!normalAt) geometry.computeVertexNormals();
+  geometry.name = 'pot-bunker-fixed-conforming-patch';
+  geometry.userData = { radialSegments: radial, radialRings: rings, collarWidth, worldAnchored: true };
+  return geometry;
 }
 
 // Core mesh builder — needs the sand textures ALREADY loaded. `spec` is plain

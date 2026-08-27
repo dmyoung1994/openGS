@@ -21,6 +21,10 @@ import {
 // ring while a shot is in progress would draw unrelated head/tail segments together,
 // which is a corrupt renderer state rather than a useful lower-quality mode.
 const SUBDIVISIONS = 8;
+const LIVE_TRACER_OPACITY = 0.78;
+const LIVE_TRACER_WIDTH_PIXELS = 5.2;
+const HISTORY_TRACER_OPACITY = 0.38;
+const HISTORY_TRACER_WIDTH_PIXELS = 2.2;
 
 function createRibbonGeometry(drawArgsAttr, instanceCount) {
   const positions = [];
@@ -69,10 +73,12 @@ function createRibbonMaterial({ points, pointCount, opacity, ribbonPixels, histo
   const viewCenter = cameraViewMatrix.mul(vec4(center, 1.0));
   const viewTangent = cameraViewMatrix.mul(vec4(tangent, 0.0)).xyz;
   const clip = cameraProjectionMatrix.mul(viewCenter);
+  const clipTangent = cameraProjectionMatrix.mul(vec4(viewTangent, 0.0));
   // A chase camera can look almost directly down the flight tangent. Normalizing
-  // its near-zero screen projection produced unstable ribbon spikes. Fall back to
-  // a horizontal screen-width basis for that end-on limit.
-  const tangentScreen = viewTangent.xy;
+  // its near-zero screen projection produced unstable ribbon spikes. Derive the
+  // direction after perspective projection (including clip-w change), then fall
+  // back to a horizontal screen-width basis only for the true end-on limit.
+  const tangentScreen = clipTangent.xy.mul(clip.w).sub(clip.xy.mul(clipTangent.w));
   const tangentScreenLength = tangentScreen.dot(tangentScreen).sqrt();
   const perpendicular = tangentScreenLength.greaterThan(0.0001).select(
     vec2(tangentScreen.y.negate(), tangentScreen.x).div(tangentScreenLength),
@@ -80,31 +86,43 @@ function createRibbonMaterial({ points, pointCount, opacity, ribbonPixels, histo
   );
   const along = float(segment).add(t).div(float(pointCount.sub(uint(1))).max(1.0));
   const tailTaper = smoothstep(0.0, 0.035, along);
-  const headProfile = mix(1.0, 0.34, smoothstep(0.62, 0.96, along));
+  // Keep the leading flight section substantial enough to follow the ball from
+  // wide broadcast cameras. It still tapers cleanly into the terminal sample,
+  // but no longer collapses the last third into a sub-two-pixel thread.
+  const headProfile = mix(1.0, 0.52, smoothstep(0.62, 0.96, along));
   const endpointTaper = tailTaper
     .mul(headProfile)
     .mul(oneMinus(smoothstep(0.985, 1.0, along)));
   const side = positionGeometry.x;
   // A clean broadcast ribbon keeps the trajectory readable over turf, trees, and
-  // the sky. The completed-shot branch uses the same silhouette in white so it
-  // remains a stable course-history mark instead of becoming a second effect.
+  // sky. It stays optically quiet: contrast comes from a soft neutral body and a
+  // restrained green leading edge, never a separate bloom or halo pass.
   const halfWidthPx = ribbonPixels.mul(0.5).mul(endpointTaper.max(0.025));
   const ndcOffset = perpendicular.mul(side).mul(halfWidthPx.mul(2.0)).div(screenSize);
   const finalClip = vec4(clip.xy.add(ndcOffset.mul(clip.w)), clip.z, clip.w);
 
-  const vSide = varying(side, 'vTracerSide');
-  const vAlong = varying(along, 'vTracerAlong');
-  const fragmentTaper = smoothstep(0.0, 0.035, vAlong)
-    .mul(oneMinus(smoothstep(0.985, 1.0, vAlong)));
+  // These are screen-space coverage coordinates, so linear (no-perspective)
+  // centroid interpolation avoids rotation-dependent warping and samples from
+  // outside a thin oblique triangle. Derivatives then widen both silhouette and
+  // endpoint transitions by their actual per-fragment pixel footprint.
+  const vSide = varying(side, 'vTracerSide').setInterpolation('linear', 'centroid');
+  const vAlong = varying(along, 'vTracerAlong').setInterpolation('linear', 'centroid');
+  const alongFootprint = vAlong.fwidth().abs();
+  const tailFeather = alongFootprint.mul(1.25).max(0.035).min(0.12);
+  const headFeather = alongFootprint.mul(1.25).max(0.015).min(0.08);
+  const fragmentTaper = smoothstep(0.0, tailFeather, vAlong)
+    .mul(oneMinus(smoothstep(oneMinus(headFeather), 1.0, vAlong)));
   const edge = float(1.0).sub(vSide.abs());
-  // The reference has no luminous halo or pale centre. A saturated blue body
-  // carries its contrast, with a roughly one-pixel analytic edge for clean TAA.
-  const edgeCoverage = smoothstep(0.0, 0.30, edge);
-  const deepBroadcastBlue = vec3(0.002, 0.052, 0.44);
-  const flightBlue = vec3(0.0, 0.18, 0.78);
+  // `vSide` spans -1..1 across the physical ribbon. Its fwidth therefore measures
+  // exactly how much of that span one pixel covers at the current width/rotation.
+  // The bounds keep broad lines crisp and sub-pixel tapers finite without a halo.
+  const edgeFeather = vSide.fwidth().abs().mul(0.75).clamp(0.08, 1.0);
+  const edgeCoverage = smoothstep(0.0, edgeFeather, edge);
+  const trailNeutral = vec3(0.84, 0.90, 0.84);
+  const flightGreen = vec3(0.34, 0.78, 0.46);
   const color = history
     ? vec3(1.0, 1.0, 1.0)
-    : mix(deepBroadcastBlue, flightBlue, smoothstep(0.04, 0.86, vAlong));
+    : mix(trailNeutral, flightGreen, smoothstep(0.70, 0.98, vAlong));
   const alpha = edgeCoverage.mul(fragmentTaper).mul(opacity).clamp(0.0, 1.0);
 
   const mat = new MeshBasicNodeMaterial({
@@ -134,8 +152,8 @@ class HistoricalTracer {
     this.points = storage(this.pointsAttr, 'vec4', points.length / 3).toReadOnly();
     this.pointCount = points.length / 3;
     this.uPointCount = uniform(this.pointCount, 'uint');
-    this.uOpacity = uniform(0.82);
-    this.uRibbonPixels = uniform(4.8);
+    this.uOpacity = uniform(HISTORY_TRACER_OPACITY);
+    this.uRibbonPixels = uniform(HISTORY_TRACER_WIDTH_PIXELS);
     this.drawArgsAttr = new IndirectStorageBufferAttribute(new Uint32Array([
       SUBDIVISIONS * 6, this.pointCount - 1, 0, 0, 0,
     ]), 5);
@@ -188,8 +206,8 @@ export class Tracer {
     this.uAppendIndex = uniform(0, 'uint');
     this.uPoint = uniform(this._point);
     this.uPointCount = uniform(0, 'uint');
-    this.uOpacity = uniform(1);
-    this.uRibbonPixels = uniform(6.4);
+    this.uOpacity = uniform(LIVE_TRACER_OPACITY);
+    this.uRibbonPixels = uniform(LIVE_TRACER_WIDTH_PIXELS);
 
     this._appendCompute = Fn(() => {
       this._points.element(this.uAppendIndex).assign(vec4(this.uPoint, 1.0));
@@ -245,7 +263,10 @@ export class Tracer {
     this._assertLive();
     this.count = 0;
     this.uPointCount.value = 0;
-    this.uOpacity.value = 1.0;
+    // Reset is the launch boundary for the same active material later held on the
+    // result screen. Restoring opaque alpha here made the orbit reveal stair-steps
+    // that were intentionally filtered in the constructor's presentation setup.
+    this.uOpacity.value = LIVE_TRACER_OPACITY;
     this.line.visible = false;
     this.renderer.compute(this._resetCompute);
   }

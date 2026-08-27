@@ -2,11 +2,173 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { alpineComposition, BackdropTerrain, sampleAlpineWorld } from '../src/scene/BackdropTerrain.js';
+import {
+  alpineComposition, BackdropTerrain, maritimeSeaLevel, sampleAlpineWorld, sampleMaritimeWorld,
+} from '../src/scene/BackdropTerrain.js';
+import { classifyBiomeAt } from '../src/course/BiomeRegistry.js';
 import { NORTH_CASCADES_DEM } from '../src/terrain/northCascadesDem.js';
 
 const bounds = { minX: -110, maxX: 110, minZ: -340, maxZ: 30 };
 const terrain = { heightAt: (x, z) => x * 0.002 + z * 0.001 };
+
+function coastalBiomeField(profile = 'natural-resort-beach') {
+  const course = {
+    biome: 'temperate-maritime', bounds,
+    biomeTransitions: [{
+      id: 'test-ocean-edge', from: 'temperate-maritime', to: 'marine-ocean',
+      boundary: { kind: 'course-edge', sides: ['min-x'] },
+      profile, seed: 1843021, widthScale: 1, priority: 100,
+    }],
+  };
+  return {
+    hasTransitions: true,
+    sample: (x, z) => classifyBiomeAt(course, x, z),
+  };
+}
+
+test('maritime backdrop replaces the hill shell with a coastal ocean horizon', async () => {
+  const backdrop = new BackdropTerrain({
+    terrain, bounds, seed: 1128746828, biome: 'temperate-maritime',
+  });
+  await backdrop.assetsReady;
+  assert.equal(backdrop.group.userData.backdropSource, 'maritime-coast-ocean');
+  assert.equal(backdrop.group.userData.oceanHorizon, true);
+  assert.equal(backdrop.group.userData.seaLevel, maritimeSeaLevel(terrain, bounds));
+
+  const coast = backdrop.group.children.filter((mesh) => mesh.name === 'maritime-coastal-apron');
+  const nearOcean = backdrop.group.children.filter((mesh) => mesh.name === 'maritime-ocean-near-shore');
+  const ocean = backdrop.group.children.filter((mesh) => mesh.name === 'maritime-ocean-horizon');
+  assert.equal(coast.length, 4, 'four coast patches must cover the rectangular course boundary');
+  assert.equal(nearOcean.length, 4, 'four fine ocean patches must follow the semantic near shore');
+  assert.equal(ocean.length, 4, 'four ocean patches must reach the horizon around the course');
+  assert.ok(ocean.every((mesh) => mesh.renderOrder === -3));
+  assert.ok(coast.every((mesh) => mesh.renderOrder === -2));
+  assert.ok(ocean.every((mesh) => !mesh.castShadow && !mesh.receiveShadow));
+  assert.ok(coast.every((mesh) => mesh.material.polygonOffset
+    && mesh.material.polygonOffsetFactor === 1 && mesh.material.polygonOffsetUnits === 1),
+  'the depth-safe overlap must resolve in favor of authoritative terrain');
+  assert.ok(backdrop.group.userData.seaLevel < terrain.heightAt(bounds.minX, bounds.minZ));
+  backdrop.dispose();
+});
+
+test('semantic maritime dunes meet the authoritative course edge continuously', () => {
+  const biomeField = coastalBiomeField();
+  const seed = 1128746828;
+  const z = -100;
+  const edge = sampleMaritimeWorld({
+    terrain, bounds, seed, biomeField, x: bounds.minX, z,
+  });
+  const justOutside = sampleMaritimeWorld({
+    terrain, bounds, seed, biomeField, x: bounds.minX - 0.001, z,
+  });
+  const overlapInside = sampleMaritimeWorld({
+    terrain, bounds, seed, biomeField, x: bounds.minX + 5, z,
+  });
+  assert.ok(Math.abs(edge.height - terrain.heightAt(bounds.minX, z)) < 1e-12,
+    'transition relief must be exactly zero on the playable boundary');
+  assert.ok(Math.abs(justOutside.height - edge.height) < 0.001,
+    'the render-only apron must approach the playable height continuously');
+  assert.equal(edge.duneRelief, 0);
+  assert.equal(overlapInside.duneRelief, 0);
+  assert.ok(Math.abs(overlapInside.height - terrain.heightAt(bounds.minX + 5, z)) < 1e-12,
+    'the depth-safe overlap may not visually reshape protected play');
+});
+
+test('maritime apron uses the playable terrain derivative span at the shared edge', () => {
+  const renderTerrain = { ...terrain, renderSpacing: 0.6 };
+  const backdrop = new BackdropTerrain({
+    terrain: renderTerrain, bounds, seed: 1128746828, biome: 'temperate-maritime',
+    biomeField: coastalBiomeField(),
+  });
+  assert.equal(backdrop.group.userData.authoringSampler.normalStep, 0.6);
+  backdrop.dispose();
+});
+
+test('natural resort coast produces restrained dunes before ordered dry and wet sand', () => {
+  const biomeField = coastalBiomeField();
+  const seed = 1128746828;
+  const z = -295;
+  const sampleAtDistance = (distance) => sampleMaritimeWorld({
+    terrain, bounds, seed, biomeField, x: bounds.minX - distance, z,
+  });
+  const dune = sampleAtDistance(2);
+  const dry = sampleAtDistance(30);
+  const wet = sampleAtDistance(45);
+  assert.ok(dune.duneRelief > 0.15 && dune.duneRelief < 1.25,
+    `dune relief must stay modest and legible; got ${dune.duneRelief}`);
+  assert.ok(dune.rock > dune.scree, 'dune substrate must own the inner relief band');
+  assert.ok(dry.scree > dry.wash * 3,
+    'dry sand must dominate its feathered handoff to the intertidal band');
+  assert.ok(wet.wash > wet.scree * 5,
+    'wet sand must dominate its feathered handoff from dry substrate');
+  const dryLuminance = dry.color.r * 0.2126 + dry.color.g * 0.7152 + dry.color.b * 0.0722;
+  const wetLuminance = wet.color.r * 0.2126 + wet.color.g * 0.7152 + wet.color.b * 0.0722;
+  assert.ok(dryLuminance > wetLuminance * 1.3,
+    'dry and compact wet sand need distinct optical response');
+});
+
+test('maritime coast uses the pinned Poly Haven beach scan at two world-space periods', async () => {
+  const backdropSource = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
+  const detailSource = await readFile(new URL('../src/scene/CoastSandDetail.js', import.meta.url), 'utf8');
+  const assets = [
+    ['aerial_beach_01_diff_2k.jpg', '1803d7e2861b304bea6d2e124dcd4c657fcb93843b84c17bb2db98ce48a87e4e'],
+    ['aerial_beach_01_nor_gl_2k.jpg', '0f35185b7225fe2027897bb7e4586c7deb048817524f1ed104fdae7ce80bdc06'],
+    ['aerial_beach_01_rough_2k.jpg', '318b440c109de7411f9e7443f38ae3cf873f34e90afd762c931bae3b23426da2'],
+    ['aerial_beach_01_diff_rough_2k.png', '100150d1086049cb9ea3a64805692f972df8cdc953baae398f503f5455ae153c'],
+  ];
+  for (const [filename, expectedHash] of assets) {
+    const bytes = await readFile(new URL(`../public/assets/materials/aerial_beach_01/${filename}`, import.meta.url));
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), expectedHash);
+  }
+  assert.match(detailSource, /aerial_beach_01_diff_rough_2k\.png/);
+  assert.match(detailSource, /aerial_beach_01_nor_gl_2k\.jpg/);
+  assert.match(detailSource, /const uvA = vec2/);
+  assert.match(detailSource, /\.div\(30\.0\)/, 'primary projection must retain the scan\'s 30 m width');
+  assert.match(detailSource, /const uvB = vec2/);
+  assert.match(detailSource, /\.div\(47\.3\)/, 'secondary projection must use an incommensurate period');
+  assert.match(detailSource, /const wetSubstrate = wetSand\.add\(shallowShelf\)/,
+    'the wet scan must remain continuous beneath the shallow shelf');
+  assert.match(detailSource, /const substrateTotal = duneRaw\.add\(dryRaw\)\.add\(wetRaw\)/,
+    'coastal substrate layers must be normalized after density modulation');
+  assert.match(backdropSource, /color: 0xffffff, vertexColors: false/,
+    'the explicit maritime vertex color must not be multiplied a second time by the material');
+  assert.match(backdropSource, /material\.colorNode = mix\(maritimeBaseColor, coastSand\.color, coastWeights\.beachWeight\)/);
+  assert.match(backdropSource, /sample\.normalAt = \(x, z\) =>/,
+    'the overlapping coast mesh must share the authoritative terrain normal before handing off');
+});
+
+test('maritime dune sampler is deterministic with finite bounded slopes', () => {
+  const biomeField = coastalBiomeField();
+  const options = { terrain, bounds, seed: 1128746828, biomeField };
+  const z = -127;
+  const heights = [];
+  for (let distance = 0; distance <= 70; distance += 0.25) {
+    const sample = sampleMaritimeWorld({ ...options, x: bounds.minX - distance, z });
+    assert.ok(Number.isFinite(sample.height));
+    assert.ok(Number.isFinite(sample.duneRelief));
+    heights.push(sample.height);
+    assert.deepEqual(sample,
+      sampleMaritimeWorld({ ...options, x: bounds.minX - distance, z }),
+      'same seed and semantic field must produce identical coast samples');
+  }
+  let maximumSlope = 0;
+  for (let index = 1; index < heights.length; index += 1) {
+    maximumSlope = Math.max(maximumSlope, Math.abs(heights[index] - heights[index - 1]) / 0.25);
+  }
+  assert.ok(maximumSlope < 0.8, `coastal relief slope must remain finite and restrained; got ${maximumSlope}`);
+});
+
+test('empty transition fields preserve the legacy maritime coast path', () => {
+  const options = { terrain, bounds, seed: 1128746828, x: bounds.minX - 23, z: -84 };
+  const absent = sampleMaritimeWorld(options);
+  const disabled = sampleMaritimeWorld({
+    ...options,
+    biomeField: { hasTransitions: false, sample: () => { throw new Error('disabled field sampled'); } },
+  });
+  assert.deepEqual(disabled, absent);
+  assert.equal(absent.duneRelief, 0,
+    'semantic dune relief must never leak into courses with no biome transitions');
+});
 
 test('bundled USGS ridge table is compact, deterministic, and bounded', async () => {
   assert.equal(NORTH_CASCADES_DEM.width, 128);

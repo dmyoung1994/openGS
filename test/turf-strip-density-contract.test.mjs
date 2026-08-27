@@ -6,8 +6,11 @@ import {
   MOW_STRIPE_PASS_WIDTH_M,
   MOW_STRIPE_CROSS_SLOPE,
   TURF_BLADE_SATURATION,
+  TURF_UNDERCOAT_LIGHTNESS,
+  TURF_UNDERCOAT_SATURATION,
   turfBase,
   turfBladeBase,
+  turfUndercoatBase,
   mowingStripCoordinate,
   mowingStripPhase,
 } from '../src/terrain/turfColor.js';
@@ -87,10 +90,12 @@ test('rough retains thick blade ribbons while increasing close-field coverage', 
     'geometric blades must consume the shared rough pigment transform');
   assert.match(source, /const age = mix\( hD, ecological, 0\.45 \)/,
     'rough pigment must carry stable age variation');
-  assert.match(source, /const BLADE_INDEX_COUNT = BLADE_SEGMENTS \* 12/,
-    'rough blade should use crossed ribbons in the same indirect draw');
+  assert.match(source, /const GRASS_LOD_TRIANGLES = Object\.freeze\( \[ 12, 8, 4 \] \)/,
+    'rough blades should retain crossed ribbons while retiring triangles by distance');
   assert.match(source, /t\.lessThan\( 0\.5 \)\.select\( float\( 1\.0 \)/,
     'rough blade must retain its broad lower body and use the fixed-row upper-third profile');
+  assert.match(source, /const leafHalfWidth = mix\( 0\.66, 0\.28, bladeLift \)/,
+    'near and middle blades need a fuller lower body without increasing triangle count');
   assert.match(source, /float\( 0\.9616200671 \).*float\( 0\.06 \)/s,
     'rough blade silhouette must retain the authored mid-row and tip widths');
   assert.match(source, /transformNormalToView\( vec3\([\s\S]*?\.toVarying\( 'vGrassViewNormal' \)/,
@@ -105,14 +110,28 @@ test('rough retains thick blade ribbons while increasing close-field coverage', 
     'rough pass must not silently thin blades to meet a density budget');
 });
 
-test('rough substrate and geometric blades share one canonical pigment', async () => {
+test('rough substrate derives a calibrated undercoat from the canonical blade pigment', async () => {
   const terrain = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
   const blade = turfBladeBase('rough');
   const base = turfBase('rough');
   assert.notDeepEqual(blade.toArray(), base.toArray(),
     'the shared blade tint must retain its intentional chlorophyll saturation');
+  const undercoat = turfUndercoatBase('rough');
+  assert.equal(TURF_UNDERCOAT_SATURATION, 1.80);
+  assert.equal(TURF_UNDERCOAT_LIGHTNESS, 0.74);
+  assert.notEqual(undercoat.getHex(), blade.getHex(),
+    'the upward-facing undercoat must compensate for the darker lit blade canopy');
+  assert.match(terrain, /const c = turfUndercoatBase\(name, new Color\(\)\)/,
+    'terrain rough must consume the calibrated canopy-matching undercoat');
   assert.match(terrain, /rough: roughUndercoat\('rough'\), deepRough: roughUndercoat\('deepRough'\)/,
-    'both long-grass terrain classes must use the exact geometric-blade undercoat');
+    'both long-grass terrain classes must use the same calibrated undercoat');
   assert.match(terrain, /let zoneGrade = float\(0\.90\);[\s\S]*?float\(0\.90\), m\.rough/,
     'rough undercoat value must match the mean stable blade pigment instead of reopening dark gaps');
+  assert.match(terrain, /let microContrast = float\(1\.12\);[\s\S]*?float\(1\.06\), m\.rough/,
+    'native undercoat highlights must remain compressed beneath real geometric blades');
+  assert.match(terrain, /const rootExposure = oneMinus\(smoothstep\(0\.28, 0\.72, zones\.canopyHeight\)\)/);
+  assert.match(terrain, /const rootLitterWeight = rootExposure\.mul\(nativeTurfWeight\)\.mul\(0\.22\)/);
+  assert.match(terrain, /const rootLitterTint = vec3\(0\.72, 0\.80, 0\.48\)/);
+  assert.match(terrain, /nativeBiomeWeight = biomeLand\.r/,
+    'strand, dune, and beach bands must not inherit the rough root-litter grade');
 });

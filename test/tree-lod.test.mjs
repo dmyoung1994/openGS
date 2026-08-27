@@ -34,11 +34,12 @@ test('projected-size thresholds are conservative and shared by GPU and residency
   assert.match(source, /const residency = this\.residencyThresholds/);
   assert.match(source, /56\.2% of LOD0's indexed triangles/);
   assert.match(source, /this is about 270 px of full-tree height/);
-  assert.match(source, /projectedHeight\.greaterThan\(float\(residency\.lod0\)\)/);
+  assert.match(source, /projectedHeight\.greaterThan\(projectedLod0Threshold\)/);
   assert.match(source, /projectedHeight\.greaterThan\(float\(residency\.lod1\)\)/);
-  assert.match(source, /projectedHeight > thresholds\.lod0/);
+  assert.match(source, /projectedHeight > projectedLod0Threshold/);
+  assert.match(source, /projectedLod0Scale/);
   assert.match(source, /projectedStructure <= thresholds\.impostorStructure/);
-  assert.match(source, /thresholds: \{ \.\.\.this\.residencyThresholds \}/);
+  assert.match(source, /thresholds:\s*\{\s*\.\.\.this\.residencyThresholds,\s*lod0ProjectedHeight:/);
   assert.match(source, /lodFar\.mul\(0\.9\)/);
   assert.match(source, /const cardEligible = distance\.greaterThanEqual\(lodNear\)/);
 });
@@ -105,7 +106,9 @@ test('authored-alpha atlas remains one canonical draw without foliage-only trans
   assert.match(source, /combined-authored-alpha/);
   assert.match(source, /_isAuthoredAlphaAtlas\(part\) && material\.map/);
   assert.match(source, /material\.opacityNode = texel\.a;/);
-  assert.match(source, /material\.map && !part\.isFoliage && !_isAuthoredAlphaAtlas\(part\)/);
+  assert.match(source, /material\.map && part\.usesAlphaCutout && !part\.isFoliage && !_isAuthoredAlphaAtlas\(part\)/);
+  assert.match(source, /\/canopy\/i\.test\(o\.material\?\.name \|\| ''\)/,
+    'leaf-card canopies keep source alpha without applying cutout to bark');
 });
 
 test('tree classifier clears diagnostics for batches smaller than the header', () => {
@@ -193,12 +196,34 @@ test('tree motion uses authored hierarchy and one root wind sample per history f
   assert.match(source, /wind\.branchStiffness - wind\.leafStiffness/);
   assert.match(source, /const atlasFoliageMask = _isAuthoredAlphaAtlas\(part\)/,
     'combined tree atlases must distinguish structural bark from foliage motion');
+  assert.match(source, /new StorageBufferAttribute\(new Float32Array\(this\.sourceCount \* 4\), 4\)/,
+    'wind history is one packed vec4 per immutable source record');
+  assert.match(source, /this\._sourceWind = storage\(windAttribute, 'vec4', this\.sourceCount\)/);
+  assert.match(source, /this\._sourceWindReadOnly = storage\(windAttribute, 'vec4', this\.sourceCount\)\.toReadOnly\(\)/);
+  assert.match(source, /_buildWindCompute\(\)/);
+  assert.match(source, /this\._windCompute\.name = 'Tree beauty source wind precompute'/);
+  assert.match(source, /wind\.element\(id\)\.assign\(vec4\(/);
+  assert.match(source, /currentWind\.x,\s*currentWind\.z,\s*previousWind\.x,\s*previousWind\.z/);
+  assert.match(source, /const packedWind = this\._sourceWindReadOnly\.element\(sourceId\)\.toVar\(\)/);
+  assert.match(source, /const currentWind = vec3\(packedWind\.x, 0, packedWind\.y\)/);
+  assert.match(source, /const previousWind = vec3\(packedWind\.z, 0, packedWind\.w\)/);
+  const geometryMaterialSource = source.slice(
+    source.indexOf('  _geometryMaterial('),
+    source.indexOf('  _addImpostorMesh()'),
+  );
+  assert.doesNotMatch(geometryMaterialSource, /environment\.windAt\(/,
+    'LOD0/LOD1 vertex materials consume the packed source wind stream');
+  assert.equal((source.match(/this\.environment\.windAt\(/g) || []).length, 2,
+    'only the current and previous samples in the per-source precompute remain');
+  const windDispatch = source.indexOf('this.renderer.compute(this._windCompute)');
+  const clearDispatch = source.indexOf('this.renderer.compute(this._clearCompute)');
+  assert.ok(windDispatch >= 0 && windDispatch < clearDispatch,
+    'source wind must be written before the existing beauty compute queue');
   assert.match(source, /const windMotionAt = \(sample\) =>/);
   assert.doesNotMatch(source, /const flutterMask|const flutterAmplitude|const transverse/,
     'alpha-cut foliage must not shear under independent per-vertex flutter');
   assert.match(source, /const arcDrop = horizontal\.length\(\)\.pow\(2\)/);
-  assert.match(source, /const currentWind = this\.environment\.windAt\(transform\.xyz, this\.environment\.time\)/);
-  assert.match(source, /const previousWind = this\.environment\.windAt\(transform\.xyz, this\.environment\.previousTime\)/);
+  assert.match(source, /const packedWind = this\._sourceWindReadOnly\.element\(sourceId\)/);
   assert.match(source, /windMotionAt\(currentWind\)/);
   assert.match(source, /windMotionAt\(previousWind\)/);
   assert.doesNotMatch(source, /windAt\(staticWorld/);
@@ -206,6 +231,34 @@ test('tree motion uses authored hierarchy and one root wind sample per history f
   assert.match(source, /const bendWeight = heightFraction\.pow\(1\.7\)/);
   assert.match(source, /const cardResponse = branchResponse \* 0\.42 \+ leafResponse \* 0\.58/,
     'far cards retain an aggregate of branch and leaf response at the LOD handoff');
+});
+
+test('mixed range compatibility accessor covers every catalog species', () => {
+  assert.match(rangeSource, /assetId: asset\.id/);
+  assert.match(rangeSource, /this\._treeBeautyCollection\.source !== this\.treeBeauties/);
+  assert.match(rangeSource, /for \(const beauty of beauties\) beauty\.update\(camera\)/);
+  assert.match(rangeSource, /Promise\.all\(beauties\.map\(\(beauty\) => beauty\.readDiagnostics\(\)\)\)/);
+  assert.doesNotMatch(rangeSource, /get treeBeauty\(\) \{ return this\.treeBeauties\?\.\[0\]/);
+});
+
+test('LOD0 tree instances compact one authored-part mesh by camera frustum', () => {
+  assert.doesNotMatch(source, /TREE_LOD0_BATCH_CELL_SIZE|partitionLod0Records/);
+  assert.match(source, /makeLod0WorldBounds\(proto, this\.records\)/);
+  assert.match(source, /this\._frustum\.intersectsBox\(this\._frustumBox\)/);
+  assert.match(source, /new InstancedMesh\(part\.geometry, material, this\.sourceCount\)/);
+  assert.match(source, /mesh\.instanceMatrix\.setUsage\(DynamicDrawUsage\)/);
+  assert.match(source, /mesh\.count = activeCount/);
+  assert.match(source, /this\._activeIndices = new Uint32Array\(this\.sourceCount\)/);
+  assert.match(source, /target\.set\(sourceMatrix, slot \* 16\)/);
+  assert.match(source, /mesh\.frustumCulled = true/);
+  assert.match(source, /mesh\.computeBoundingSphere\(\)/);
+  assert.match(source, /shadowMesh\.frustumCulled = true/);
+  assert.match(source, /new InstancedMesh\(sourceMesh\.geometry, sourceMesh\.material, this\.sourceCount\)/);
+  assert.match(source, /shadowMesh\.setMatrixAt\(index, beauty\.records\[index\]\.matrix\)/);
+  assert.doesNotMatch(source, /sourceMesh\.instanceMatrix\.array\.set/);
+  assert.match(source, /shadowBatchDraws: this\.meshes\.length/);
+  assert.match(source, /activeCount: this\._activeCount/);
+  assert.match(source, /beautyActiveCount: this\.beauty\.activeCount/);
 });
 
 test('tree impostor cards preserve grounded deterministic age classes', () => {

@@ -1,12 +1,15 @@
 import {
-  Group, Mesh, CylinderGeometry, BoxGeometry,
+  Group, Mesh, CylinderGeometry, BufferGeometry, BufferAttribute,
   MeshStandardMaterial, InstancedMesh,
-  Object3D, Color, Vector3, DoubleSide, CanvasTexture,
+  Object3D, Vector3, DoubleSide, CanvasTexture,
   TextureLoader, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter,
 } from 'three';
 import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
-import { loadTreePrototype, buildTreeBeautyLod0, TreeShadowLod0 } from './Trees.js';
+import {
+  loadTreePrototype, getVerifiedTreeLod0, getVerifiedTreeLodPair,
+  buildTreeBeautyLod0, buildTreeBeautyMeshLod, TreeShadowLod0, TreeShadowLod,
+} from './Trees.js';
 import { createGolfBallMesh } from './GolfBall.js';
 import { disposeMaterialTextures, disposeWebGPUGeometries } from './WebGPUResourceDisposal.js';
 import { Noise } from '../util/noise.js';
@@ -14,11 +17,15 @@ import { createRng, deriveSeed, normalizeSeed } from '../util/random.js';
 import { resolveEnvironmentPlacements } from '../environment/EnvironmentPlacement.js';
 import { getCatalogAsset } from '../environment/EnvironmentCatalog.js';
 import { WaterSurface } from './WaterSurface.js';
+import { PlanarWaterReflection } from './PlanarWaterReflection.js';
 import { buildEnvironmentProps } from './EnvironmentProps.js';
 import { BackdropTerrain } from './BackdropTerrain.js';
+import { buildHazardPatchGeometry } from './Bunkers.js';
+import { FlagClothSystem } from './FlagCloth.js';
 import {
   bunkerGradeAt, roundedHazardFeature, signedDistanceToFeature,
 } from '../course/featureGeometry.js';
+import { compileBiomeTransitionField } from '../course/BiomeRegistry.js';
 
 const _tex = new TextureLoader();
 
@@ -47,6 +54,10 @@ export class Range {
     if (!environmentCatalog?.byId) throw new Error('Range requires the verified environment catalog.');
     this.environment = environment;
     this.environmentCatalog = environmentCatalog;
+    // Quality can be selected before asynchronous tree GLBs finish decoding.
+    // Retain the requested policy so every species applies it atomically when its
+    // exact authored prototype becomes available.
+    this.treeWorkloadPolicy = 'ultra';
     this.group = new Group();
     scene.add(this.group);
 
@@ -55,11 +66,11 @@ export class Range {
     // internal contour; bunkers carve depressions (pot = deep steep revetted pit);
     // ponds are dished water basins. See _height/_surface for how they bake.
     this.targets = course.greens;
-    // Target furniture is deliberately shared within a Range rebuild: the
-    // authored yardage labels remain separate textures, while poles, posts,
-    // cloth volumes, bases, and marker bodies reuse their geometry/material
-    // buckets instead of allocating one mesh asset per target.
+    // Target furniture is deliberately shared within a Range rebuild: one cloth
+    // solver, one painted-number atlas/mesh, and merged poles/cups avoid allocating
+    // a separate render asset per target.
     this._targetPropAssets = null;
+    this.flagCloth = null;
     this.bunkers = course.bunkers.map((feature, index) => {
       const rounded = roundedHazardFeature(feature, { kind: 'bunker', index });
       const sandFeature = rounded.pot ? null : Object.freeze({
@@ -99,6 +110,7 @@ export class Range {
     this._pondWaterLevels = new Map(
       this.ponds.map((pond) => [pond, pondWaterDatum(pond, (x, z) => this._baseHeight(x, z))]),
     );
+    this.biomeField = compileBiomeTransitionField(course);
 
     this.terrain = new Terrain({
       bounds: course.bounds,
@@ -115,7 +127,7 @@ export class Range {
         greens: this.targets.map((t) => ({ x: t.x, z: t.z, r: t.r, ...(t.shape ? { shape: t.shape } : {}) })),
         sands: this.bunkers.map((b) => ({
           x: b.x, z: b.z, r: b.r,
-          ...(b.pot ? { shape: b.shape, inset: b.r * 0.28 } : { shape: b._sandShape }),
+          ...(b.pot ? { shape: b.shape, inset: b.r * 0.28, pot: true } : { shape: b._sandShape }),
         })),
         waters: this.ponds.map((p) => ({
           x: p.x, z: p.z, r: p.r, ...(p.shape ? { shape: p.shape } : {}),
@@ -126,13 +138,20 @@ export class Range {
       },
       motionHistory,
       renderer,
+      biomeField: this.biomeField,
+      analyticHeightFn: (x, z) => this._height(x, z),
+      analyticPatchContains: (x, z, padding = 0) => this.bunkers.some((bunker) => (
+        bunker.pot && signedDistanceToFeature(bunker, x, z) > -padding
+      )),
     });
     this.group.add(this.terrain.mesh);
+    this._buildPotBunkerPatches();
     this.backdrop = new BackdropTerrain({
       terrain: this.terrain,
       bounds: course.bounds,
       seed: this.environmentSeed,
       biome: course.biome,
+      biomeField: this.biomeField,
       // The backdrop shares the scene's one atmosphere rather than blending in a
       // fixed haze colour of its own; see worldMaterial in BackdropTerrain.js.
       environment,
@@ -140,7 +159,7 @@ export class Range {
     });
     this.group.add(this.backdrop.group);
     this.terrain.waterHeightAt = (x, z) => this.waterHeightAt(x, z);
-    this.environmentPlacements = resolveEnvironmentPlacements(course, environmentCatalog, this.terrain);
+    this.environmentPlacements = resolveEnvironmentPlacements(course, environmentCatalog, this.terrain, this.biomeField);
     // Resolve one immutable tree record set for both the visible forest and the
     // grass bake. Canopy suppression therefore follows the exact authored roots
     // and scaled catalog crown bounds rather than a second procedural forest mask.
@@ -161,6 +180,15 @@ export class Range {
     this._buildTee();
     this._buildTargets();
     this._buildWater();
+    this.waterReflection = new PlanarWaterReflection({
+      renderer,
+      scene,
+      camera: this.camera,
+      surfaces: this._water || [],
+      environmentTier,
+      qualityContract: () => globalThis.window?.golf?.quality?.policySnapshot?.() ?? null,
+      forceAnalyticOnHandheld: true,
+    });
     const treesReady = this._buildTreeLine(treePlacements);
     const environmentPropsReady = this._buildEnvironmentProps();
     const ballReady = this._buildBall();
@@ -171,9 +199,11 @@ export class Range {
     // The environment benchmark waits for this before it begins its shader warm-up.
     // Every visible asset is required. Bunker sand is part of the authoritative
     // terrain material rather than a second, independently tessellated surface.
+    const waterReady = Promise.all((this._water || []).map((surface) => surface.assetsReady));
     this.assetsReady = Promise.all([
       this.terrain.assetsReady, this.backdrop.assetsReady,
-      treesReady, environmentPropsReady, ballReady,
+      treesReady, environmentPropsReady, ballReady, waterReady,
+      this.waterReflection.assetsReady,
     ]);
   }
 
@@ -283,14 +313,14 @@ export class Range {
     // of raised prop geometry also guarantees that the physics lie and visible
     // contact plane agree at address.
 
-    // Two painted tee markers, set just behind the ball line. A low truncated
-    // cylinder reads as a rubber/painted marker and has a real ground contact,
-    // unlike the former floating sphere silhouette.
+    // Two nearly flush tee markers sit just behind the ball line. Their shallow
+    // profile keeps the address foreground clean instead of reading as a pair of
+    // raised cups when the broadcast camera pitches down toward the ball.
     const assets = this._targetProps();
     const markerMesh = new InstancedMesh(assets.markerGeometry, assets.markerMaterial, 2);
     const markerDummy = new Object3D();
     [-1.8, 1.8].forEach((sx, index) => {
-      markerDummy.position.set(sx, this.terrain.heightAt(sx, 3.2) + 0.05, 3.2);
+      markerDummy.position.set(sx, this.terrain.heightAt(sx, 3.2) + 0.0125, 3.2);
       markerDummy.updateMatrix();
       markerMesh.setMatrixAt(index, markerDummy.matrix);
     });
@@ -302,24 +332,42 @@ export class Range {
     this.group.add(markerMesh);
   }
 
+  _buildPotBunkerPatches() {
+    const pots = this.bunkers.filter((bunker) => bunker.pot);
+    if (!pots.length) return;
+    const group = new Group();
+    group.name = 'pot-bunker-fixed-detail-patches';
+    for (const bunker of pots) {
+      const mesh = new Mesh(
+        buildHazardPatchGeometry(bunker, {
+          radial: 192,
+          rings: 40,
+          heightAt: (x, z) => this.terrain.heightAt(x, z),
+          normalAt: (x, z) => this.terrain.normalAt(x, z),
+        }),
+        this.terrain.createHazardPatchMaterial(),
+      );
+      mesh.name = 'pot-bunker-world-anchored-patch';
+      mesh.receiveShadow = true;
+      mesh.castShadow = false;
+      mesh.renderOrder = 1;
+      mesh.layers.enable(2);
+      group.add(mesh);
+    }
+    this.potBunkerPatches = group;
+    this.group.add(group);
+  }
+
   _targetProps() {
     if (this._targetPropAssets) return this._targetPropAssets;
     this._targetPropAssets = {
-      // Scale-correct painted hardware: thicker poles/bases retain a grounded
-      // silhouette at golfer height while staying in the existing instanced
-      // draw buckets. These are lit dielectric surfaces, never black cutouts.
-      poleGeometry: new CylinderGeometry(0.026, 0.034, 2.4, 10),
+      // The 2.48 m stick extends 8 cm below grade into a regulation-scale cup.
+      poleGeometry: new CylinderGeometry(0.026, 0.034, 2.48, 10),
       poleMaterial: new MeshStandardMaterial({ color: 0x929a88, roughness: 0.68, metalness: 0.02 }),
-      flagGeometry: makeTargetFlagGeometry(),
-      flagMaterial: new MeshStandardMaterial({ color: 0xd9d5c5, vertexColors: true, side: DoubleSide, roughness: 0.9, metalness: 0 }),
-      flagBaseGeometry: new CylinderGeometry(0.13, 0.10, 0.07, 16),
-      flagBaseMaterial: new MeshStandardMaterial({ color: 0x4b5544, roughness: 0.88 }),
-      signGeometry: new BoxGeometry(1.08, 0.48, 0.055),
-      postGeometry: new CylinderGeometry(0.035, 0.045, 0.40, 10),
-      postMaterial: new MeshStandardMaterial({ color: 0x747c6c, roughness: 0.82 }),
-      signMaterials: new Map(),
-      markerGeometry: new CylinderGeometry(0.105, 0.078, 0.10, 16),
-      markerMaterial: new MeshStandardMaterial({ color: 0x8f987d, roughness: 0.78, metalness: 0 }),
+      cupGeometry: new CylinderGeometry(0.075, 0.075, 0.035, 20),
+      cupMaterial: new MeshStandardMaterial({ color: 0x20251f, roughness: 0.96, metalness: 0 }),
+      markerGeometry: new CylinderGeometry(0.11, 0.105, 0.025, 24),
+      markerMaterial: new MeshStandardMaterial({ color: 0xb8bcae, roughness: 0.82, metalness: 0 }),
     };
     return this._targetPropAssets;
   }
@@ -328,45 +376,36 @@ export class Range {
     const assets = this._targetProps();
     const count = this.targets.length;
     const poleMesh = new InstancedMesh(assets.poleGeometry, assets.poleMaterial, count);
-    const flagMesh = new InstancedMesh(assets.flagGeometry, assets.flagMaterial, count);
-    const baseMesh = new InstancedMesh(assets.flagBaseGeometry, assets.flagBaseMaterial, count);
-    const postMesh = new InstancedMesh(assets.postGeometry, assets.postMaterial, count * 2);
+    const cupMesh = new InstancedMesh(assets.cupGeometry, assets.cupMaterial, count);
     const dummy = new Object3D();
     const flagColors = [0xf0eee5, 0xc8d0c4, 0xefe6cf, 0xaeb9ad];
+    const anchors = [];
     this.targets.forEach((t, index) => {
       const y = this.terrain.heightAt(t.x, t.z);
-      dummy.position.set(t.x, y + 1.2, t.z);
+      dummy.position.set(t.x, y + 1.16, t.z);
       dummy.updateMatrix();
       poleMesh.setMatrixAt(index, dummy.matrix);
-      dummy.position.set(t.x + 0.36, y + 2.15, t.z);
+      dummy.position.set(t.x, y - 0.026, t.z);
       dummy.updateMatrix();
-      flagMesh.setMatrixAt(index, dummy.matrix);
-      flagMesh.setColorAt(index, new Color(flagColors[Math.round(t.yards / 50) % flagColors.length]));
-      dummy.position.set(t.x, y + 0.025, t.z);
-      dummy.updateMatrix();
-      baseMesh.setMatrixAt(index, dummy.matrix);
-      const signZ = t.z + t.r + 4;
-      const signY = this.terrain.heightAt(t.x, signZ);
-      for (const postX of [-0.48, 0.48]) {
-        dummy.position.set(t.x + postX, signY + 0.18, signZ);
-        dummy.updateMatrix();
-        postMesh.setMatrixAt(index * 2 + (postX > 0 ? 1 : 0), dummy.matrix);
-      }
-      this.group.add(this._placard(t.x, signY, signZ, `${t.yards}`));
+      cupMesh.setMatrixAt(index, dummy.matrix);
+      anchors.push({ x: t.x, y: y + 2.34, z: t.z });
     });
-    for (const mesh of [poleMesh, flagMesh, baseMesh, postMesh]) {
+    for (const mesh of [poleMesh, cupMesh]) {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.group.add(mesh);
     }
-    flagMesh.instanceColor.needsUpdate = true;
-    const drawBuckets = Object.freeze({ flagPoles: 1, flagCloth: 1, flagBases: 1, signBoards: count, signPosts: 1, teeMarkers: 1 });
+    this.flagCloth = new FlagClothSystem({ anchors, environment: this.environment, colors: this.targets.map((t) => flagColors[Math.round(t.yards / 50) % flagColors.length]) });
+    this.group.add(this.flagCloth.mesh);
+    this.yardagePaint = this._paintedYardages();
+    this.group.add(this.yardagePaint);
+    const drawBuckets = Object.freeze({ flagPoles: 1, flagCloth: 1, recessedCups: 1, paintedYardages: 1, teeMarkers: 1 });
     this.group.userData.targetPropDiagnostics = Object.freeze({
       drawBuckets,
-      signDraws: count,
-      instances: Object.freeze({ flagPoles: count, flagCloth: count, flagBases: count, signBoards: count, signPosts: count * 2, teeMarkers: 2 }),
-      targetDraws: count + 5,
+      signDraws: 0,
+      instances: Object.freeze({ flagPoles: count, flagCloth: count, recessedCups: count, paintedYardages: count, teeMarkers: 2 }),
+      targetDraws: 4,
     });
   }
 
@@ -376,46 +415,50 @@ export class Range {
     });
   }
 
-  _placard(x, y, z, text) {
-    // These signs spend most of their life minified and oblique. A 256 × 128 source
-    // leaves only a handful of source pixels across a glyph by 100–200 yards, then TRAA
-    // quite correctly filters that unstable signal. Give the mip chain enough real
-    // glyph coverage to converge to crisp text instead of trying to sharpen it later.
-    const SCALE = 4;
+  _paintedYardages() {
+    const cell = 384;
+    const columns = Math.ceil(Math.sqrt(this.targets.length));
+    const rows = Math.ceil(this.targets.length / columns);
     const canvas = document.createElement('canvas');
-    canvas.width = 256 * SCALE; canvas.height = 128 * SCALE;
+    canvas.width = columns * cell; canvas.height = rows * cell;
     const ctx = canvas.getContext('2d');
-    // A painted olive housing keeps the face readable under real shadow while
-    // retaining restrained contrast against the maintained turf backdrop.
-    ctx.fillStyle = '#707969'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = '#b0b6a5'; ctx.lineWidth = 5 * SCALE; ctx.strokeRect(4 * SCALE, 4 * SCALE, canvas.width - 8 * SCALE, canvas.height - 8 * SCALE);
-    ctx.fillStyle = '#f0ebdc';
-    ctx.font = `700 ${70 * SCALE}px ui-serif, Georgia, serif`;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(text, 128 * SCALE, 68 * SCALE);
-    ctx.font = `600 ${18 * SCALE}px system-ui, sans-serif`;
-    ctx.fillText('YARDS', 128 * SCALE, 116 * SCALE);
+    ctx.lineJoin = 'round'; ctx.lineWidth = 18;
+    ctx.font = '800 210px ui-serif, Georgia, serif';
+    this.targets.forEach((target, index) => {
+      const x = (index % columns + 0.5) * cell, y = (Math.floor(index / columns) + 0.5) * cell;
+      ctx.strokeStyle = 'rgba(46,55,42,0.72)'; ctx.strokeText(`${target.yards}`, x, y);
+      ctx.fillStyle = '#eee8d6'; ctx.fillText(`${target.yards}`, x, y);
+    });
     const tex = new CanvasTexture(canvas);
-    tex.name = `yardage-placard-${text}`;
+    tex.name = 'painted-yardage-number-atlas';
     tex.colorSpace = SRGBColorSpace;
     tex.minFilter = LinearMipmapLinearFilter;
     tex.magFilter = LinearFilter;
     tex.anisotropy = 16;
-    const assets = this._targetProps();
-    let signMaterial = assets.signMaterials.get(text);
-    if (!signMaterial) {
-      signMaterial = new MeshStandardMaterial({ map: tex, side: DoubleSide, roughness: 0.84, metalness: 0 });
-      assets.signMaterials.set(text, signMaterial);
-    } else {
-      tex.dispose();
-    }
-    const sign = new Mesh(assets.signGeometry, signMaterial);
-    // Board bottom overlaps the post tops, while both posts terminate at the
-    // authored terrain datum instead of floating behind a billboard plane.
-    sign.position.set(x, y + 0.50, z);
-    sign.castShadow = true;
-    sign.receiveShadow = true;
-    return sign;
+    const positions = [], uvs = [], indices = [];
+    this.targets.forEach((target, index) => {
+      const z = target.z + target.r + 3.0;
+      const width = Math.max(1.7, String(target.yards).length * 0.62), depth = 0.92;
+      const corners = [[-width / 2, -depth / 2], [width / 2, -depth / 2], [-width / 2, depth / 2], [width / 2, depth / 2]];
+      const base = positions.length / 3;
+      for (const [dx, dz] of corners) positions.push(target.x + dx, this.terrain.heightAt(target.x + dx, z + dz) + 0.012, z + dz);
+      const col = index % columns, row = Math.floor(index / columns);
+      const u0 = col / columns, u1 = (col + 1) / columns;
+      const v0 = 1 - (row + 1) / rows, v1 = 1 - row / rows;
+      uvs.push(u0, v1, u1, v1, u0, v0, u1, v0);
+      indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+    });
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+    geometry.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2));
+    geometry.setIndex(indices); geometry.computeVertexNormals();
+    geometry.name = 'terrain-conforming-painted-yardages-merged';
+    const material = new MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.16, side: DoubleSide, roughness: 0.96, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+    const mesh = new Mesh(geometry, material);
+    mesh.name = 'painted-yardages-merged'; mesh.castShadow = false; mesh.receiveShadow = true;
+    return mesh;
   }
 
   _buildWater() {
@@ -442,18 +485,15 @@ export class Range {
   }
 
   captureWaterReflections({ force = false, backgroundNode = null } = {}) {
-    if (!this.renderer || !this.scene) throw new Error('Range water reflection capture requires its renderer and scene.');
-    let captures = 0;
-    for (const surface of this._water || []) {
-      if (surface.captureReflection(this.renderer, this.scene, {
-        camera: this.camera, force, backgroundNode,
-      })) captures++;
-    }
-    return captures;
+    void backgroundNode;
+    return this.waterReflection?.capture({ force }) ?? 0;
   }
 
   waterReflectionDiagnostics() {
-    return (this._water || []).map((surface) => surface.reflectionDiagnostics());
+    return (this._water || []).map((surface) => ({
+      ...surface.reflectionDiagnostics(),
+      planarPass: this.waterReflection?.surfaceDiagnostics(surface) ?? null,
+    }));
   }
 
   _treePlacements() {
@@ -470,10 +510,10 @@ export class Range {
     });
   }
 
-  // Load exactly the verified catalog LOD0 geometry. One species is one instanced
-  // prototype, so a mixed tree line resolves to one strict LOD0 beauty group and
-  // one matching LOD0 shadow group per catalog asset. No atlas or LOD1 derivative is
-  // required or consulted by the production range.
+  // Load a verified authored LOD0+LOD1 pair wherever the catalog provides one.
+  // A catalog asset that currently owns only exact authored LOD0 remains on that
+  // source mesh; it is never replaced by an impostor, billboard, procedural tree,
+  // or another species.
   async _buildTreeLine(placements = this._treePlacements()) {
     if (!placements.length) return;
     const byAsset = new Map();
@@ -485,43 +525,125 @@ export class Range {
     // course spec), so species batches build in a stable order across reloads.
     const species = [...byAsset.entries()].map(([assetId, assetPlacements]) => {
       const asset = getCatalogAsset(this.environmentCatalog, assetId);
-      const lod0 = asset.lods.find((lod) => lod.level === 0);
-      if (!lod0) throw new Error(`${asset.id} requires a verified catalog LOD0 derivative.`);
-      return { asset, lod0, placements: assetPlacements };
+      const hasLod1 = asset.lods.some((lod) => lod.level === 1);
+      const { lod0, lod1 = null } = hasLod1
+        ? getVerifiedTreeLodPair(asset)
+        : { lod0: getVerifiedTreeLod0(asset) };
+      return { asset, lod0, lod1, placements: assetPlacements };
     });
-    // Every species' LOD0 geometry loads in parallel; a mixed line must not
-    // serialise startup behind the first prototype.
-    const loaded = await Promise.all(species.map(({ lod0 }) => loadTreePrototype(lod0.url)));
+    // Every species' authored pair loads in parallel; a mixed line must not
+    // serialise startup behind the first prototype or construct a partial forest.
+    const loaded = await Promise.all(species.map(async ({ asset, lod0, lod1 }) => (
+      lod1
+        ? Promise.all([loadTreePrototype(lod0.url, asset), loadTreePrototype(lod1.url, asset)])
+        : [await loadTreePrototype(lod0.url, asset), null]
+    )));
     this.trees = new Group();
     this.trees.name = 'trees';
     this.treeBeauties = [];
     this.treeShadows = [];
     species.forEach(({ asset, placements: assetPlacements }, index) => {
-      const beauty = buildTreeBeautyLod0(loaded[index], assetPlacements, {
+      const [lod0, lod1] = loaded[index];
+      const treeBudget = this.environmentTier.trees;
+      const sharedOptions = {
+        assetId: asset.id,
         camera: this.camera,
         motionHistory: this.motionHistory,
         wind: asset.wind,
+        environment: this.environment,
         renderer: this.renderer,
-      });
+        seed: this.environmentSeed,
+        lodNear: treeBudget.lodNear,
+        lodFar: treeBudget.lodFar,
+        lodTransitionDistance: Math.max(4, treeBudget.lodNear * 0.12),
+      };
+      const beauty = lod1
+        ? buildTreeBeautyMeshLod(lod0, lod1, assetPlacements, sharedOptions)
+        : buildTreeBeautyLod0(lod0, assetPlacements, sharedOptions);
+      beauty.setWorkloadPolicy(this.treeWorkloadPolicy);
       this.trees.add(beauty.group);
-      // The beauty meshes never cast. The paired shadow group reuses the exact
-      // LOD0 geometry/material streams on the directional-light layer.
-      const shadow = new TreeShadowLod0({
-        light: this.lighting?.sun,
-        beauty,
-      });
+      // The paired shadow renderer keeps a complete light-owned list of the
+      // verified authored LOD1 geometry. Camera compaction therefore cannot erase
+      // an off-camera tree whose shadow still lands inside the current view.
+      const shadow = lod1
+        ? new TreeShadowLod({ light: this.lighting?.sun, beauty })
+        : new TreeShadowLod0({ light: this.lighting?.sun, beauty });
       this.trees.add(shadow.mesh);
       this.treeBeauties.push(beauty);
       this.treeShadows.push(shadow);
     });
+    this._treeBeautyCollection = null;
     this.group.add(this.trees);
   }
 
-  // Single-species accessors retained for the diagnostic/benchmark call sites that
-  // predate the mixed tree line. Anything that must cover the whole forest reads
-  // `treeBeauties` / `treeShadows`.
-  get treeBeauty() { return this.treeBeauties?.[0] ?? null; }
+  setTreeWorkloadPolicy(policy = 'ultra') {
+    this.treeWorkloadPolicy = policy;
+    for (const beauty of this.treeBeauties || []) beauty.setWorkloadPolicy(policy);
+    // Tree policy can move the visible LOD handoff, so refresh the retained map;
+    // its complete authored caster residency itself remains camera-independent.
+    if (this.treeBeauties?.length) this.lighting?.invalidateShadow();
+    return this.treeWorkloadDiagnostics();
+  }
 
+  treeWorkloadDiagnostics() {
+    const species = (this.treeBeauties || []).map((beauty) => ({
+      assetId: beauty.assetId ?? null,
+      lod0Only: beauty.workloadDiagnostics?.().reductionSupported === false,
+      ...(beauty.workloadDiagnostics?.() ?? {}),
+    }));
+    return {
+      requestedPolicy: typeof this.treeWorkloadPolicy === 'string'
+        ? this.treeWorkloadPolicy
+        : { ...this.treeWorkloadPolicy },
+      ready: Boolean(this.treeBeauties),
+      species,
+      sourceCount: species.reduce((sum, entry) => sum + (entry.sourceCount ?? 0), 0),
+      reducibleSpecies: species.filter((entry) => entry.reductionSupported === true).length,
+      exactLod0OnlySpecies: species.filter((entry) => entry.reductionSupported === false).length,
+      authoredSourceRecordsKept: species.every((entry) => entry.sourceRecordsKept !== false),
+    };
+  }
+
+  // Compatibility facade for callers that predate mixed tree lines. Returning the
+  // first species here made a range with eight valid catalog assets look like a
+  // single-model scene to visibility toggles and diagnostics. The facade keeps the
+  // old `treeBeauty` name but always covers every loaded species batch.
+  get treeBeauty() {
+    if (!this.treeBeauties?.length) return null;
+    if (!this._treeBeautyCollection || this._treeBeautyCollection.source !== this.treeBeauties) {
+      const beauties = this.treeBeauties;
+      this._treeBeautyCollection = {
+        source: beauties,
+        group: this.trees,
+        update: (camera) => { for (const beauty of beauties) beauty.update(camera); },
+        setWorkloadPolicy: (policy) => this.setTreeWorkloadPolicy(policy),
+        workloadDiagnostics: () => this.treeWorkloadDiagnostics(),
+        residencyEstimate: (camera) => {
+          const estimates = beauties.map((beauty) => beauty.residencyEstimate(camera));
+          return {
+            sourceCount: estimates.reduce((sum, estimate) => sum + estimate.sourceCount, 0),
+            counts: {
+              lod0: estimates.reduce((sum, estimate) => sum + estimate.counts.lod0, 0),
+              lod1: estimates.reduce((sum, estimate) => sum + estimate.counts.lod1, 0),
+              impostor: 0,
+              rejected: 0,
+            },
+            projectedHeights: estimates.flatMap((estimate) => estimate.projectedHeights),
+            forcedFullLod: estimates.every((estimate) => estimate.forcedFullLod),
+            lod0Only: false,
+            transitionCount: estimates.reduce((sum, estimate) => sum + (estimate.transitionCount ?? estimate.transitionMembership ?? 0), 0),
+            classificationComplete: estimates.every((estimate) => estimate.classificationComplete),
+            species: estimates.map((estimate) => ({ assetId: estimate.assetId, sourceCount: estimate.sourceCount })),
+          };
+        },
+        readDiagnostics: async () => Promise.all(beauties.map((beauty) => beauty.readDiagnostics())),
+      };
+    }
+    return this._treeBeautyCollection;
+  }
+
+  // Shadow diagnostics remain explicitly plural; each species owns a paired
+  // authored-mesh residency facade, so there is no safe singular representative.
   get treeShadow() { return this.treeShadows?.[0] ?? null; }
 
   async _buildEnvironmentProps() {
@@ -552,6 +674,8 @@ export class Range {
     for (const shadow of this.treeShadows || []) shadow.update();
     for (const beauty of this.treeBeauties || []) beauty.update(this.camera);
     if (this.grass) this.grass.update(t, this.camera);
+    this.flagCloth?.update();
+    this.waterReflection?.update();
   }
 
   // Tear the whole course out of the scene so a new one can be built from an edited
@@ -595,16 +719,19 @@ export class Range {
     this.grass?.dispose();
     for (const shadow of this.treeShadows || []) shadow.dispose();
     for (const beauty of this.treeBeauties || []) beauty.dispose();
+    this.waterReflection?.dispose();
     for (const surface of this._water || []) surface.dispose();
     this.backdrop?.dispose();
     this.terrain?.dispose();
     this.grass = null;
     this.treeShadows = null;
     this.treeBeauties = null;
+    this._treeBeautyCollection = null;
     this.terrain = null;
     this.trees = null;
     this.environmentProps = null;
     this.backdrop = null;
+    this.waterReflection = null;
     this._water = null;
   }
 }
@@ -764,25 +891,4 @@ function smoothstep(edge0, edge1, x) {
 
 function mix(a, b, amount) {
   return a * (1 - amount) + b * amount;
-}
-
-// One shared, genuinely volumetric cloth profile for every target. The former
-// rectangular slab was thick enough to read as a board but had no cloth falloff.
-// A restrained free-edge taper and 2.6 cm billow preserve a stable silhouette and
-// PBR normals at range without per-target geometry, animation, or another draw.
-function makeTargetFlagGeometry() {
-  const width = 0.68;
-  const geometry = new BoxGeometry(width, 0.40, 0.016, 4, 2, 1);
-  const position = geometry.attributes.position;
-  for (let index = 0; index < position.count; index += 1) {
-    const x = position.getX(index);
-    const t = clamp01((x + width * 0.5) / width);
-    const y = position.getY(index) * (1 - 0.10 * t);
-    const z = position.getZ(index) + Math.sin(t * Math.PI) * 0.026;
-    position.setXYZ(index, x, y, z);
-  }
-  position.needsUpdate = true;
-  geometry.computeVertexNormals();
-  geometry.name = 'target-flag-cloth-shared';
-  return geometry;
 }

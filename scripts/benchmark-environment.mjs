@@ -50,6 +50,8 @@ const temporalMaeBudget = Number(arg('temporal-mae', 0.15));
 const temporalChangedPixelBudgetPct = Number(arg('temporal-changed-pct', 0.2));
 const performanceTier = String(arg('performance-tier', 'high-desktop-webgpu'));
 const expectedDeviceTier = String(arg('expected-device-tier', 'high'));
+const presentationQualityMode = 'quality';
+const presentationRenderScale = 0.90;
 const allowPerformanceMiss = argv.includes('--allow-performance-miss');
 const requestedScenario = arg('scenario', null);
 const saveTemporalCaptures = argv.includes('--save-temporal-captures');
@@ -238,6 +240,11 @@ const report = {
     deviceScaleFactor: 1,
     performanceTier,
     expectedDeviceTier,
+    presentationLock: {
+      mode: presentationQualityMode,
+      renderScale: presentationRenderScale,
+      restoredAfterRun: true,
+    },
     warmupFrames,
     sampleFrames,
     hitchThresholdMs,
@@ -354,6 +361,33 @@ function compareScreenshots(referenceBytes, candidateBytes) {
   };
 }
 
+// Viewport stability is a dimensional contract. readViewportDiagnostics also
+// carries live counters (history age, reset counts, PMREM elapsed time, copy
+// counts) that must advance while dimensions remain fixed; including them would
+// turn healthy rendering into a false resize failure.
+function viewportDimensionSignature(viewport) {
+  const resolution = viewport?.renderResolution;
+  return JSON.stringify({
+    authoritative: viewport?.authoritative ?? null,
+    windowCssPx: viewport?.windowCssPx ?? null,
+    canvasClientPx: viewport?.canvasClientPx ?? null,
+    canvasBackingPx: viewport?.canvasBackingPx ?? null,
+    inlineCssSize: viewport?.inlineCssSize ?? null,
+    internalTargets: viewport?.internalTargets ?? null,
+    output: resolution?.output ? [
+      resolution.output.width,
+      resolution.output.height,
+      resolution.output.pixelRatio,
+    ] : null,
+    internal: resolution?.internal ? [
+      resolution.internal.width,
+      resolution.internal.height,
+      resolution.internal.expectedWidth,
+      resolution.internal.expectedHeight,
+    ] : null,
+  });
+}
+
 const browser = await launch({
   executablePath: chrome,
   headless: false,
@@ -370,6 +404,7 @@ const browser = await launch({
   defaultViewport: { width, height, deviceScaleFactor: 1 },
 });
 let closingBrowser = false;
+let presentationLockId = null;
 browser.on('disconnected', () => {
   if (closingBrowser) return;
   const message = 'Browser disconnected before benchmark completion';
@@ -457,12 +492,11 @@ async function proveStaticShadowCache() {
   const passLabels = (capture) => capture.passes?.map((entry) => entry.label) || [];
   const dirtyLabels = passLabels(proof.dirty);
   const cleanLabels = passLabels(proof.clean);
-  const shadowCompute = foliageCandidate
-    ? [] : ['Tree shadow GPU reset', 'Tree shadow light-frustum compact'];
-  const dirtyMissing = shadowCompute.filter((label) => !dirtyLabels.includes(label));
+  const retiredShadowCompute = ['Tree shadow GPU reset', 'Tree shadow light-frustum compact'];
+  const dirtyMissing = [];
   if (!dirtyLabels.some((label) => label.startsWith('Shadow Map'))) dirtyMissing.push('Shadow Map*');
   const cleanUnexpected = cleanLabels.filter((label) =>
-    shadowCompute.includes(label) || label.startsWith('Shadow Map'));
+    retiredShadowCompute.includes(label) || label.startsWith('Shadow Map'));
   if (!proof.dirty.complete || dirtyMissing.length) {
     pushError(`dirty shadow proof failed; missing ${dirtyMissing.join(', ') || 'complete capture'}`);
   }
@@ -499,6 +533,12 @@ function textureMemorySnapshot() {
 }
 
 async function collectScenario(scenario) {
+  const qualityDiagnostics = await page.evaluate(() => window.golf.quality.snapshot());
+  if (qualityDiagnostics.presentationLock?.active !== true
+    || qualityDiagnostics.activeMode !== presentationQualityMode
+    || qualityDiagnostics.renderScale !== presentationRenderScale) {
+    pushError(`${scenario.id} fixed presentation quality changed during collection: ${JSON.stringify(qualityDiagnostics)}`);
+  }
   const camera = await poseScenario(scenario);
   // Explicit zero-warmup frame: it exercises the production onUpdate ordering
   // (tree clear → compact → finalize before camera render) at a fresh camera cut.
@@ -551,7 +591,10 @@ async function collectScenario(scenario) {
     'Grass blade compact',
     'Grass indirect draw finalize',
   ];
-  const requiredTreeBeautyComputePasses = foliageCandidate ? [] : [
+  const authoredTreeWorkload = await page.evaluate(() => ({
+    meshLod: window.golf.range.treeBeauties?.some((beauty) => beauty.authoredMeshOnly === true) === true,
+  }));
+  const requiredTreeBeautyComputePasses = foliageCandidate || !authoredTreeWorkload.meshLod ? [] : [
     'Tree beauty GPU reset',
     'Tree beauty camera-relative LOD compact',
     'Tree beauty indirect finalize',
@@ -762,8 +805,9 @@ async function collectScenario(scenario) {
     maxPixelsOver8Pct: Math.max(...temporalComparisons.map((entry) => entry.pixelsOver8Pct)),
     budgets: report.contract.temporalStability,
   };
-  const viewportSignatures = temporalFrameStates.map(({ viewport }) => JSON.stringify(viewport));
-  temporalStability.viewportStable = new Set(viewportSignatures).size === 1;
+  const viewportSignatures = temporalFrameStates.map(({ viewport }) => viewportDimensionSignature(viewport));
+  temporalStability.viewportSignatureCount = new Set(viewportSignatures).size;
+  temporalStability.viewportStable = temporalStability.viewportSignatureCount === 1;
   temporalStability.passed = temporalStability.maxMeanAbsoluteRgbError <= temporalMaeBudget
     && temporalStability.maxPixelsOver8Pct <= temporalChangedPixelBudgetPct
     && temporalStability.viewportStable;
@@ -774,25 +818,27 @@ async function collectScenario(scenario) {
     pushError(`${scenario.id} viewport/backing-store changed during the frozen temporal cycle`);
   }
   const grassDiagnostics = await page.evaluate(() => window.golf.range.grass.readDiagnostics());
-  // A mixed tree line owns one shadow proxy and one beauty classifier per species.
-  // Every batch is measured; the per-species contracts below must hold for all of
-  // them, so a second species cannot smuggle in a beauty caster or a fourth draw.
+  // Every production tree remains catalog-authored geometry. Species with an
+  // authored LOD1 share the beauty classifier's exact LOD0/LOD1 lists with the
+  // directional shadow pass; LOD0-only species keep complete authored shadow
+  // instances. Neither path creates a proxy, billboard, impostor, or procedural
+  // substitute.
   const treeShadowDiagnostics = await page.evaluate(async () => {
     const { range, lighting } = window.golf;
-    const generated = range.treeBeauties?.some((beauty) => beauty.residencyEstimate?.().generatedSource === true);
-    if (!range.treeShadows?.length && !generated) throw new Error('GPU tree shadow proxy is missing.');
-    const proxyMeshes = new Set(range.treeShadows.map((shadow) => shadow.mesh));
-    let beautyCasters = 0;
+    if (!range.treeShadows?.length) throw new Error('Authored tree shadow residency is missing.');
+    const forbiddenRuntimeRepresentations = [];
     range.trees.traverse((object) => {
-      if (!proxyMeshes.has(object) && object.castShadow === true) beautyCasters++;
+      if (/(?:impostor|billboard|procedural|generated|shadow-proxy)/i.test(object.name || '')) {
+        forbiddenRuntimeRepresentations.push(object.name);
+      }
     });
     return {
       species: await Promise.all(range.treeShadows.map(async (shadow) => ({
         ...(await shadow.readDiagnostics()),
-        proxyLayer: shadow.mesh.layers.mask,
+        residencyName: shadow.mesh.name,
       }))),
-      beautyCasters,
-      generated,
+      workload: range.treeWorkloadDiagnostics(),
+      forbiddenRuntimeRepresentations,
       shadowCameraLayers: lighting.sun.shadow.camera.layers.mask,
     };
   });
@@ -816,6 +862,11 @@ async function collectScenario(scenario) {
   }
   if (grassDiagnostics.visibleCount > grassDiagnostics.capacity) {
     pushError(`${scenario.id} GPU grass visible count is invalid: ${grassDiagnostics.visibleCount}/${grassDiagnostics.capacity}`);
+  }
+  if (!(grassDiagnostics.triangleCount >= 0)
+    || grassDiagnostics.triangleCount > grassDiagnostics.triangleBudget
+    || grassDiagnostics.lod?.counts?.some((count, lod) => count > grassDiagnostics.lod.capacities[lod])) {
+    pushError(`${scenario.id} GPU grass triangle LOD budget is invalid: ${JSON.stringify(grassDiagnostics)}`);
   }
   // Address and overview cameras can legitimately contain no blade surfaces inside
   // the close-range rough volume. The low-rough shot is the coverage assertion: it
@@ -843,45 +894,44 @@ async function collectScenario(scenario) {
       pushError(`${scenario.id} grass LOD forward axis is not the active evaluator view: length ${forwardLength}, alignment ${forwardAlignment}`);
     }
     if (!(grassDiagnostics.activeTileCount > 0)
-      || !(grassDiagnostics.farTierTerminalRadius >= grassDiagnostics.nominalRadius * 2.20)
+      || !(grassDiagnostics.farTierTerminalRadius >= grassDiagnostics.nominalRadius * 3.95)
       || !(grassDiagnostics.farTierTerminalRadius > grassDiagnostics.baseTerminalRadius)) {
       pushError(`${scenario.id} grass forward footprint is incomplete: ${JSON.stringify(grassDiagnostics)}`);
     }
   }
-  for (const shadow of treeShadowDiagnostics.species) {
-    if (shadow.shadowDraws !== 1 || shadow.trianglesPerTree !== 2) {
-      pushError(`${scenario.id} tree shadow path is not one two-triangle indirect proxy draw per species`);
-    }
-    if (shadow.visibleCount > shadow.sourceCount) {
-      pushError(`${scenario.id} tree shadow visible caster count exceeds immutable primary source count`);
-    }
-    if (shadow.proxyLayer !== 2) {
-      pushError(`${scenario.id} tree shadow proxy is not isolated to the directional shadow layer`);
-    }
+  if (!treeShadowDiagnostics.workload?.authoredSourceRecordsKept
+    || treeShadowDiagnostics.forbiddenRuntimeRepresentations.length) {
+    pushError(`${scenario.id} tree runtime introduced a non-authored representation: ${JSON.stringify(treeShadowDiagnostics)}`);
   }
   if ((treeShadowDiagnostics.shadowCameraLayers & 2) === 0) {
-    pushError(`${scenario.id} directional shadow camera does not include the tree proxy layer`);
+    pushError(`${scenario.id} directional shadow camera does not include the authored tree shadow layer`);
   }
-  if (!treeShadowDiagnostics.generated && treeShadowDiagnostics.beautyCasters !== 0) {
-    pushError(`${scenario.id} beauty tree caster fallback detected: ${treeShadowDiagnostics.beautyCasters}`);
-  }
-  for (const beauty of treeBeautyDiagnostics) {
-    if (beauty.generatedSource) {
-      if (!beauty.classificationComplete || beauty.counts.visible !== beauty.counts.near + beauty.counts.far) {
-        pushError(`${scenario.id} generated foliage GPU classification is incomplete`);
-      }
-      continue;
+  for (let speciesIndex = 0; speciesIndex < treeBeautyDiagnostics.length; speciesIndex++) {
+    const beauty = treeBeautyDiagnostics[speciesIndex];
+    const shadow = treeShadowDiagnostics.species[speciesIndex];
+    if (!beauty.assetId || beauty.sourceCount < 1
+      || beauty.workload?.authoredGeometry !== true
+      || beauty.workload?.sourceRecordsKept !== true
+      || beauty.impostorCount !== 0 || beauty.impostorDraws !== 0) {
+      pushError(`${scenario.id} tree beauty residency is not catalog-authored mesh-only: ${JSON.stringify(beauty)}`);
     }
-    // One indirect command per LOD0 role primitive, the same set again for LOD1,
-    // and exactly one runtime-lit impostor card. A combined one-part prototype is
-    // the partCount === 1 case of that same contract.
-    if (beauty.impostorDraws !== 1 || beauty.lod0Draws !== beauty.partCount
-      || beauty.lod1Draws !== beauty.partCount
-      || beauty.beautyDraws !== beauty.lod0Draws + beauty.lod1Draws + 1) {
-      pushError(`${scenario.id} tree beauty path is not matched LOD0/LOD1 role draws plus one runtime-lit impostor indirect draw per species`);
+    const expectedBeautyDraws = beauty.lod0Only ? beauty.partCount : beauty.partCount * 2;
+    const expectedShadowDraws = beauty.lod0Only ? beauty.partCount : beauty.partCount * 2;
+    if (beauty.lod0Draws !== beauty.partCount
+      || beauty.lod1Draws !== (beauty.lod0Only ? 0 : beauty.partCount)
+      || beauty.beautyDraws !== expectedBeautyDraws) {
+      pushError(`${scenario.id} tree beauty authored-GLB draw contract failed: ${JSON.stringify(beauty)}`);
     }
     if (!beauty.classificationComplete || beauty.overflow !== 0 || !beauty.siblingCountsEqual) {
       pushError(`${scenario.id} tree beauty GPU classification/indirect sibling counts are incomplete`);
+    }
+    if (!shadow || shadow.shadowDraws !== expectedShadowDraws
+      || shadow.sourceCount !== beauty.sourceCount
+      || shadow.workload?.authoredGeometry !== true
+      || shadow.workload?.sourceRecordsKept !== true
+      || !['beauty-authored-mesh-lists', 'complete-exact-authored-lod0']
+        .includes(shadow.shadowResidency)) {
+      pushError(`${scenario.id} tree shadow residency does not match authored beauty geometry: ${JSON.stringify({ beauty, shadow })}`);
     }
   }
   if (scenario.id === 'address-tee'
@@ -946,18 +996,32 @@ async function collectScenario(scenario) {
   }
   if (scenario.id === 'pond-contact') {
     if (!waterReflectionDiagnostics.length
-      || waterReflectionDiagnostics.some((entry) => !entry.ready || entry.mode !== 'analytic'
-        || entry.revision !== 0 || entry.size !== 0 || entry.proxyMeshes !== 0
-        || entry.fixedCanvas !== true || entry.renderTargetChurn !== false)) {
-      pushError(`${scenario.id} analytic zero-target water contract is incomplete: ${JSON.stringify(waterReflectionDiagnostics)}`);
+      || waterReflectionDiagnostics.some((entry) => !entry.ready || entry.mode !== 'quality'
+        || entry.requestedMode !== 'quality' || entry.source !== 'planar'
+        || entry.planarReady !== true || entry.currentValid !== true
+        || !entry.size?.width || !entry.size?.height || entry.proxyMeshes !== 0
+        || entry.fixedCanvas !== false || entry.renderTargetChurn !== false
+        || entry.planarPass?.mode !== 'quality'
+        || entry.planarPass?.requestedMode !== 'quality'
+        || entry.planarPass?.planarRequested !== true
+        || entry.planarPass?.strictWebGPU !== true
+        || entry.planarPass?.ready !== true
+        || entry.planarPass?.allocatedTargets !== 2
+        || !entry.planarPass?.size?.width || !entry.planarPass?.size?.height
+        || entry.planarPass?.renderCount < 1
+        || entry.planarPass?.clipGuard?.belowWaterGeometryClipped !== true
+        || entry.planarPass?.visibilityGuard?.waterMeshesHiddenDuringCapture !== true
+        || entry.planarPass?.visibilityGuard?.roughReflectionSource !== 'authoritative-terrain-substrate')) {
+      pushError(`${scenario.id} planar quality water contract is incomplete: ${JSON.stringify(waterReflectionDiagnostics)}`);
     }
   }
-  const targetCount = targetPropDiagnostics.signDraws;
-  if (!Number.isInteger(targetCount) || targetPropDiagnostics.targetDraws !== targetCount + 5
+  const targetCount = targetPropDiagnostics.instances?.flagPoles;
+  if (!Number.isInteger(targetCount) || targetPropDiagnostics.targetDraws !== 4
     || targetPropDiagnostics.instances?.flagPoles !== targetCount
     || targetPropDiagnostics.instances?.flagCloth !== targetCount
-    || targetPropDiagnostics.instances?.flagBases !== targetCount
-    || targetPropDiagnostics.instances?.signPosts !== targetCount * 2
+    || targetPropDiagnostics.instances?.recessedCups !== targetCount
+    || targetPropDiagnostics.instances?.paintedYardages !== targetCount
+    || targetPropDiagnostics.signDraws !== 0
     || targetPropDiagnostics.instances?.teeMarkers !== 2) {
     pushError(`${scenario.id} target prop draw/instance contract failed: ${JSON.stringify(targetPropDiagnostics)}`);
   }
@@ -985,6 +1049,7 @@ async function collectScenario(scenario) {
     },
     performance,
     temporalStability,
+    qualityDiagnostics,
     grassDiagnostics,
     treeShadowDiagnostics,
     treeBeautyDiagnostics,
@@ -1122,10 +1187,39 @@ try {
   if (ready.webgl) pushError('Asset/backend readiness failed: WebGL backend is active');
   if (report.validation.errors.length) throw new Error('Environment did not reach a valid WebGPU asset-ready state');
 
+  // Benchmark the same production quality system used by live play, but prevent
+  // its adaptive policy from resizing full-screen targets during warm-up, GPU
+  // sampling, or the frozen temporal cycle. The token is released in `finally`,
+  // restoring the complete pre-benchmark policy even when a strict gate fails.
+  const lockedQuality = await page.evaluate(({ mode, renderScale }) => {
+    const quality = window.golf?.quality;
+    if (typeof quality?.acquirePresentationLock !== 'function'
+      || typeof quality?.releasePresentationLock !== 'function') {
+      throw new Error('Quality presentation-lock API is unavailable.');
+    }
+    return quality.acquirePresentationLock({ mode, renderScale });
+  }, { mode: presentationQualityMode, renderScale: presentationRenderScale });
+  presentationLockId = lockedQuality.presentationLock?.id ?? null;
+  if (!presentationLockId
+    || lockedQuality.activeMode !== presentationQualityMode
+    || lockedQuality.renderScale !== presentationRenderScale) {
+    throw new Error(`Environment benchmark could not acquire its fixed quality/scale contract: ${JSON.stringify(lockedQuality)}`);
+  }
+  report.presentationLock = {
+    acquired: lockedQuality.presentationLock,
+    renderResolution: lockedQuality.renderResolution,
+    released: false,
+  };
+  // Resolution policy is applied synchronously, while dependent full-screen
+  // targets settle on subsequent production frames. Do not begin prewarm until
+  // that one intentional resize has completed.
+  await waitFrames(4);
+
   await prewarmProductionViews();
   report.shadowCache = await proveStaticShadowCache();
   report.prewarm = {
     views: scenarios.map((scenario) => scenario.id),
+    quality: await page.evaluate(() => window.golf.quality.snapshot()),
     textureMemory: await textureMemorySnapshot(),
   };
 
@@ -1148,6 +1242,27 @@ try {
     : 'failed';
   process.exitCode = 1;
 } finally {
+  if (presentationLockId) {
+    try {
+      const restoredQuality = await page.evaluate((lockId) => (
+        window.golf.quality.releasePresentationLock(lockId)
+      ), presentationLockId);
+      report.presentationLock = {
+        ...report.presentationLock,
+        released: true,
+        restored: {
+          mode: restoredQuality.mode,
+          activeMode: restoredQuality.activeMode,
+          renderScale: restoredQuality.renderScale,
+        },
+      };
+      presentationLockId = null;
+    } catch (error) {
+      pushError(`Failed to restore visual quality after benchmark: ${error?.message || error}`);
+      report.validation.passed = false;
+      process.exitCode = 1;
+    }
+  }
   report.finishedAt = new Date().toISOString();
   await checkpointReport();
   console.log(`environment benchmark report: ${reportPath}`);

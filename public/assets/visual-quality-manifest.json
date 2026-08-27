@@ -1,0 +1,818 @@
+{
+  "version": 1,
+  "manifestId": "claude-golfsim-visual-assets",
+  "files": [
+    {
+      "id": "environment-alps-hdr-2k",
+      "version": 1,
+      "url": "/assets/environment/alps_field_2k.hdr",
+      "format": "hdr",
+      "bytes": 6531494,
+      "sha256": "90ef5a4e0c46d0177a06406b59142a6bb426176a85c195fa23d2e443383a9e12",
+      "memoryBytes": 16777216,
+      "dimensions": { "width": 2048, "height": 1024 },
+      "memoryBasis": "rgba16f-equirect"
+    },
+    {
+      "id": "environment-kloofendal-hdr-1k",
+      "version": 1,
+      "url": "/assets/environment/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
+      "format": "hdr",
+      "bytes": 1435119,
+      "sha256": "fd94c84997b8a3c353b62c2125a9b44e19509956986a126e472684432a02d798",
+      "memoryBytes": 4194304,
+      "dimensions": { "width": 1024, "height": 512 },
+      "memoryBasis": "rgba16f-equirect"
+    },
+    {
+      "id": "terrain-north-cascades-height-128",
+      "version": 1,
+      "url": "/assets/terrain/north-cascades-pickets-128.png",
+      "format": "png",
+      "bytes": 28174,
+      "sha256": "3e3f7bdb41c4d1d1b272cd9b25952e4319419e30d8cd09907c85b358055f7b42",
+      "memoryBytes": 87382,
+      "dimensions": { "width": 128, "height": 128 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "turf-fairway-albedo-2k",
+      "version": 1,
+      "url": "/assets/textures/blendkit_fairway_alb.png",
+      "format": "png",
+      "bytes": 11094425,
+      "sha256": "ecfa186e0296084e044f4143465e36c6836d81c22f9475901d5c1c347f7ec4c2",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "turf-fairway-relief-2k",
+      "version": 1,
+      "url": "/assets/textures/blendkit_fairway_nrh.png",
+      "format": "png",
+      "bytes": 12704080,
+      "sha256": "6a5a70cb1c15e2cc3477928f42897cbdcb64e7c1c1d0d2c2f152a4dd6fca4db5",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "turf-green-albedo-2k",
+      "version": 1,
+      "url": "/assets/textures/blendkit_green_alb.png",
+      "format": "png",
+      "bytes": 11053554,
+      "sha256": "502dcafa3446fe49774093effd914e507905dabf6ea6088ea2c71928873af73b",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "turf-green-relief-2k",
+      "version": 1,
+      "url": "/assets/textures/blendkit_green_nrh.png",
+      "format": "png",
+      "bytes": 12252577,
+      "sha256": "820a6fc5c3be0a271ac95975e42f4cf079627d2aa88017192044cd485fa96668",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "turf-rough-albedo-2k",
+      "version": 1,
+      "url": "/assets/textures/roughdetail_alb.png",
+      "format": "png",
+      "bytes": 7885382,
+      "sha256": "ccb51c247a7da13276ae7ef7f2597477d5205bc3c898b950e28bf7241a3329c4",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "turf-rough-relief-2k",
+      "version": 1,
+      "url": "/assets/textures/roughdetail_nrh.png",
+      "format": "png",
+      "bytes": 14227597,
+      "sha256": "fb895f4e5ae7781f4efd867c01215a73fe829a7d9dcbc34aadb91151c6c221a0",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "bunker-sand-albedo-1k",
+      "version": 1,
+      "url": "/assets/textures/bunker_sand_alb.png",
+      "format": "png",
+      "bytes": 305683,
+      "sha256": "7540c5137e57221d876380c2f7f571b2ba850f52af59fb791263f4ed47dc4c19",
+      "memoryBytes": 5592406,
+      "dimensions": { "width": 1024, "height": 1024 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "bunker-sand-relief-1k",
+      "version": 1,
+      "url": "/assets/textures/bunker_sand_nrao.png",
+      "format": "png",
+      "bytes": 846907,
+      "sha256": "cd9359c26a8756b49f6dbd3e5fc9c2829c8c1179d563fd74c2dc14d2500afa55",
+      "memoryBytes": 5592406,
+      "dimensions": { "width": 1024, "height": 1024 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "backdrop-rock-albedo-1k",
+      "version": 1,
+      "url": "/assets/materials/rocky_terrain/rocky_terrain_diff_1k.jpg",
+      "format": "jpg",
+      "bytes": 905179,
+      "sha256": "429315865fd89c150272592f6d93def174c6f69804a565ff08e53627a885579b",
+      "memoryBytes": 23811414,
+      "dimensions": { "width": 1024, "height": 4360 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "backdrop-rock-relief-1k",
+      "version": 1,
+      "url": "/assets/materials/rocky_terrain/rocky_terrain_nor_gl_1k.jpg",
+      "format": "jpg",
+      "bytes": 1059194,
+      "sha256": "a6556e1220c6e6c822e68ceeb9589719e4db8c87340199657cc705fea6ecf391",
+      "memoryBytes": 23811414,
+      "dimensions": { "width": 1024, "height": 4360 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "coast-sand-albedo-2k",
+      "version": 1,
+      "url": "/assets/materials/aerial_beach_01/aerial_beach_01_diff_2k.jpg",
+      "format": "jpg",
+      "bytes": 457152,
+      "sha256": "1803d7e2861b304bea6d2e124dcd4c657fcb93843b84c17bb2db98ce48a87e4e",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "coast-sand-albedo-roughness-2k",
+      "version": 1,
+      "url": "/assets/materials/aerial_beach_01/aerial_beach_01_diff_rough_2k.png",
+      "format": "png",
+      "bytes": 5039410,
+      "sha256": "100150d1086049cb9ea3a64805692f972df8cdc953baae398f503f5455ae153c",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "coast-sand-normal-2k",
+      "version": 1,
+      "url": "/assets/materials/aerial_beach_01/aerial_beach_01_nor_gl_2k.jpg",
+      "format": "jpg",
+      "bytes": 863847,
+      "sha256": "0f35185b7225fe2027897bb7e4586c7deb048817524f1ed104fdae7ce80bdc06",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "coast-sand-roughness-2k",
+      "version": 1,
+      "url": "/assets/materials/aerial_beach_01/aerial_beach_01_rough_2k.jpg",
+      "format": "jpg",
+      "bytes": 505596,
+      "sha256": "318b440c109de7411f9e7443f38ae3cf873f34e90afd762c931bae3b23426da2",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "water-detail-rgba-1024",
+      "version": 1,
+      "url": "/assets/textures/water_detail_rgba.png",
+      "format": "png",
+      "bytes": 2817939,
+      "sha256": "50c4b163503f88659de6e75914a120562f92e7019ca6534ceb6d53aa7ecfde5b",
+      "memoryBytes": 5592405,
+      "dimensions": { "width": 1024, "height": 1024 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "ball-golfball-glb",
+      "version": 1,
+      "url": "/assets/ball/golfball.glb",
+      "format": "glb",
+      "bytes": 170320,
+      "sha256": "454ee330884a8cd287615ac9daee41d444cebe3112dbf1d8af23d99343ff83e4",
+      "memoryBytes": 400000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "ball-golfball-relief-2k",
+      "version": 1,
+      "url": "/assets/ball/golfball_nor.png",
+      "format": "png",
+      "bytes": 3032132,
+      "sha256": "7927fc63c68716f1d102c108df528180d4320c75f2ae9bba50dbfede3db1d544",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "tree-small-02-lod0",
+      "version": 1,
+      "url": "/assets/trees/tree_small_02_lod0.glb",
+      "format": "glb",
+      "bytes": 20340592,
+      "sha256": "1566c2de9c40cfa4d144089c818f7c67b4cd4283a237e89a3a05b5464f895813",
+      "memoryBytes": 45000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-small-02-lod1",
+      "version": 1,
+      "url": "/assets/trees/tree_small_02_lod1.glb",
+      "format": "glb",
+      "bytes": 6481232,
+      "sha256": "ac3e7ab2bbec249e55ce330c24d7460d01ce10e8ce2435ce11c84e186616a211",
+      "memoryBytes": 14000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-small-02-hero-lod0",
+      "version": 1,
+      "url": "/assets/trees/tree_small_02_hero_lod0.glb",
+      "format": "glb",
+      "bytes": 100970300,
+      "sha256": "3c4ff8f5b0fe8359b732fb5bd1b540aaf1282b834869eb5ee93839e69e38a45b",
+      "memoryBytes": 220000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-small-02-leaves-alpha-1k",
+      "version": 1,
+      "url": "/assets/trees/tree_small_02_leaves_alpha_1k.png",
+      "format": "png",
+      "bytes": 264711,
+      "sha256": "4f143e2dda8a6a572f427ac378b92255d21761e4611de0d26e21816c01aa533b",
+      "memoryBytes": 5592406,
+      "dimensions": { "width": 1024, "height": 1024 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "tree-island-01-lod0",
+      "version": 1,
+      "url": "/assets/trees/island_tree_01_lod0.glb",
+      "format": "glb",
+      "bytes": 66333792,
+      "sha256": "04352129b531b887b297e532893480374d381167cb7e1c6b161e3321266193d6",
+      "memoryBytes": 145000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-island-01-leaves-alpha-1k",
+      "version": 1,
+      "url": "/assets/trees/island_tree_01_leaves_alpha_1k.png",
+      "format": "png",
+      "bytes": 57438,
+      "sha256": "f4341f147988dbe6b58d9ca841a8f0e4bcff25bc40d05f9877da82006d489c39",
+      "memoryBytes": 5592406,
+      "dimensions": { "width": 1024, "height": 1024 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "tree-island-02-lod0",
+      "version": 1,
+      "url": "/assets/trees/island_tree_02_lod0.glb",
+      "format": "glb",
+      "bytes": 46168940,
+      "sha256": "6281dace4ca5a75c8799276724a8e4d01bfb969942977018ceb1620801b06b91",
+      "memoryBytes": 100000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-island-02-leaves-alpha-1k",
+      "version": 1,
+      "url": "/assets/trees/island_tree_02_leaves_alpha_1k.png",
+      "format": "png",
+      "bytes": 57438,
+      "sha256": "f4341f147988dbe6b58d9ca841a8f0e4bcff25bc40d05f9877da82006d489c39",
+      "memoryBytes": 5592406,
+      "dimensions": { "width": 1024, "height": 1024 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "environment-fern-02-glb",
+      "version": 1,
+      "url": "/assets/environment/models/fern_02.glb",
+      "format": "glb",
+      "bytes": 1051464,
+      "sha256": "b148554745a6a8e47c77b7dda20cd933d5d677832b0579e0283cae7c5d5446ff",
+      "memoryBytes": 2500000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "environment-grass-medium-02-glb",
+      "version": 1,
+      "url": "/assets/environment/models/grass_medium_02.glb",
+      "format": "glb",
+      "bytes": 797444,
+      "sha256": "3d0b4bff53517c4416aaef9fd727cad72af4f92d9d6e55e2265cfb60e16965c2",
+      "memoryBytes": 2000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "environment-grass-bermuda-01-glb",
+      "version": 1,
+      "url": "/assets/environment/models/grass_bermuda_01.glb",
+      "format": "glb",
+      "bytes": 1435204,
+      "sha256": "c158fb3bef4df331addc97c49ac819aecef0081d909c758cccf46bacb16f646d",
+      "memoryBytes": 3000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "environment-boulder-01-glb",
+      "version": 1,
+      "url": "/assets/environment/models/boulder_01.glb",
+      "format": "glb",
+      "bytes": 5023932,
+      "sha256": "b64a8aac295ba31f6beefec74393858a973df6a6effab006e440c74102536de2",
+      "memoryBytes": 8000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "environment-dead-tree-trunk-glb",
+      "version": 1,
+      "url": "/assets/environment/models/dead_tree_trunk.glb",
+      "format": "glb",
+      "bytes": 2633176,
+      "sha256": "d56b5b7dbb618274f8b86e298aee3925a615e1646ba03f508cb66fd937c329ae",
+      "memoryBytes": 4500000,
+      "memoryBasis": "decoded-glb-estimate"
+    }
+  ],
+  "assets": [
+    {
+      "id": "environment-sky-alps",
+      "version": 1,
+      "kind": "environment",
+      "semantic": "daylight-sky",
+      "priority": { "base": 90, "projectedNeed": { "near": 0.25, "mid": 0.7, "far": 1 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "environment-alps-hdr-2k" },
+        "balanced": { "version": 1, "fileId": "environment-alps-hdr-2k" },
+        "quality": { "version": 1, "fileId": "environment-alps-hdr-2k" },
+        "ultra": { "version": 1, "fileId": "environment-alps-hdr-2k" }
+      }
+    },
+    {
+      "id": "environment-sky-kloofendal",
+      "version": 1,
+      "kind": "environment",
+      "semantic": "alternate-daylight-sky",
+      "priority": { "base": 30, "projectedNeed": { "near": 0.15, "mid": 0.55, "far": 0.9 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "environment-kloofendal-hdr-1k" },
+        "ultra": { "version": 1, "fileId": "environment-kloofendal-hdr-1k" }
+      }
+    },
+    {
+      "id": "terrain-course-heightfield",
+      "version": 1,
+      "kind": "heightfield",
+      "semantic": "course-landform",
+      "priority": { "base": 100, "projectedNeed": { "near": 1, "mid": 1, "far": 0.85 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "terrain-north-cascades-height-128" },
+        "balanced": { "version": 1, "fileId": "terrain-north-cascades-height-128" },
+        "quality": { "version": 1, "fileId": "terrain-north-cascades-height-128" },
+        "ultra": { "version": 1, "fileId": "terrain-north-cascades-height-128" }
+      }
+    },
+    {
+      "id": "turf-fairway-albedo",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "fairway-albedo",
+      "priority": { "base": 100, "projectedNeed": { "near": 1, "mid": 0.95, "far": 0.65 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "turf-fairway-albedo-2k" },
+        "balanced": { "version": 1, "fileId": "turf-fairway-albedo-2k" },
+        "quality": { "version": 1, "fileId": "turf-fairway-albedo-2k" },
+        "ultra": { "version": 1, "fileId": "turf-fairway-albedo-2k" }
+      }
+    },
+    {
+      "id": "turf-fairway-relief",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "fairway-normal-height-ao",
+      "priority": { "base": 99, "projectedNeed": { "near": 1, "mid": 0.8, "far": 0.25 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "turf-fairway-relief-2k" },
+        "balanced": { "version": 1, "fileId": "turf-fairway-relief-2k" },
+        "quality": { "version": 1, "fileId": "turf-fairway-relief-2k" },
+        "ultra": { "version": 1, "fileId": "turf-fairway-relief-2k" }
+      }
+    },
+    {
+      "id": "turf-green-albedo",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "green-albedo",
+      "priority": { "base": 100, "projectedNeed": { "near": 1, "mid": 0.95, "far": 0.65 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "turf-green-albedo-2k" },
+        "balanced": { "version": 1, "fileId": "turf-green-albedo-2k" },
+        "quality": { "version": 1, "fileId": "turf-green-albedo-2k" },
+        "ultra": { "version": 1, "fileId": "turf-green-albedo-2k" }
+      }
+    },
+    {
+      "id": "turf-green-relief",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "green-normal-height-ao",
+      "priority": { "base": 99, "projectedNeed": { "near": 1, "mid": 0.8, "far": 0.25 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "turf-green-relief-2k" },
+        "balanced": { "version": 1, "fileId": "turf-green-relief-2k" },
+        "quality": { "version": 1, "fileId": "turf-green-relief-2k" },
+        "ultra": { "version": 1, "fileId": "turf-green-relief-2k" }
+      }
+    },
+    {
+      "id": "turf-rough-albedo",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "rough-albedo",
+      "priority": { "base": 88, "projectedNeed": { "near": 0.9, "mid": 0.8, "far": 0.5 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "turf-rough-albedo-2k" },
+        "balanced": { "version": 1, "fileId": "turf-rough-albedo-2k" },
+        "quality": { "version": 1, "fileId": "turf-rough-albedo-2k" },
+        "ultra": { "version": 1, "fileId": "turf-rough-albedo-2k" }
+      }
+    },
+    {
+      "id": "turf-rough-relief",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "rough-normal-height-ao",
+      "priority": { "base": 87, "projectedNeed": { "near": 0.9, "mid": 0.75, "far": 0.4 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "turf-rough-relief-2k" },
+        "balanced": { "version": 1, "fileId": "turf-rough-relief-2k" },
+        "quality": { "version": 1, "fileId": "turf-rough-relief-2k" },
+        "ultra": { "version": 1, "fileId": "turf-rough-relief-2k" }
+      }
+    },
+    {
+      "id": "bunker-sand-albedo",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "bunker-albedo",
+      "priority": { "base": 74, "projectedNeed": { "near": 0.95, "mid": 0.75, "far": 0.35 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "bunker-sand-albedo-1k" },
+        "balanced": { "version": 1, "fileId": "bunker-sand-albedo-1k" },
+        "quality": { "version": 1, "fileId": "bunker-sand-albedo-1k" },
+        "ultra": { "version": 1, "fileId": "bunker-sand-albedo-1k" }
+      }
+    },
+    {
+      "id": "bunker-sand-relief",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "bunker-normal-ao",
+      "priority": { "base": 73, "projectedNeed": { "near": 0.95, "mid": 0.7, "far": 0.3 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "bunker-sand-relief-1k" },
+        "balanced": { "version": 1, "fileId": "bunker-sand-relief-1k" },
+        "quality": { "version": 1, "fileId": "bunker-sand-relief-1k" },
+        "ultra": { "version": 1, "fileId": "bunker-sand-relief-1k" }
+      }
+    },
+    {
+      "id": "backdrop-rock-albedo",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "backdrop-rock-albedo",
+      "priority": { "base": 62, "projectedNeed": { "near": 0.15, "mid": 0.6, "far": 1 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "backdrop-rock-albedo-1k" },
+        "balanced": { "version": 1, "fileId": "backdrop-rock-albedo-1k" },
+        "quality": { "version": 1, "fileId": "backdrop-rock-albedo-1k" },
+        "ultra": { "version": 1, "fileId": "backdrop-rock-albedo-1k" }
+      }
+    },
+    {
+      "id": "backdrop-rock-relief",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "backdrop-rock-normal",
+      "priority": { "base": 58, "projectedNeed": { "near": 0.1, "mid": 0.55, "far": 0.9 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "backdrop-rock-relief-1k" },
+        "balanced": { "version": 1, "fileId": "backdrop-rock-relief-1k" },
+        "quality": { "version": 1, "fileId": "backdrop-rock-relief-1k" },
+        "ultra": { "version": 1, "fileId": "backdrop-rock-relief-1k" }
+      }
+    },
+    {
+      "id": "coast-sand-albedo",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "polyhaven-aerial-beach-albedo-roughness-packed",
+      "priority": { "base": 76, "projectedNeed": { "near": 1, "mid": 0.8, "far": 0.35 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "coast-sand-albedo-roughness-2k" },
+        "balanced": { "version": 1, "fileId": "coast-sand-albedo-roughness-2k" },
+        "quality": { "version": 1, "fileId": "coast-sand-albedo-roughness-2k" },
+        "ultra": { "version": 1, "fileId": "coast-sand-albedo-roughness-2k" }
+      }
+    },
+    {
+      "id": "coast-sand-normal",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "polyhaven-aerial-beach-normal-gl",
+      "priority": { "base": 75, "projectedNeed": { "near": 1, "mid": 0.75, "far": 0.25 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "coast-sand-normal-2k" },
+        "balanced": { "version": 1, "fileId": "coast-sand-normal-2k" },
+        "quality": { "version": 1, "fileId": "coast-sand-normal-2k" },
+        "ultra": { "version": 1, "fileId": "coast-sand-normal-2k" }
+      }
+    },
+    {
+      "id": "water-detail",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "pond-normal-ripple",
+      "priority": { "base": 78, "projectedNeed": { "near": 1, "mid": 0.8, "far": 0.3 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "water-detail-rgba-1024" },
+        "balanced": { "version": 1, "fileId": "water-detail-rgba-1024" },
+        "quality": { "version": 1, "fileId": "water-detail-rgba-1024" },
+        "ultra": { "version": 1, "fileId": "water-detail-rgba-1024" }
+      }
+    },
+    {
+      "id": "ball-geometry",
+      "version": 1,
+      "kind": "ball",
+      "semantic": "golf-ball-mesh",
+      "priority": { "base": 92, "projectedNeed": { "near": 1, "mid": 0.75, "far": 0.1 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "ball-golfball-glb" },
+        "balanced": { "version": 1, "fileId": "ball-golfball-glb" },
+        "quality": { "version": 1, "fileId": "ball-golfball-glb" },
+        "ultra": { "version": 1, "fileId": "ball-golfball-glb" }
+      }
+    },
+    {
+      "id": "ball-relief",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "golf-ball-dimple-normal",
+      "priority": { "base": 80, "projectedNeed": { "near": 1, "mid": 0.5, "far": 0.05 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "ball-golfball-relief-2k" },
+        "balanced": { "version": 1, "fileId": "ball-golfball-relief-2k" },
+        "quality": { "version": 1, "fileId": "ball-golfball-relief-2k" },
+        "ultra": { "version": 1, "fileId": "ball-golfball-relief-2k" }
+      }
+    },
+    {
+      "id": "tree-small-02-geometry",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-tree-small-02-authored-lod",
+      "priority": { "base": 70, "projectedNeed": { "near": 1, "mid": 0.85, "far": 0.35 } },
+      "variants": {
+        "critical": {
+          "version": 1,
+          "fileId": "tree-small-02-lod1",
+          "lod": { "family": "polyhaven-tree-small-02", "level": 1, "maxDistanceMeters": 4000, "authored": true }
+        },
+        "balanced": {
+          "version": 1,
+          "fileId": "tree-small-02-lod1",
+          "lod": { "family": "polyhaven-tree-small-02", "level": 1, "maxDistanceMeters": 4000, "authored": true }
+        },
+        "quality": {
+          "version": 1,
+          "fileId": "tree-small-02-lod0",
+          "lod": { "family": "polyhaven-tree-small-02", "level": 0, "maxDistanceMeters": 75, "authored": true }
+        },
+        "ultra": {
+          "version": 1,
+          "fileId": "tree-small-02-lod0",
+          "lod": { "family": "polyhaven-tree-small-02", "level": 0, "maxDistanceMeters": 75, "authored": true }
+        }
+      }
+    },
+    {
+      "id": "tree-small-02-leaves-alpha",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "polyhaven-tree-small-02-alpha",
+      "priority": { "base": 66, "projectedNeed": { "near": 1, "mid": 0.8, "far": 0.25 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "tree-small-02-leaves-alpha-1k" },
+        "balanced": { "version": 1, "fileId": "tree-small-02-leaves-alpha-1k" },
+        "quality": { "version": 1, "fileId": "tree-small-02-leaves-alpha-1k" },
+        "ultra": { "version": 1, "fileId": "tree-small-02-leaves-alpha-1k" }
+      }
+    },
+    {
+      "id": "tree-small-02-hero-geometry",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-tree-small-02-authored-hero-lod",
+      "priority": { "base": 58, "projectedNeed": { "near": 1, "mid": 0.65, "far": 0.1 } },
+      "variants": {
+        "ultra": {
+          "version": 1,
+          "fileId": "tree-small-02-hero-lod0",
+          "lod": { "family": "polyhaven-tree-small-02-hero", "level": 0, "maxDistanceMeters": 240, "authored": true }
+        }
+      }
+    },
+    {
+      "id": "tree-island-01-geometry",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-island-tree-01-authored-lod",
+      "priority": { "base": 55, "projectedNeed": { "near": 0.85, "mid": 0.75, "far": 0.3 } },
+      "variants": {
+        "quality": {
+          "version": 1,
+          "fileId": "tree-island-01-lod0",
+          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 240, "authored": true }
+        },
+        "ultra": {
+          "version": 1,
+          "fileId": "tree-island-01-lod0",
+          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 240, "authored": true }
+        }
+      }
+    },
+    {
+      "id": "tree-island-01-leaves-alpha",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "polyhaven-island-tree-01-alpha",
+      "priority": { "base": 52, "projectedNeed": { "near": 0.85, "mid": 0.7, "far": 0.25 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "tree-island-01-leaves-alpha-1k" },
+        "ultra": { "version": 1, "fileId": "tree-island-01-leaves-alpha-1k" }
+      }
+    },
+    {
+      "id": "tree-island-02-geometry",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-island-tree-02-authored-lod",
+      "priority": { "base": 54, "projectedNeed": { "near": 0.85, "mid": 0.75, "far": 0.3 } },
+      "variants": {
+        "quality": {
+          "version": 1,
+          "fileId": "tree-island-02-lod0",
+          "lod": { "family": "polyhaven-island-tree-02", "level": 0, "maxDistanceMeters": 240, "authored": true }
+        },
+        "ultra": {
+          "version": 1,
+          "fileId": "tree-island-02-lod0",
+          "lod": { "family": "polyhaven-island-tree-02", "level": 0, "maxDistanceMeters": 240, "authored": true }
+        }
+      }
+    },
+    {
+      "id": "tree-island-02-leaves-alpha",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "polyhaven-island-tree-02-alpha",
+      "priority": { "base": 51, "projectedNeed": { "near": 0.85, "mid": 0.7, "far": 0.25 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "tree-island-02-leaves-alpha-1k" },
+        "ultra": { "version": 1, "fileId": "tree-island-02-leaves-alpha-1k" }
+      }
+    },
+    {
+      "id": "environment-fern-02",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-fern-02",
+      "priority": { "base": 42, "projectedNeed": { "near": 0.8, "mid": 0.6, "far": 0.2 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "environment-fern-02-glb", "lod": { "family": "polyhaven-fern-02", "level": 0, "maxDistanceMeters": 90, "authored": true } },
+        "ultra": { "version": 1, "fileId": "environment-fern-02-glb", "lod": { "family": "polyhaven-fern-02", "level": 0, "maxDistanceMeters": 90, "authored": true } }
+      }
+    },
+    {
+      "id": "environment-grass-medium-02",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-grass-medium-02",
+      "priority": { "base": 40, "projectedNeed": { "near": 0.8, "mid": 0.6, "far": 0.2 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "environment-grass-medium-02-glb", "lod": { "family": "polyhaven-grass-medium-02", "level": 0, "maxDistanceMeters": 160, "authored": true } },
+        "ultra": { "version": 1, "fileId": "environment-grass-medium-02-glb", "lod": { "family": "polyhaven-grass-medium-02", "level": 0, "maxDistanceMeters": 160, "authored": true } }
+      }
+    },
+    {
+      "id": "environment-grass-bermuda-01",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-grass-bermuda-01",
+      "priority": { "base": 39, "projectedNeed": { "near": 0.8, "mid": 0.6, "far": 0.2 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "environment-grass-bermuda-01-glb", "lod": { "family": "polyhaven-grass-bermuda-01", "level": 0, "maxDistanceMeters": 120, "authored": true } },
+        "ultra": { "version": 1, "fileId": "environment-grass-bermuda-01-glb", "lod": { "family": "polyhaven-grass-bermuda-01", "level": 0, "maxDistanceMeters": 120, "authored": true } }
+      }
+    },
+    {
+      "id": "environment-boulder-01",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-boulder-01",
+      "priority": { "base": 37, "projectedNeed": { "near": 0.65, "mid": 0.7, "far": 0.45 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "environment-boulder-01-glb", "lod": { "family": "polyhaven-boulder-01", "level": 0, "maxDistanceMeters": 180, "authored": true } },
+        "ultra": { "version": 1, "fileId": "environment-boulder-01-glb", "lod": { "family": "polyhaven-boulder-01", "level": 0, "maxDistanceMeters": 180, "authored": true } }
+      }
+    },
+    {
+      "id": "environment-dead-tree-trunk",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-dead-tree-trunk",
+      "priority": { "base": 35, "projectedNeed": { "near": 0.65, "mid": 0.65, "far": 0.35 } },
+      "variants": {
+        "quality": { "version": 1, "fileId": "environment-dead-tree-trunk-glb", "lod": { "family": "polyhaven-dead-tree-trunk", "level": 0, "maxDistanceMeters": 140, "authored": true } },
+        "ultra": { "version": 1, "fileId": "environment-dead-tree-trunk-glb", "lod": { "family": "polyhaven-dead-tree-trunk", "level": 0, "maxDistanceMeters": 140, "authored": true } }
+      }
+    }
+  ],
+  "variants": {
+    "critical": {
+      "version": 1,
+      "extends": null,
+      "entries": [
+        { "assetId": "environment-sky-alps", "required": true },
+        { "assetId": "terrain-course-heightfield", "required": true },
+        { "assetId": "turf-fairway-albedo", "required": true },
+        { "assetId": "turf-fairway-relief", "required": true },
+        { "assetId": "turf-green-albedo", "required": true },
+        { "assetId": "turf-green-relief", "required": true },
+        { "assetId": "turf-rough-albedo", "required": true },
+        { "assetId": "turf-rough-relief", "required": true },
+        { "assetId": "bunker-sand-albedo", "required": true },
+        { "assetId": "bunker-sand-relief", "required": true },
+        { "assetId": "backdrop-rock-albedo", "required": true },
+        { "assetId": "backdrop-rock-relief", "required": true },
+        { "assetId": "coast-sand-albedo", "required": true },
+        { "assetId": "coast-sand-normal", "required": true },
+        { "assetId": "water-detail", "required": false },
+        { "assetId": "ball-geometry", "required": true },
+        { "assetId": "ball-relief", "required": true },
+        { "assetId": "tree-small-02-geometry", "required": true },
+        { "assetId": "tree-small-02-leaves-alpha", "required": true }
+      ]
+    },
+    "balanced": {
+      "version": 1,
+      "extends": "critical",
+      "entries": []
+    },
+    "quality": {
+      "version": 1,
+      "extends": "balanced",
+      "entries": [
+        { "assetId": "environment-sky-kloofendal", "required": false },
+        { "assetId": "tree-island-01-geometry", "required": false },
+        { "assetId": "tree-island-01-leaves-alpha", "required": false },
+        { "assetId": "tree-island-02-geometry", "required": false },
+        { "assetId": "tree-island-02-leaves-alpha", "required": false },
+        { "assetId": "environment-fern-02", "required": false },
+        { "assetId": "environment-grass-medium-02", "required": false },
+        { "assetId": "environment-grass-bermuda-01", "required": false },
+        { "assetId": "environment-boulder-01", "required": false },
+        { "assetId": "environment-dead-tree-trunk", "required": false }
+      ]
+    },
+    "ultra": {
+      "version": 1,
+      "extends": "quality",
+      "entries": [
+        { "assetId": "tree-small-02-hero-geometry", "required": false }
+      ]
+    }
+  }
+}

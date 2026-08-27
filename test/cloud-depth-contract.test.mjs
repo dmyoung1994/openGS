@@ -37,8 +37,10 @@ test('depth-aware cloud source contracts sample MRT depth and compose transport 
   assert.match(scene, /this\.scene\.backgroundNode = this\.weatherSky\.clearBackgroundNode/);
   assert.match(scene, /resolvedScene\.mul\(cloudTransport\.a\)\.add\(cloudTransport\.rgb\)/,
     'the existing final pass must apply scene*T+scatter exactly once');
-  assert.match(scene, /compatibleCount\.greaterThan\(3\.5\)/,
-    'full-resolution reconstruction must preserve source depth classes at silhouettes');
+  assert.match(scene, /cloudSourceLayer\.sample\(sampleUv\)\.gather\(0\)/,
+    'the common full-resolution reconstruction path must classify its 2x2 footprint in one gather');
+  assert.match(scene, /If\(allCompatible\.not\(\), \(\) =>[\s\S]*cloudSourceLayer\.load\(texel\)/,
+    'actual depth silhouettes must retain the exact nearest-compatible point-load search');
 
   assert.match(temporal, /sceneDepthNode\.load\(sceneDepthTexel\)/,
     'every cloud fragment must load one exact authoritative scene-depth texel');
@@ -46,6 +48,8 @@ test('depth-aware cloud source contracts sample MRT depth and compose transport 
   assert.match(temporal, /opaqueWorldPosition/);
   assert.match(temporal, /opaqueRayDistance/);
   assert.match(temporal, /cloudTransportForRay\(/);
+  assert.match(temporal, /setResolutionScale\(resolutionScale\)/,
+    'cloud history targets must follow the production dynamic-resolution policy');
   assert.match(temporal, /count: 2/,
     'cloud transport and source depth must stay in separate quarter-resolution MRT attachments');
   assert.match(temporal, /CLOUD_SOURCE_ATTACHMENT/);

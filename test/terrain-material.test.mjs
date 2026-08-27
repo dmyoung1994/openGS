@@ -30,9 +30,9 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'mown/rough bake transition must follow a world-space shoulder, not a camera radius');
   assert.match(source, /w\s*=\s*mix\(w, float\(1\.0\), m\.fringe\)/,
     'green surrounds must remain on the maintained turf path');
-  assert.match(source, /const reliefAmplitude\s*=\s*reliefScale\.mul\(0\.82\)\.mul\(cutMicroGain\)\.clamp\(0\.22, 1\.8\)/,
+  assert.match(source, /const reliefAmplitude\s*=\s*reliefScale\.mul\(0\.94\)\.mul\(cutMicroGain\)\.clamp\(0\.22, 1\.8\)/,
     'canopy normal amplitude must separate short turf from long rough without displacing gameplay');
-  assert.match(source, /cutMicroGain = mix\(cutMicroGain, float\(1\.42\), m\.green\)/,
+  assert.match(source, /cutMicroGain = mix\(cutMicroGain, float\(1\.28\), m\.green\)/,
     'green must retain dense low-cut micro relief instead of becoming optically flat');
   assert.match(source, /const fairwayMowMask = m\.fairway[\s\S]*?oneMinus\(m\.fringe\)[\s\S]*?oneMinus\(m\.green\)[\s\S]*?oneMinus\(m\.tee\)/,
     'mowing response must be owned only by authored fairway turf');
@@ -60,7 +60,7 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'target turf must remain legible through its physical cut-height response');
   assert.match(source, /const rGrassV\s*=\s*rGrassD\.add\(graze\.mul\(0\.16\)\)\.add\(mowAnisotropy\)\.clamp\(0\.68, 0\.98\)/,
     'grazing response must be monotone matte roughening, not a camera-centred ring');
-  assert.match(source, /mat\.specularIntensityNode\s*=\s*this\.uSpecular\.mul\(mowSpecular\)\.mul\(cutSpecular\)/,
+  assert.match(source, /let resolvedSpecular = this\.uSpecular\.mul\(mowSpecular\)\.mul\(cutSpecular\)[\s\S]*?mat\.specularIntensityNode = resolvedSpecular/,
     'mowing needs bounded real-light dielectric response registered to leaf lay');
   assert.match(source, /cutSpecular = mix\(cutSpecular, float\(1\.20\), m\.green\)/,
     'maintained-cut identity must remain driven by the shared real-light specular path');
@@ -72,20 +72,36 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'green pigment support must remain restrained relative to fairway');
   assert.doesNotMatch(source, /uNear0|uNear1|const camDist\s*=/,
     'detail handoff must not be camera-distance/radial');
-  assert.match(source, /turfSelfShadow\(set\.nrh, uvP, dNrh\.b, sunUVFull, lod, rayActive, 2\)/,
+  assert.match(source, /turfSelfShadow\(\s*turfNrhArrayNode, int\(set\.layer\), uvP, dNrh\.b, sunUVFull, lod, rayActive, 2/,
     'terrain contact must use a bounded sun-directed canopy test');
   assert.doesNotMatch(source, /screenSpace|screen-space.*ao|cameraPosition[^\n]*ao/i,
     'terrain contact must not depend on unstable screen-space AO');
+});
+
+test('coastal dune substrate visually replaces turf without changing zone authority', async () => {
+  const source = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
+  const detailSource = await readFile(new URL('src/scene/CoastSandDetail.js', ROOT), 'utf8');
+  assert.match(source, /coastTextureBlendWeights\(\{[\s\S]*?shallowShelf: biomeWater\.g/,
+    'terrain must consume the complete shared coastal substrate field');
+  assert.match(source, /sampleCoastSand\(this\._coastSandAsset\.textures, worldXZ, coastWeights\)/);
+  assert.match(source, /mat\.colorNode = mix\([\s\S]*?coastSand\.color,[\s\S]*?coastWeights\.beachWeight/);
+  assert.match(detailSource, /const moistureOverlap = weights\.wetWeight\.mul\(oneMinus\(weights\.wetWeight\)\)\.mul\(4\.0\)/,
+    'wet and dry substrate must feather through a world-space moisture response');
+  assert.match(detailSource, /const wetSubstrate = wetSand\.add\(shallowShelf\)\.clamp\(0, 1\)/,
+    'the shared beach scan must continue under the emerging shelf water');
+  assert.doesNotMatch(source, /surfaceAt[\s\S]{0,120}biomeLand/,
+    'biome substrate weights must remain outside gameplay surface classification');
 });
 
 test('pond bank material follows the authored filtered water SDF', async () => {
   const source = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
   assert.match(source, /waterZoneTexture/, 'Terrain must expose the pond SDF as a borrowed GPU texture');
   assert.match(source, /waterTexture\?\.dispose\(\)/, 'Terrain must own and release the pond SDF texture');
-  assert.match(source, /turfZoneMasks\(this\._zoneMap\.texture, this\._zoneMap\.waterTexture/,
+  assert.match(source, /turfZoneMasks\(zoneSample, waterZoneSample, this\.zones\)/,
     'terrain shading must consume the authored pond SDF rather than a circular fallback');
-  assert.match(source, /const waterSample = texture\(waterTex/,
-    'bank transition must use one filtered water SDF and baked-signal lookup');
+  assert.match(source, /const waterZoneSample = texture\(this\._zoneMap\.waterTexture, macroUv\)\.toVar/,
+    'bank transition must hoist one filtered water SDF and baked-signal lookup');
+  assert.match(source, /const waterSD = waterSample\.x/);
   assert.match(source, /const bankWidthNoise = waterSample\.y[\s\S]*?const bankWidth = float\(0\.15\)\.add\(bankWidthNoise\.mul\(0\.15\)\)[\s\S]*?const bankEnvelope = oneMinus\(smoothstep\(0\.0, bankWidth, bankDistance\)\)\.mul\(outsideWater\)/,
     'bank material must remain SDF-derived within the literal 0.15–0.30m intrusion');
   assert.match(source, /const bankExposure = smoothstep\(0\.42, 0\.76[\s\S]*?const waterBank = bankEnvelope\.mul\(bankExposure\.mul\(0\.82\)\.add\(0\.08\)\)/,
@@ -220,7 +236,8 @@ test('backdrop uses deterministic world-space PBR breakup and alternating patch 
     'backdrop normals must not come from screen-space derivatives');
   assert.doesNotMatch(source, /Math\.sin\(radial \* 0\.0041/, 'alpine relief must not form radial shell terraces');
   assert.match(source, /if \(\(ix \+ iz\) & 1\)/, 'patch triangulation should not bias one diagonal');
-  assert.match(source, /const normalStep = 64/, 'patch normals must sample the shared continuous world field at a far-band physical span');
+  assert.match(source, /const normalStep = sample\.normalStep \|\| 64/,
+    'patch normals must support a local coast span while retaining the far-band physical default');
   assert.doesNotMatch(source, /geometry\.computeVertexNormals\(\)/,
     'patch-local normals would create lighting seams across the continuous world');
 });
@@ -251,7 +268,7 @@ test('rough blade density includes a stable ecological-scale cluster field', asy
   const source = await readFile(new URL('src/terrain/Grass.js', ROOT), 'utf8');
   assert.match(source, /const edgeWarp = mx_noise_float\( vec3\( worldX\.mul\( 0\.045 \), worldZ\.mul\( 0\.036 \), 317\.0 \)/,
     'rough residency must share the world-space fairway ecotone rather than a ruler-straight cutoff');
-  assert.match(source, /const clearForFairway = smoothstep\( -2\.4, 0\.6, edgeSD \)/,
+  assert.match(source, /const clearForFairway = smoothstep\( -2\.0, 2\.0, edgeSD \)/,
     'rough edge should fade through an irregular render-only shoulder');
   assert.match(source, /macroCluster\s*=\s*mx_noise_float/, 'rough clustering must be world anchored');
   assert.match(source, /mix\( hE, ecological, roughMask \)/, 'cluster field must be confined to rough transitions');

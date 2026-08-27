@@ -35,7 +35,7 @@ export class Menu {
     menu.innerHTML = `
       <div class="gm-inner">
         <header class="gm-brand">
-          <div class="gm-kicker">Claude Golf</div>
+          <div class="gm-kicker">Rangeform</div>
           <h1 class="gm-title">The Links</h1>
           <p class="gm-tag">A quieter way to play.</p>
         </header>
@@ -208,13 +208,14 @@ export class Menu {
       #gs-topright { position: fixed; top: 14px; right: 14px; z-index: 60;
         display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
       #gs-menu-btn { display: flex; align-items: center; gap: 8px;
-        padding: 9px 15px 9px 13px; cursor: pointer; color: var(--ink);
-        font: 700 14px/1 var(--sans); letter-spacing: .035em;
-        background: rgba(255,255,255,.4); border: 1px solid rgba(255,255,255,.6); border-radius: 999px;
-        backdrop-filter: blur(12px) saturate(1.1); box-shadow: 0 6px 20px rgba(0,0,0,.12);
+        padding: 10px 17px 10px 14px; cursor: pointer; color: rgba(255,255,255,.96);
+        font: 600 14px/1 var(--sans); letter-spacing: .01em; text-shadow: 0 1px 7px rgba(0,0,0,.26);
+        background: linear-gradient(180deg,rgba(247,252,255,.17),rgba(31,54,39,.18));
+        border: 1px solid rgba(255,255,255,.42); border-radius: 999px;
+        backdrop-filter: blur(16px) saturate(1.12); box-shadow: 0 12px 34px rgba(4,17,9,.17), inset 0 1px 0 rgba(255,255,255,.3);
         transition: background .25s, transform .2s; }
-      #gs-menu-btn .gm-hb { font-size: 15px; color: var(--champ); }
-      #gs-menu-btn:hover { background: rgba(255,255,255,.6); transform: translateY(-1px); }
+      #gs-menu-btn .gm-hb { font-size: 15px; color: rgba(255,255,255,.82); }
+      #gs-menu-btn:hover { background: linear-gradient(180deg,rgba(255,255,255,.25),rgba(42,74,51,.22)); transform: translateY(-1px); }
       body[data-view="creator"] #gs-menu-btn { color: #f2efe8; background: rgba(255,255,255,.14);
         border-color: rgba(255,255,255,.32); }
 

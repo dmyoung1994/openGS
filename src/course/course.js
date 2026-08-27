@@ -9,18 +9,19 @@ import {
 import {
   featureRadius, polygonArea, polygonSelfIntersects, signedDistanceToFeature, smoothClosedOutline,
 } from './featureGeometry.js';
+import { BIOME_IDS, validateBiomeTransitions } from './BiomeRegistry.js';
 
 // The named internal green contours the engine can bake (see greenContour in
 // Range.js). Course authors choose these names — raw heightfields are forbidden.
 export const CONTOURS = ['tilt', 'punchbowl', 'spine', 'tier', 'crown', 'saddle'];
-export const COURSE_SCHEMA_VERSION = 2;
+export const COURSE_SCHEMA_VERSION = 3;
 export const PLACEMENT_ALGORITHM_VERSION = 1;
 
 const ROOT_KEYS = new Set([
-  'meta', 'catalogVersion', 'placementAlgorithmVersion', 'biome', 'environmentSeed',
+  'meta', 'catalogVersion', 'placementAlgorithmVersion', 'biome', 'biomeTransitions', 'environmentSeed',
   'bounds', 'tee', 'corridor', 'fringeW', 'greens', 'bunkers', 'ponds', 'environment',
 ]);
-const BIOMES = new Set(['temperate-maritime', 'temperate-alpine']);
+const BIOMES = new Set(BIOME_IDS.filter((biome) => biome !== 'marine-ocean'));
 const SEMANTIC_ASSEMBLIES = new Set(['tree-line', 'forest-cluster', 'woodland-island', 'rock-outcrop', 'habitat-cluster']);
 const SEMANTIC_EDGES = new Set(['course-boundary', 'hazard-edge', 'rough-transition']);
 const ID_RE = /^[a-z][a-z0-9-]{2,63}$/;
@@ -33,7 +34,7 @@ export class CourseSchemaError extends Error {
 }
 
 /**
- * Strictly validate and normalize course v2.  This deliberately does not coerce,
+ * Strictly validate and normalize course v3.  This deliberately does not coerce,
  * clamp, default, or filter authoring data: an invalid course must fail before a
  * terrain or environment build begins.  The only derived value is green.z when
  * the authored, legacy-compatible yards field is supplied.
@@ -59,6 +60,9 @@ export function normalizeCourse(raw, { catalogAssetIds = BUILTIN_ENVIRONMENT_ASS
   const greens = array(c.greens, 'course.greens').map((green, index) => validateGreen(green, index, bounds));
   const bunkers = array(c.bunkers, 'course.bunkers').map((bunker, index) => validateBunker(bunker, index, bounds));
   const ponds = array(c.ponds, 'course.ponds').map((pond, index) => validatePond(pond, index, bounds));
+  const biomeTransitions = validateBiomeTransitions(c.biomeTransitions, {
+    biome: c.biome, bounds, tee, corridor, greens, bunkers, ponds,
+  }, fail);
   const catalog = toAssetMap(catalogAssetIds);
   const environment = validateEnvironment(c.environment, { biome: c.biome, bounds, tee, corridor, greens, bunkers, ponds, catalog });
 
@@ -67,6 +71,7 @@ export function normalizeCourse(raw, { catalogAssetIds = BUILTIN_ENVIRONMENT_ASS
     catalogVersion: c.catalogVersion,
     placementAlgorithmVersion: c.placementAlgorithmVersion,
     biome: c.biome,
+    biomeTransitions,
     environmentSeed: normalizeSeed(c.environmentSeed),
     bounds: Object.freeze(bounds), tee: Object.freeze(tee), corridor: Object.freeze(corridor), fringeW: c.fringeW,
     greens: Object.freeze(greens), bunkers: Object.freeze(bunkers), ponds: Object.freeze(ponds),
@@ -80,7 +85,12 @@ function validateMeta(raw) {
   nonEmpty(meta.name, 'course.meta.name');
   if (meta.mode !== 'realistic') fail('course.meta.mode must be realistic');
   exactNumber(meta.schema, 'course.meta.schema');
-  if (meta.schema !== COURSE_SCHEMA_VERSION) fail(`course.meta.schema must be ${COURSE_SCHEMA_VERSION}`);
+  if (meta.schema !== COURSE_SCHEMA_VERSION) {
+    if (Number.isInteger(meta.schema) && meta.schema < COURSE_SCHEMA_VERSION) {
+      fail(`course.meta.schema ${meta.schema} requires explicit migration to ${COURSE_SCHEMA_VERSION}; add biomeTransitions (use [] to preserve current behavior)`);
+    }
+    fail(`course.meta.schema must be ${COURSE_SCHEMA_VERSION}`);
+  }
   if (meta.notes !== undefined) nonEmpty(meta.notes, 'course.meta.notes');
   return { ...meta };
 }

@@ -13,6 +13,11 @@ test('production renderer has one strict hardware-WebGPU backend', async () => {
   assert.doesNotMatch(sceneManager, /new WebGLRenderer|WebGLBackend/);
   assert.match(backend, /forceFallbackAdapter:\s*false/);
   assert.match(backend, /Software\/fallback WebGPU adapters are not supported/);
+  assert.match(backend, /maxSampledTexturesPerShaderStage:\s*24/,
+    'the complete terrain + biome-transition graph must request more than the 16-texture compatibility baseline');
+  assert.match(backend, /adapter\.limits\[name\]/);
+  assert.match(backend, /below the simulator requirement/,
+    'unsupported hardware must fail before shader bind-group creation');
 });
 
 test('required environment assets fail closed before rendering', async () => {
@@ -34,8 +39,8 @@ test('required environment assets fail closed before rendering', async () => {
   assert.match(main, /await range\.assetsReady/);
   assert.match(main, /loadCourse\('\/course\.json', \{ catalogAssetIds: environmentCatalog\.byId \}\)/);
   assert.doesNotMatch(main, /e\.code === 'Digit[12]'/);
-  assert.match(range, /Promise\.all\(\[\s*this\.terrain\.assetsReady,\s*this\.backdrop\.assetsReady,\s*treesReady, environmentPropsReady, ballReady,\s*\]\)/,
-    'terrain, backdrop, trees, props, and ball must all gate the ready state');
+  assert.match(range, /Promise\.all\(\[\s*this\.terrain\.assetsReady,\s*this\.backdrop\.assetsReady,\s*treesReady, environmentPropsReady, ballReady,\s*waterReady,\s*this\.waterReflection\.assetsReady,\s*\]\)/,
+    'terrain, backdrop, trees, props, ball, water assets, and reflection readiness must all gate the ready state');
   assert.match(range, /this\.backdrop\?\.dispose\(\)/,
     'range rebuilds must explicitly release backdrop node textures and geometry');
   assert.match(range, /backdropOwned\.has\(o\)/,
@@ -92,7 +97,8 @@ test('continuous grass LOD keeps its near carpet and fits the fixed record buffe
   const far = scalar('DENSITY_FAR_RADIUS');
   const power = scalar('DENSITY_CURVE_POWER');
   const feather = scalar('DENSITY_FEATHER');
-  const capacity = scalar('MAX_VISIBLE_BLADES');
+  const capacity = scalar('MAX_VISIBLE_BLADE_RECORDS');
+  const triangleBudget = scalar('GRASS_TRIANGLE_BUDGET');
   const radius = 46;
   const keep = (distance) => {
     const progress = Math.max(0, Math.min(1,
@@ -117,6 +123,8 @@ test('continuous grass LOD keeps its near carpet and fits the fixed record buffe
     records += 2 * Math.PI * r * dr * candidateDensity * aliveProbability;
   }
   assert.ok(records < capacity, `${Math.ceil(records)} worst-case records exceed ${capacity}`);
+  assert.equal(triangleBudget, 9_961_472,
+    'grass workload must be bounded by submitted triangles rather than one full-detail blade count');
 });
 
 test('tree rendering exposes no legacy CPU alternate path', async () => {
@@ -149,11 +157,31 @@ test('strict benchmark cannot alter the renderer workload', async () => {
   assert.match(benchmark, /bootstrap\?\.diagnostics\?\.stages/);
   assert.match(benchmark, /elapsedMs: bootstrap\?\.elapsedMs/);
   assert.match(benchmark, /evaluatorCamera\?\.exit\(\)/);
+  assert.match(benchmark, /quality\.acquirePresentationLock\(\{ mode, renderScale \}\)/);
+  assert.match(benchmark, /quality\.releasePresentationLock\(lockId\)/);
+  assert.match(benchmark, /presentationQualityMode = 'quality'/);
+  assert.match(benchmark, /presentationRenderScale = 0\.90/);
+  assert.match(benchmark, /qualityDiagnostics\.presentationLock\?\.active !== true/,
+    'every scenario must prove that the quality lock remains active');
+  assert.match(benchmark, /function viewportDimensionSignature\(viewport\)/);
+  assert.match(benchmark, /temporalStability\.viewportSignatureCount = new Set\(viewportSignatures\)\.size/);
+  assert.doesNotMatch(benchmark, /map\(\(\{ viewport \}\) => JSON\.stringify\(viewport\)\)/,
+    'advancing temporal counters are not viewport dimensions');
+  assert.match(benchmark, /await waitFrames\(4\)/,
+    'the fixed quality resize must settle before production-view prewarm');
   assert.match(benchmark, /waterReflectionDiagnostics\(\)/);
-  assert.match(benchmark, /entry\.mode !== 'analytic'/);
-  assert.match(benchmark, /entry\.size !== 0/);
+  assert.match(benchmark, /entry\.mode !== 'quality'/);
+  assert.match(benchmark, /entry\.source !== 'planar'/);
+  assert.match(benchmark, /entry\.planarReady !== true/);
+  assert.match(benchmark, /entry\.planarPass\?\.allocatedTargets !== 2/);
+  assert.match(benchmark, /entry\.planarPass\?\.strictWebGPU !== true/);
   assert.match(benchmark, /entry\.renderTargetChurn !== false/);
-  assert.match(benchmark, /entry\.fixedCanvas !== true/);
+  assert.match(benchmark, /entry\.fixedCanvas !== false/);
+  assert.match(benchmark, /treeShadowDiagnostics\.workload\?\.authoredSourceRecordsKept/);
+  assert.match(benchmark, /beauty\.workload\?\.authoredGeometry !== true/);
+  assert.match(benchmark, /beauty\.impostorCount !== 0 \|\| beauty\.impostorDraws !== 0/);
+  assert.match(benchmark, /tree shadow residency does not match authored beauty geometry/);
+  assert.doesNotMatch(benchmark, /two-triangle indirect proxy|runtime-lit impostor/);
   assert.doesNotMatch(benchmark, /freeCam\.yaw|freeCam\.pitch|camera\.position\.set/);
 });
 

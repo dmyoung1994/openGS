@@ -9,6 +9,8 @@ export const BALL = {
   diameter: 0.04267,      // m
   get radius() { return this.diameter / 2; },              // m
   get area() { return Math.PI * this.radius * this.radius; }, // m^2 (cross-section)
+  // Uniform-sphere approximation used by the aerodynamic spin-moment ODE.
+  get momentOfInertia() { return (2 / 5) * this.mass * this.radius * this.radius; }, // kg*m^2
 };
 
 export const GRAVITY = 9.80665; // m/s^2

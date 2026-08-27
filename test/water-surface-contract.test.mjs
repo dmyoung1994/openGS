@@ -41,6 +41,7 @@ test('water is a cheap shared-daylight material with depth, shore, and coherent 
   assert.equal(water.mesh.material.normalNode?.isNode, true);
   assert.equal(water.mesh.material.type, 'MeshBasicNodeMaterial');
   const source = await readFile(new URL('../src/scene/WaterSurface.js', import.meta.url), 'utf8');
+  const detailSource = await readFile(new URL('../src/scene/WaterDetail.js', import.meta.url), 'utf8');
 
   assert.match(source, /MeshBasicNodeMaterial/,
     'water must avoid the scene PMREM dielectric path at grazing view');
@@ -87,14 +88,14 @@ test('water is a cheap shared-daylight material with depth, shore, and coherent 
   assert.match(source, /const calmDirection = vec2\(0\.82, 0\.57\)/);
   assert.match(source, /smoothstep\(0\.02, 0\.20, windSpeed\)/);
   assert.doesNotMatch(source, /windDirection\.add\(vec2\(0\.001, 0\)\)\.normalize/);
-  assert.match(source, /water_detail_rgba\.png/);
-  assert.match(source, /const broadDetail = texture/);
-  assert.match(source, /const fineDetail = texture/);
+  assert.match(detailSource, /water_detail_rgba\.png/);
+  assert.match(detailSource, /const broad = texture/);
+  assert.match(detailSource, /const fine = texture/);
   assert.doesNotMatch(source, /envMapIntensity|roughnessNode/,
     'the removed PMREM material controls must not leave a dead lighting path');
-  assert.match(source, /const broadUv = vec2/);
-  assert.match(source, /const capillarySlope = vec2/,
-    'existing samples must provide bounded multi-directional capillary breakup');
+  assert.match(source, /sampleWaterDetail/);
+  assert.match(detailSource, /slope: vec2/,
+    'shared samples must provide bounded multi-directional capillary breakup');
   assert.match(source, /const contactSlopeWeight = smoothstep\(0\.06, 0\.35, shoreDistance\)/,
     'water normals must flatten smoothly into the authoritative shore contact');
   assert.match(source, /wave\(windDirection, 0\.72, baseAmplitude\.mul\(0\.08\)/,
@@ -184,15 +185,55 @@ test('irregular pond water uses an authoritative shoreline SDF and clipped mesh'
   water.dispose();
 });
 
-test('water detail bake is small, RGBA, deterministic-source, and never generated per frame', async () => {
+test('shared 1k water detail has neutral channel semantics and no dominant grid', async () => {
   const bytes = await readFile(new URL('../public/assets/textures/water_detail_rgba.png', import.meta.url));
   const image = decodePNG(bytes);
-  assert.equal(image.width, 256);
-  assert.equal(image.height, 256);
+  assert.equal(image.width, 1024);
+  assert.equal(image.height, 1024);
   assert.equal(image.channels, 4);
   const generator = await readFile(new URL('../scripts/gen_water_detail.mjs', import.meta.url), 'utf8');
   assert.match(generator, /integer period across the tile/);
   assert.match(generator, /R,G = signed capillary-wave slope/);
-  assert.match(generator, /B\s+= sparse crest breakup/);
+  assert.match(generator, /B\s+= broad sediment\/depth variation/);
+  assert.match(generator, /A\s+= restrained crest breakup/);
+  assert.match(generator, /CAPILLARY.*36/);
   assert.doesNotMatch(generator, /Math\.random/);
+
+  const stats = (channel) => {
+    let sum = 0, sumSq = 0, min = 255, max = 0;
+    for (let i = channel; i < image.pixels.length; i += 4) {
+      const value = image.pixels[i];
+      sum += value; sumSq += value * value; min = Math.min(min, value); max = Math.max(max, value);
+    }
+    const count = image.width * image.height;
+    const mean = sum / count;
+    return { mean, deviation: Math.sqrt(sumSq / count - mean * mean), min, max };
+  };
+  for (const channel of [0, 1]) {
+    const slope = stats(channel);
+    assert.ok(Math.abs(slope.mean - 127.5) < 1, 'signed slopes must remain lighting-neutral');
+    assert.ok(slope.deviation > 12 && slope.max < 235 && slope.min > 20, 'slopes must be useful but bounded');
+  }
+  const sediment = stats(2);
+  assert.ok(Math.abs(sediment.mean - 127.5) < 2 && sediment.deviation > 8);
+  const crest = stats(3);
+  assert.ok(crest.mean < 5 && crest.max < 180, 'crest breakup must remain sparse and restrained');
+
+  const correlation = (dx, dy, channel) => {
+    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, count = 0;
+    for (let y = 0; y < image.height; y += 4) for (let x = 0; x < image.width; x += 4) {
+      const a = image.pixels[(y * image.width + x) * 4 + channel];
+      const b = image.pixels[(((y + dy) % image.height) * image.width + ((x + dx) % image.width)) * 4 + channel];
+      sx += a; sy += b; sxx += a * a; syy += b * b; sxy += a * b; count++;
+    }
+    return (count * sxy - sx * sy) / Math.sqrt((count * sxx - sx * sx) * (count * syy - sy * sy));
+  };
+  for (const offset of [8, 16, 32, 64, 128, 256]) {
+    const peak = Math.max(
+      Math.abs(correlation(offset, 0, 0)),
+      Math.abs(correlation(0, offset, 1)),
+      Math.abs(correlation(offset, offset, 0)),
+    );
+    assert.ok(peak < 0.68, `water detail has a dominant periodic interval at ${offset}px`);
+  }
 });

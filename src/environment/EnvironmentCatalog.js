@@ -19,15 +19,40 @@ export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
     bounds: Object.freeze({ radius: 2.3 }),
     placement: Object.freeze({ minSpacing: 5, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
   }),
+  'polyhaven-tree-small-02-hero': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 3.3 }),
+    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
+  'polyhaven-island-tree-02': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 3.7 }),
+    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
   'polyhaven-island-tree-01': Object.freeze({
     biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
     bounds: Object.freeze({ radius: 2.5 }),
+    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
+  'blendkit-palm-tree-medium-dense': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime']),
+    bounds: Object.freeze({ radius: 5.7 }),
     placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
   }),
   'polyhaven-fern-02': Object.freeze({
     biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
     bounds: Object.freeze({ radius: 1.4 }),
     placement: Object.freeze({ minSpacing: 1.8, clearance: Object.freeze({ tee: 8, green: 4, bunker: 3, water: 2, fairway: 6 }) }),
+  }),
+  'polyhaven-grass-medium-02': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 1.35 }),
+    placement: Object.freeze({ minSpacing: 2.2, clearance: Object.freeze({ tee: 8, green: 4, bunker: 3, water: 2, fairway: 6 }) }),
+  }),
+  'polyhaven-grass-bermuda-01': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 1.0 }),
+    placement: Object.freeze({ minSpacing: 1.6, clearance: Object.freeze({ tee: 8, green: 4, bunker: 3, water: 2, fairway: 6 }) }),
   }),
   'polyhaven-boulder-01': Object.freeze({
     biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
@@ -39,35 +64,14 @@ export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
     bounds: Object.freeze({ radius: 1.55 }),
     placement: Object.freeze({ minSpacing: 4, clearance: Object.freeze({ tee: 12, green: 12, bunker: 5, water: 3, fairway: 7 }) }),
   }),
-  'polyhaven-fir-tree-01': Object.freeze({
-    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
-    bounds: Object.freeze({ radius: 3.30 }),
-    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
-  }),
-  'polyhaven-fir-tree-01-variant-b': Object.freeze({
-    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
-    bounds: Object.freeze({ radius: 3.15 }),
-    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
-  }),
-  'polyhaven-fir-tree-01-variant-c': Object.freeze({
-    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
-    bounds: Object.freeze({ radius: 3.20 }),
-    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
-  }),
-  'polyhaven-pine-tree-01': Object.freeze({
-    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
-    bounds: Object.freeze({ radius: 4.05 }),
-    placement: Object.freeze({ minSpacing: 8, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 8 }) }),
-  }),
 });
 export const BUILTIN_ENVIRONMENT_ASSET_IDS = Object.freeze(Object.keys(BUILTIN_ENVIRONMENT_ASSETS));
 
 // Licences a runtime asset may ship under. CC0 remains the default and covers every
-// Poly Haven derivative. BlenderKit's free tier is "Royalty Free", not CC0: it permits
-// use of the model inside a rendered/interactive product but restricts redistributing
-// the asset itself, so it is recorded as an explicit SPDX LicenseRef rather than being
-// quietly folded into CC0. Each such asset must name its BlenderKit source in
-// `derivativeLineage.sourceUrl` and carry a provenance doc under docs/.
+// Poly Haven derivative plus individually CC0-published catalog assets. BlenderKit's
+// general free tier is "Royalty Free", not CC0, so non-CC0 BlenderKit assets use an
+// explicit LicenseRef. Every external asset names its source in derivativeLineage and
+// carries a provenance document under docs/.
 export const ACCEPTED_LICENSES = Object.freeze(new Set([
   'CC0-1.0',
   'LicenseRef-BlenderKit-RoyaltyFree',
@@ -78,11 +82,15 @@ const ID_RE = /^[a-z][a-z0-9-]{2,63}$/;
 const URL_RE = /^https:\/\/.+/;
 const ASSET_KEYS = new Set([
   'id', 'category', 'biomes', 'license', 'derivativeLineage', 'dimensions',
-  'bounds', 'placement', 'grounding', 'lods', 'impostor', 'wind',
+  'bounds', 'placement', 'grounding', 'transitionHabitats', 'alphaMaps', 'lods', 'impostor', 'wind',
 ]);
 const ROOT_KEYS = new Set(['version', 'catalogId', 'assets']);
 const CATEGORIES = new Set(['tree', 'shrub', 'groundcover', 'deadwood', 'rock', 'wall', 'building']);
 const BIOMES = new Set(['temperate-maritime', 'temperate-alpine']);
+export const ENVIRONMENT_TRANSITION_HABITATS = Object.freeze([
+  'managed-course', 'strand-grass', 'coastal-dune', 'montane-forest',
+]);
+const TRANSITION_HABITATS = new Set(ENVIRONMENT_TRANSITION_HABITATS);
 
 export class EnvironmentCatalogError extends Error {
   constructor(message) {
@@ -178,6 +186,10 @@ export async function verifyEnvironmentCatalogAssets(catalog, {
     const derivatives = asset.lods.map((lod) => ({
       assetId: asset.id, url: lod.url, sha256: lod.sha256, label: `LOD ${lod.level}`,
     }));
+    derivatives.push(...asset.alphaMaps.map((alphaMap) => ({
+      assetId: asset.id, url: alphaMap.url, sha256: alphaMap.sha256,
+      label: `alpha map ${alphaMap.material}`,
+    })));
     if (asset.impostor.kind === 'baked-atlas') derivatives.push({
       assetId: asset.id, url: asset.impostor.url, sha256: asset.impostor.sha256, label: 'baked impostor atlas',
     });
@@ -280,6 +292,16 @@ function validateAsset(raw, path) {
   const grounding = strictObject(asset.grounding, `${path}.grounding`);
   rejectUnknown(grounding, new Set(['burialFraction']), `${path}.grounding`);
   range(grounding.burialFraction, 0, 0.4, `${path}.grounding.burialFraction`);
+  const transitionHabitats = asset.transitionHabitats === undefined
+    ? []
+    : validateTransitionHabitats(asset.transitionHabitats, `${path}.transitionHabitats`);
+  if ((asset.category === 'tree' || asset.category === 'shrub' || asset.category === 'groundcover')
+    && transitionHabitats.length === 0) {
+    fail(`${path}.transitionHabitats must declare the ecological bands supported by vegetation`);
+  }
+  const alphaMaps = asset.alphaMaps === undefined
+    ? []
+    : validateAlphaMaps(asset.alphaMaps, `${path}.alphaMaps`);
 
   if (!Array.isArray(asset.lods) || asset.lods.length === 0) fail(`${path}.lods must be a non-empty array`);
   const lods = asset.lods.map((lod, i) => validateLod(lod, `${path}.lods[${i}]`));
@@ -298,7 +320,36 @@ function validateAsset(raw, path) {
     license: Object.freeze({ ...license }), derivativeLineage: Object.freeze({ ...lineage }),
     dimensions: Object.freeze(dimensions), bounds: Object.freeze(bounds), grounding: Object.freeze({ ...grounding }),
     placement: Object.freeze({ ...placement, clearance: Object.freeze({ ...clearance }) }),
-    lods: Object.freeze(lods), impostor: Object.freeze(impostor), wind: Object.freeze(wind),
+    transitionHabitats: Object.freeze(transitionHabitats),
+    alphaMaps: Object.freeze(alphaMaps), lods: Object.freeze(lods),
+    impostor: Object.freeze(impostor), wind: Object.freeze(wind),
+  });
+}
+
+function validateTransitionHabitats(raw, path) {
+  if (!Array.isArray(raw) || raw.length === 0) fail(`${path} must be a non-empty array`);
+  const values = raw.map((value, index) => {
+    if (!TRANSITION_HABITATS.has(value)) fail(`${path}[${index}] is not a registered transition habitat`);
+    return value;
+  });
+  if (new Set(values).size !== values.length) fail(`${path} must not contain duplicates`);
+  return values;
+}
+
+function validateAlphaMaps(raw, path) {
+  if (!Array.isArray(raw)) fail(`${path} must be an array`);
+  const materials = new Set();
+  return raw.map((entry, index) => {
+    const map = strictObject(entry, `${path}[${index}]`);
+    rejectUnknown(map, new Set(['material', 'url', 'sha256']), `${path}[${index}]`);
+    nonEmptyString(map.material, `${path}[${index}].material`);
+    if (materials.has(map.material)) fail(`${path} must contain unique material names`);
+    materials.add(map.material);
+    if (typeof map.url !== 'string' || !map.url.startsWith('/assets/')) {
+      fail(`${path}[${index}].url must be a public /assets/ path`);
+    }
+    hash(map.sha256, `${path}[${index}].sha256`);
+    return Object.freeze({ material: map.material, url: map.url, sha256: map.sha256 });
   });
 }
 

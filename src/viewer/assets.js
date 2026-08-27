@@ -2,7 +2,6 @@ import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
 import { buildBunkerMesh } from '../scene/Bunkers.js';
 import { createGolfBallMesh } from '../scene/GolfBall.js';
-import { loadTreePrototype, buildTreeBeautyLod0 } from '../scene/Trees.js';
 import { GeneratedFoliageForest, GeneratedFoliageTree } from '../scene/GeneratedFoliageTree.js';
 import { createLocalFoliagePackRegistry, loadFoliageAlias } from '../foliage/FoliagePackResolver.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -130,108 +129,6 @@ function turfPatch(kind, { withGrass = false, camera, renderer, motionHistory, e
     out.objects.push(out.grass.mesh);
   }
   return out;
-}
-
-// Isolated production fir subject. The viewer intentionally uses the same GPU
-// classifier as Range, with one catalog record and a real terrain contact. This
-// makes close/mid/far residency diagnosable without the course's other foliage
-// obscuring the silhouette. `scripts/shot.mjs --cam/--look` controls exact poses.
-async function firTreePatch({ camera, renderer, motionHistory, environment, treePrefix = 'fir_tree_01', prototypeBase = null, targetHeight = 18.895 }) {
-  const minX = PATCH_X, minZ = -PATCH / 2;
-  const cx = minX + PATCH / 2, cz = 0;
-  const terrain = new Terrain({
-    bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH },
-    spacing: 0.6,
-    renderSpacing: 0.6,
-    heightFn: swell,
-    surfaceFn: () => 'fairway',
-    zones: ZONES.fairway(),
-    motionHistory,
-    renderer,
-  });
-  const prototypeRoot = prototypeBase || `/assets/trees/${treePrefix}`;
-  const proto = await loadTreePrototype(`${prototypeRoot}_lod0.glb`);
-  const baseY = terrain.heightAt(cx, cz);
-  const treeBeauty = buildTreeBeautyLod0(proto, [{
-    x: cx, z: cz, y: baseY, rotY: 0, targetHeight,
-  }], {
-    renderer, camera, motionHistory, environment,
-    wind: { model: 'hierarchical-tree-v1', trunkStiffness: 0.94, branchStiffness: 0.72, leafStiffness: 0.38, gustResponse: 0.52 },
-    seed: 0x51a7e5d,
-    lodNear: 12,
-    lodFar: 20,
-  });
-  // The TreeBeauty group stays at the world origin: placements exist only in GPU
-  // buffers, so a node-hierarchy bbox would frame the origin, not the tree. The
-  // builder knows the placement and hands the viewer its world bounds directly.
-  return {
-    terrain,
-    objects: [terrain.mesh, treeBeauty.group],
-    focus: { x: cx, z: cz },
-    treeBeauty,
-    frameBounds: {
-      center: [cx, baseY + targetHeight / 2, cz],
-      size: [targetHeight * 0.6, targetHeight, targetHeight * 0.6],
-    },
-  };
-}
-
-// Candidate-only source-faithful viewer path. This deliberately bypasses the
-// production TreeBeauty classifier so the authored GLB's PBR materials and full
-// twig-card silhouette can be judged directly under the same SceneManager,
-// Lighting, atmosphere, and terrain contact as every other viewer asset. It is
-// not imported by Range/Trees and has no catalog/course dependency.
-async function firTreeSourceCandidatePatch({ renderer, lod = 0 }) {
-  const minX = PATCH_X, minZ = -PATCH / 2;
-  const cx = minX + PATCH / 2, cz = 0;
-  const terrain = new Terrain({
-    bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH },
-    spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
-    surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
-  });
-  const gltf = await viewerGltfLoader.loadAsync(
-    `/assets/trees_candidates/fir_tree_01/fir_tree_01_source_candidate_lod${lod}.glb`,
-  );
-  const subject = gltf.scene;
-  subject.position.set(cx, terrain.heightAt(cx, cz), cz);
-  subject.traverse((object) => {
-    if (object.isMesh) {
-      object.castShadow = true;
-      object.receiveShadow = true;
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of materials) {
-        if (material?.name !== 'fir_source_twig_authored_alpha') continue;
-        // Runtime foliage must be an opaque masked surface, not sorted BLEND.
-        // Keep a low cutoff so the authored needle tips survive while depth,
-        // shadows, and viewer cost remain representative of production.
-        material.transparent = false;
-        material.alphaTest = 0.12;
-        material.depthWrite = true;
-        material.needsUpdate = true;
-      }
-    }
-  });
-  // The viewer's subject-mask and diagnostics APIs are treeBeauty-shaped by
-  // contract; the wrapper owns no extra GPU object and simply exposes this GLTF
-  // scene as the isolated subject.
-  const treeBeauty = {
-    group: subject,
-    update() {},
-    residencyEstimate() {
-      return {
-        candidateOnly: true,
-        lod,
-        uploadVertices: lod === 0 ? 112264 : 25360,
-        renderVertices: lod === 0 ? 434988 : 68823,
-        triangles: lod === 0 ? 144996 : 22941,
-        materialPrimitives: 4,
-        twigAlphaTest: 0.12,
-      };
-    },
-    readDiagnostics() { return this.residencyEstimate(); },
-    dispose() {},
-  };
-  return { terrain, objects: [terrain.mesh, subject], focus: { x: cx, z: cz }, treeBeauty };
 }
 
 // Candidate-only v4 viewer path.  This is deliberately a direct GLTF subject:
@@ -575,46 +472,11 @@ async function sourceTreePatch({ renderer }) {
   });
 }
 
-async function pineSourcePatch({ renderer }) {
-  return onlineTreeReferencePatch({
-    renderer, file: '/assets/trees/pine_tree_01_canonical_lod0.glb', scale: 1,
-    targetHeight: 18, frameWidth: 15,
-  });
-}
-
 async function islandTreeSourcePatch({ renderer }) {
   return onlineTreeReferencePatch({
     renderer, file: '/assets/trees/island_tree_01.glb', scale: 2.5,
     targetHeight: 12.5, frameWidth: 12.5,
   });
-}
-
-async function pineTreePatch({ camera, renderer, motionHistory, environment }) {
-  const minX = PATCH_X, minZ = -PATCH / 2;
-  const cx = minX + PATCH / 2, cz = 0;
-  const terrain = new Terrain({
-    bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH },
-    spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
-    surfaceFn: () => 'fairway', zones: ZONES.fairway(), motionHistory, renderer,
-  });
-  const proto = await loadTreePrototype('/assets/trees/pine_tree_01_canonical_lod0.glb');
-  const baseY = terrain.heightAt(cx, cz);
-  const targetHeight = 14.85;
-  const treeBeauty = buildTreeBeautyLod0(proto, [{
-    x: cx, z: cz, y: baseY, rotY: 0, targetHeight,
-  }], {
-    renderer, camera, motionHistory, environment,
-    wind: { model: 'hierarchical-tree-v1', trunkStiffness: 0.9, branchStiffness: 0.62, leafStiffness: 0.28, gustResponse: 0.66 },
-    seed: 0x51a7e5d, lodNear: 12, lodFar: 20,
-  });
-  // See the frameBounds note in firTreePatch: GPU-placed trees expose no CPU bbox.
-  return {
-    terrain, objects: [terrain.mesh, treeBeauty.group], focus: { x: cx, z: cz }, treeBeauty,
-    frameBounds: {
-      center: [cx, baseY + targetHeight / 2, cz],
-      size: [targetHeight * 0.6, targetHeight, targetHeight * 0.6],
-    },
-  };
 }
 
 // A production-path pond lab.  The basin uses the same dished profile and water
@@ -662,18 +524,9 @@ function standingTurf(kind, opts = {}) {
 }
 
 export const ASSETS = {
-  'tree: fir LOD lab': (ctx) => firTreePatch(ctx),
-  'tree: pine LOD comparator': (ctx) => pineTreePatch(ctx),
-  'tree: pine canonical': (ctx) => firTreePatch({
-    ...ctx,
-    treePrefix: 'pine_tree_01_canonical',
-    targetHeight: 14.85,
-  }),
   'tree: source broadleaf comparator': (ctx) => sourceTreePatch(ctx),
-  'tree: pine source comparator': (ctx) => pineSourcePatch(ctx),
   'reference: Poly Haven Tree Small 02 (CC0)': (ctx) => sourceTreePatch(ctx),
   'reference: Poly Haven Island Tree 01 (CC0)': (ctx) => islandTreeSourcePatch(ctx),
-  'reference: Poly Haven Pine Tree 01 (CC0)': (ctx) => pineSourcePatch(ctx),
   'water: pond lab': (ctx) => pondPatch(ctx),
   'turf: fairway': standingTurf('fairway'),
   'turf: green': standingTurf('green'),

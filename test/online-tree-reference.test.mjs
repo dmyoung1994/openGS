@@ -8,7 +8,6 @@ test('Poly Haven tree references stay local, explicit, and isolated from runtime
   const references = [
     ['reference: Poly Haven Tree Small 02 (CC0)', '/assets/trees/tree_small_02_lod0.glb'],
     ['reference: Poly Haven Island Tree 01 (CC0)', '/assets/trees/island_tree_01.glb'],
-    ['reference: Poly Haven Pine Tree 01 (CC0)', '/assets/trees/pine_tree_01_canonical_lod0.glb'],
   ];
   for (const [label, file] of references) {
     assert.match(assets, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -17,7 +16,6 @@ test('Poly Haven tree references stay local, explicit, and isolated from runtime
   }
   assert.match(provenance, /https:\/\/polyhaven\.com\/a\/tree_small_02/);
   assert.match(provenance, /https:\/\/polyhaven\.com\/a\/island_tree_01/);
-  assert.match(provenance, /https:\/\/polyhaven\.com\/a\/pine_tree_01/);
   assert.match(provenance, /CC0/);
   assert.match(provenance, /reference-only/);
   assert.doesNotMatch(assets, /local\.polyhaven/);

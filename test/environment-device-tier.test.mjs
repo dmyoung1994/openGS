@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ENVIRONMENT_DEVICE_TIERS, selectEnvironmentDeviceTier, environmentTierSnapshot } from '../src/scene/EnvironmentDeviceTier.js';
+import {
+  ENVIRONMENT_DEVICE_TIERS,
+  environmentTierSnapshot,
+  selectEnvironmentDeviceTier,
+  selectInitialVisualQualityMode,
+} from '../src/scene/EnvironmentDeviceTier.js';
 
 const MiB = 1024 * 1024;
 const limits = (overrides = {}) => ({
@@ -38,4 +43,25 @@ test('tier snapshots are serializable workload data, not renderer alternatives',
     trees: { lodNear: 52, lodFar: 110 },
   });
   assert.throws(() => environmentTierSnapshot(null), /tier is required/);
+});
+
+test('auto visual quality starts from capability tier without changing renderer tier callers', () => {
+  assert.equal(selectInitialVisualQualityMode({
+    limits: limits(), hardwareConcurrency: 12, deviceMemoryGiB: 32,
+  }), 'ultra');
+  assert.equal(selectInitialVisualQualityMode({
+    limits: limits(), hardwareConcurrency: 16, deviceMemoryGiB: 8,
+  }), 'ultra', 'Chrome-capped desktop memory must still permit an Ultra start');
+  assert.equal(selectInitialVisualQualityMode({
+    limits: limits(), hardwareConcurrency: 6, deviceMemoryGiB: 8,
+  }), 'quality');
+  assert.equal(selectInitialVisualQualityMode({
+    limits: limits(), hardwareConcurrency: 8, deviceMemoryGiB: 8,
+  }), 'quality', 'a high-tier phone/tablet hint must not be promoted to Ultra');
+  assert.equal(selectInitialVisualQualityMode({
+    limits: limits({ maxStorageBufferBindingSize: 64 * MiB, maxBufferSize: 128 * MiB, maxTextureDimension2D: 4096 }),
+    hardwareConcurrency: 4,
+    deviceMemoryGiB: 4,
+  }), 'balanced');
+  assert.equal(selectInitialVisualQualityMode({ tier: ENVIRONMENT_DEVICE_TIERS.conservative }), 'battery');
 });
