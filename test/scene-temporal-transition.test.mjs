@@ -43,17 +43,23 @@ test('delayed return after a still result orbit invalidates TRAA on its first mo
   assert.deepEqual(reasons, ['automatic camera discontinuity']);
 });
 
-test('post stack does not reintroduce a second jittered or glare copy', async () => {
+test('post stack blooms only the final resolved scene and cloud composite', async () => {
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /golfBloom\(/);
   assert.match(source, /const rgb = cloudTransport[\s\S]*resolvedScene\.mul\(cloudTransport\.a\)/,
-    'the existing final output may compose cloud transport but must not add a glare copy');
+    'cloud transport must resolve before bloom');
+  assert.match(source, /golfBloom\(aa\.getTextureNode\(\), 0\.10, 1\.0, 0\.125\)/,
+    'the existing resolved HDR texture gets one bounded eighth-resolution highlight pass');
+  assert.match(source, /bloomRgb\.mul\(cloudTransport\.a\)/,
+    'cloud transmittance must attenuate glare without a full-resolution composite copy');
+  assert.match(source, /const displayRgb = renderOutput\([\s\S]*gradedRgb/,
+    'tone mapping and spatial AA must remain downstream of linear HDR bloom');
 });
 
-test('analytic environment fill remains subordinate to the shared sun', async () => {
+test('analytic environment fill remains subordinate to the shared celestial key', async () => {
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
-  assert.match(source, /scene\.environmentIntensity = 0\.34 \* Math\.sqrt/,
-    'PMREM fill must not flatten the corrected direct-daylight value structure');
+  assert.match(source, /const indirectStrength = Math\.max\(/);
+  assert.match(source, /scene\.environmentIntensity = 0\.34 \* indirectStrength/,
+    'PMREM fill must not flatten the dominant celestial value structure');
   assert.match(source, /environment\.atmosphereExposure\.value \* 1\.20/,
     'Neutral calibration must retain midtone value while preserving daylight chromaticity');
 });
@@ -82,8 +88,8 @@ test('stationary cloudy scenes retain projection jitter for hard tree silhouette
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   assert.match(source, /aa\.cameraJitterEnabled = true/,
     'cloud transport must not disable geometry sample accumulation at setup');
-  assert.match(source, /this\._traa\.cameraJitterEnabled = !this\._cameraMoving/,
-    'only real camera motion may disable projection jitter');
+  assert.match(source, /this\._traa\.cameraJitterEnabled = true/,
+    'moving and stationary views both require fractional pixel coverage');
   assert.doesNotMatch(source, /cameraJitterEnabled = this\.weatherSky\?\.cloudsEnabled/,
     'cloud coverage may not force hard one-sample tree edges');
 });
@@ -127,18 +133,20 @@ test('TRAA constructor keeps the two color targets depth-free and defers depth-n
   }
 });
 
-test('TRAA history remains linear while RenderPipeline owns the required transformed presentation pass', async () => {
+test('TRAA and bloom remain linear while display-referred FXAA owns final edge cleanup', async () => {
   const scene = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   const traa = await readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8');
   assert.match(scene, /this\.postProcessing = new RenderPipeline\(this\.renderer\)/);
-  assert.match(scene, /this\.postProcessing\.outputNode = rgb/);
+  assert.match(scene, /const displayRgb = renderOutput\(/);
+  assert.match(scene, /this\._fxaaPass = fxaa\(displayRgb\)/);
+  assert.match(scene, /this\.postProcessing\.outputColorTransform = false/);
+  assert.match(scene, /this\.postProcessing\.outputNode = this\._fxaaPass/);
   assert.match(scene, /this\.postProcessing\.render\(\)/);
   assert.match(traa, /renderer\.setRenderTarget\( this\._resolveRenderTarget \)/);
   assert.match(traa, /this\._historyTextureNode\.value = this\._historyRenderTarget\.texture/);
-  assert.doesNotMatch(scene, /outputColorTransform\s*=\s*false/);
 });
 
-test('camera motion disables projection jitter without changing the viewport', () => {
+test('camera motion remains observable without changing the viewport', () => {
   const camera = new PerspectiveCamera();
   camera.updateMatrixWorld();
   const manager = Object.create(SceneManager.prototype);
@@ -215,6 +223,7 @@ test('viewport diagnostics expose every full-screen render surface and camera vi
     _resolveRenderTarget: { width: 1280, height: 720 },
   };
   manager._bloomPass = null;
+  manager._fxaaPass = null;
 
   const diagnostics = manager.readViewportDiagnostics();
   assert.deepEqual(diagnostics.internalTargets, {
@@ -223,6 +232,7 @@ test('viewport diagnostics expose every full-screen render surface and camera vi
     temporalHistory: [1280, 720],
     temporalResolve: [1280, 720],
     bloom: null,
+    displayAntialias: null,
   });
   assert.deepEqual(diagnostics.cameraView, {
     enabled: true, fullWidth: 1280, fullHeight: 720,

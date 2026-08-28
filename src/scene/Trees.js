@@ -388,17 +388,17 @@ function foliageColorNode(material, tintNode) {
 // its direct lobe/shadow map still gates the result. The horizon hue keeps the
 // under-canopy return chromatic instead of turning to neutral charcoal.
 function needleTransmissionFactor(needleNormalWorld, viewDirectionWorld, environment, foliageMask = null) {
-  const sunFacingBack = needleNormalWorld.dot(environment.sunDirection).negate()
+  const sunFacingBack = needleNormalWorld.dot(environment.keyDirection).negate()
     .clamp(0, 1);
   // Crysis/SpeedTree-style transmission is strongest when the camera looks
   // toward the shared sun through a back-facing needle, not on every grazing
   // silhouette. This suppresses the lime edge response on side-lit tips while
   // retaining the physically plausible warm backlight direction.
-  const sunToEye = viewDirectionWorld.dot(environment.sunDirection).clamp(0, 1);
+  const sunToEye = viewDirectionWorld.dot(environment.keyDirection).clamp(0, 1);
   const backlit = smoothstep(0.12, 0.82, sunFacingBack);
   const mask = foliageMask ?? float(1);
   return backlit.mul(sunToEye.mul(0.72).add(0.10)).mul(mask)
-    .mul(environment.sunIlluminanceScale.max(0)).mul(0.12).clamp(0, 0.12);
+    .mul(environment.keyIlluminanceScale.max(0)).mul(0.12).clamp(0, 0.12);
 }
 
 function needleTransmission(baseColor, transmissionFactor, environment) {
@@ -406,7 +406,7 @@ function needleTransmission(baseColor, transmissionFactor, environment) {
   // shift observed in real back-lit needles, while the horizon remains a
   // bounded chromatic return rather than a second light or fixed fill.
   const transmissionTint = environment.horizonColor.mul(0.36)
-    .add(environment.sunColor.mul(0.64));
+    .add(environment.keyColor.mul(0.64));
   return baseColor.mul(float(1).add(transmissionFactor.mul(0.20)))
     .add(transmissionTint.mul(transmissionFactor.mul(0.55)));
 }
@@ -1938,10 +1938,10 @@ export class TreeBeautyLod {
       const roleAlbedo = texel.rgb.mul(roleGrade);
       const upperSky = this.environment.zenithColor.mul(0.34);
       const horizonSky = this.environment.horizonColor.mul(0.18);
-      const sunResponse = cheapShadingNormalWorld.dot(this.environment.sunDirection).abs()
+      const sunResponse = cheapShadingNormalWorld.dot(this.environment.keyDirection).abs()
         .mul(0.45).add(0.22);
-      const directSun = this.environment.sunColor
-        .mul(this.environment.sunIlluminanceScale.max(0)).mul(sunResponse);
+      const directSun = this.environment.keyColor
+        .mul(this.environment.keyIlluminanceScale.max(0)).mul(sunResponse);
       // v4's branchlet atlas is already normalized around its source foliage
       // albedo, while the production v3 atlas is deliberately low-exposure.
       // Reusing v3's 2.85 normalization made the middle v4 crown jump bright
@@ -2221,8 +2221,8 @@ export class TreeBeautyLod {
     // diffuse needle cluster needs, and remains tied to the same authored state.
     const upperSky = this.environment.zenithColor.mul(0.34);
     const horizonSky = this.environment.horizonColor.mul(0.18);
-    const sunResponse = toCamera.dot(this.environment.sunDirection).abs().mul(0.45).add(0.22);
-    const directSun = this.environment.sunColor.mul(this.environment.sunIlluminanceScale).mul(sunResponse);
+    const sunResponse = toCamera.dot(this.environment.keyDirection).abs().mul(0.45).add(0.22);
+    const directSun = this.environment.keyColor.mul(this.environment.keyIlluminanceScale).mul(sunResponse);
     // The neutral atlas stores the source's linearized, low-exposure albedo. Keep
     // the shared daylight direction/colour, but normalize its irradiance into the
     // same display range as the lit geometry. This is an albedo/exposure response,

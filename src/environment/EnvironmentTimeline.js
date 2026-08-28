@@ -5,7 +5,7 @@ import {
 } from './EnvironmentFrameState.js';
 
 /**
- * Versioned, renderer-independent daylight and weather clock.
+ * Versioned, renderer-independent celestial and weather clock.
  *
  * The timeline uses UTC for its authored clock.  `longitude` is degrees east of
  * Greenwich and the solar azimuth convention is the same one used by the
@@ -14,13 +14,13 @@ import {
  * makes lighting, atmosphere, water, captures, and physics consume one answer.
  */
 
-export const ENVIRONMENT_TIMELINE_VERSION = 1;
-export const ENVIRONMENT_TIMELINE_ALGORITHM_VERSION = 'environment-timeline-v1';
+export const ENVIRONMENT_TIMELINE_VERSION = 2;
+export const ENVIRONMENT_TIMELINE_ALGORITHM_VERSION = 'environment-timeline-v2';
 export const ENVIRONMENT_TIMELINE_SOLAR_ALGORITHM_VERSION = 'noaa-solar-position-v1';
+export const ENVIRONMENT_TIMELINE_LUNAR_ALGORITHM_VERSION = 'low-precision-lunar-position-v1';
 export const ENVIRONMENT_TIMELINE_WEATHER_ALGORITHM_VERSION = 'weather-keyframes-v1';
 export const ENVIRONMENT_TIMELINE_CONFIG_VERSION = ENVIRONMENT_TIMELINE_VERSION;
 
-export const MIN_FRAME_SUN_ELEVATION_RADIANS = 0.001;
 export const CIVIL_TWILIGHT_ELEVATION_RADIANS = -6 * Math.PI / 180;
 export const SOLAR_DAYLIGHT_ELEVATION_RADIANS = 0;
 
@@ -153,7 +153,10 @@ function interpolateAngle(from, to, amount) {
   return normalizeAngle(from + shortestAngleDelta(from, to) * amount);
 }
 
-function smoothstep(amount) {
+function smoothstep(amountOrEdge0, edge1 = undefined, value = undefined) {
+  const amount = value === undefined
+    ? amountOrEdge0
+    : clamp((value - amountOrEdge0) / Math.max(1e-12, edge1 - amountOrEdge0), 0, 1);
   return amount * amount * (3 - 2 * amount);
 }
 
@@ -617,6 +620,108 @@ function fixedSolarPosition(solar) {
   });
 }
 
+// Deterministic low-precision lunar ephemeris. The compact orbital-element model
+// is accurate enough for a rendered disc and preserves the timeline's true-north,
+// clockwise azimuth convention. Topocentric parallax matters visibly near moonrise,
+// so the geocentric altitude is corrected before the render state is published.
+function computeLunarPosition(epochMilliseconds, latitudeDegrees, longitudeDegrees, atmosphere, clouds, solar) {
+  const julianDay = epochMilliseconds / 86400000 + 2440587.5;
+  const days = julianDay - 2451543.5;
+  const node = normalizeAngle((125.1228 - 0.0529538083 * days) * DEG_TO_RAD);
+  const inclination = 5.1454 * DEG_TO_RAD;
+  const periapsis = normalizeAngle((318.0634 + 0.1643573223 * days) * DEG_TO_RAD);
+  const eccentricity = 0.0549;
+  const meanAnomaly = normalizeAngle((115.3654 + 13.0649929509 * days) * DEG_TO_RAD);
+  const eccentricAnomaly = meanAnomaly + eccentricity * Math.sin(meanAnomaly)
+    * (1 + eccentricity * Math.cos(meanAnomaly));
+  const orbitalX = 60.2666 * (Math.cos(eccentricAnomaly) - eccentricity);
+  const orbitalY = 60.2666 * Math.sqrt(1 - eccentricity * eccentricity) * Math.sin(eccentricAnomaly);
+  const distanceEarthRadii = Math.hypot(orbitalX, orbitalY);
+  const trueAnomaly = Math.atan2(orbitalY, orbitalX);
+  const argument = trueAnomaly + periapsis;
+  const eclipticX = distanceEarthRadii * (
+    Math.cos(node) * Math.cos(argument) - Math.sin(node) * Math.sin(argument) * Math.cos(inclination)
+  );
+  const eclipticY = distanceEarthRadii * (
+    Math.sin(node) * Math.cos(argument) + Math.cos(node) * Math.sin(argument) * Math.cos(inclination)
+  );
+  const eclipticZ = distanceEarthRadii * Math.sin(argument) * Math.sin(inclination);
+  const obliquity = (23.4393 - 3.563e-7 * days) * DEG_TO_RAD;
+  const equatorialX = eclipticX;
+  const equatorialY = eclipticY * Math.cos(obliquity) - eclipticZ * Math.sin(obliquity);
+  const equatorialZ = eclipticY * Math.sin(obliquity) + eclipticZ * Math.cos(obliquity);
+  const rightAscension = Math.atan2(equatorialY, equatorialX);
+  const declination = Math.atan2(equatorialZ, Math.hypot(equatorialX, equatorialY));
+  const siderealHours = 18.697374558 + 24.06570982441908 * (julianDay - 2451545.0)
+    + longitudeDegrees / 15;
+  const hourAngle = normalizeAngle(siderealHours * 15 * DEG_TO_RAD - rightAscension);
+  const latitude = latitudeDegrees * DEG_TO_RAD;
+  const geocentricElevation = Math.asin(clamp(
+    Math.sin(latitude) * Math.sin(declination)
+      + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle),
+    -1, 1,
+  ));
+  const horizontalParallax = Math.asin(clamp(1 / distanceEarthRadii, -1, 1));
+  const elevation = geocentricElevation - horizontalParallax * Math.cos(geocentricElevation);
+  const azimuth = normalizeAngle(Math.atan2(
+    Math.sin(hourAngle),
+    Math.cos(hourAngle) * Math.sin(latitude) - Math.tan(declination) * Math.cos(latitude),
+  ) + Math.PI);
+  const horizontal = Math.cos(elevation);
+  const direction = freeze({
+    x: Math.sin(azimuth) * horizontal,
+    y: Math.sin(elevation),
+    z: Math.cos(azimuth) * horizontal,
+  });
+  const elongationCosine = clamp(
+    direction.x * solar.direction.x + direction.y * solar.direction.y + direction.z * solar.direction.z,
+    -1, 1,
+  );
+  const illuminatedFraction = clamp((1 - elongationCosine) * 0.5, 0, 1);
+  const phaseAngleRadians = Math.acos(clamp(2 * illuminatedFraction - 1, -1, 1));
+  const elevationDegrees = elevation * RAD_TO_DEG;
+  const airMass = relativeAirMass(elevationDegrees);
+  const opticalDepth = (0.10 + (atmosphere.turbidity - 1) * 0.022)
+    * (Number.isFinite(airMass) ? airMass : 40);
+  const atmosphericTransmission = Math.exp(-Math.max(0, opticalDepth));
+  const cloudTransmission = 1 - 0.72 * clouds.coverage * clouds.density;
+  const intensity = elevation > 0
+    ? 0.25 * illuminatedFraction * atmosphericTransmission * cloudTransmission
+    : 0;
+  return freeze({
+    algorithmVersion: ENVIRONMENT_TIMELINE_LUNAR_ALGORITHM_VERSION,
+    azimuthRadians: azimuth,
+    elevationRadians: elevation,
+    direction,
+    distanceEarthRadii,
+    illuminatedFraction,
+    phaseAngleRadians,
+    angularRadiusRadians: Math.asin(clamp(0.2725 / distanceEarthRadii, 0, 1)),
+    intensity,
+    color: freeze({ r: 0.78, g: 0.84, b: 1.0 }),
+    atmosphericTransmission,
+    cloudTransmission,
+    aboveHorizon: elevation > 0,
+  });
+}
+
+function fixedLunarPosition(moon) {
+  const horizontal = Math.cos(moon.elevationRadians);
+  return freeze({
+    algorithmVersion: 'authored-static-lunar-v1',
+    ...moon,
+    direction: freeze({
+      x: Math.sin(moon.azimuthRadians) * horizontal,
+      y: Math.sin(moon.elevationRadians),
+      z: Math.cos(moon.azimuthRadians) * horizontal,
+    }),
+    distanceEarthRadii: null,
+    atmosphericTransmission: null,
+    cloudTransmission: null,
+    aboveHorizon: moon.elevationRadians > 0,
+  });
+}
+
 function interpolateWeatherState(first, second, amount, mode) {
   const blend = mode === 'smoothstep' ? smoothstep(amount) : amount;
   const atmosphere = {};
@@ -648,11 +753,11 @@ function sampleWeather(keyframes, epochMilliseconds, interpolation) {
 
 function snapshotFrameStateConfig(snapshot, { seed = snapshot.seed ?? 0, tickSeconds = snapshot.tickSeconds ?? 1 / 120 } = {}) {
   const solar = snapshot.solar ?? snapshot.sun;
+  const lunar = snapshot.lunar ?? snapshot.moon;
   const weather = snapshot.weather ?? snapshot;
-  if (!solar || !weather?.atmosphere || !weather?.clouds || !weather?.wind) {
+  if (!solar || !lunar || !weather?.atmosphere || !weather?.clouds || !weather?.wind) {
     throw new TypeError('toEnvironmentFrameStateConfig requires an EnvironmentTimeline snapshot.');
   }
-  const frameElevation = clamp(solar.elevationRadians, MIN_FRAME_SUN_ELEVATION_RADIANS, Math.PI / 2);
   const frameAzimuth = solar.algorithmVersion === 'authored-static-solar-v1'
     && solar.azimuthRadians >= 0 && solar.azimuthRadians <= TAU
     ? solar.azimuthRadians
@@ -664,9 +769,20 @@ function snapshotFrameStateConfig(snapshot, { seed = snapshot.seed ?? 0, tickSec
     tickSeconds: finite(tickSeconds, 'tickSeconds', 1 / 1000, 1),
     sun: freeze({
       azimuthRadians: frameAzimuth,
-      elevationRadians: frameElevation,
+      elevationRadians: clamp(solar.elevationRadians, -Math.PI / 2, Math.PI / 2),
       intensity: finite(solar.intensity, 'sun.intensity', 0, 100000),
       color: color(solar.color, 'sun.color'),
+    }),
+    moon: freeze({
+      azimuthRadians: lunar.algorithmVersion === 'authored-static-lunar-v1'
+        && lunar.azimuthRadians >= 0 && lunar.azimuthRadians <= TAU
+        ? lunar.azimuthRadians : normalizeAngle(lunar.azimuthRadians),
+      elevationRadians: clamp(lunar.elevationRadians, -Math.PI / 2, Math.PI / 2),
+      intensity: finite(lunar.intensity, 'moon.intensity', 0, 10),
+      color: color(lunar.color, 'moon.color'),
+      illuminatedFraction: finite(lunar.illuminatedFraction, 'moon.illuminatedFraction', 0, 1),
+      angularRadiusRadians: finite(lunar.angularRadiusRadians, 'moon.angularRadiusRadians', 0.0035, 0.0065),
+      phaseAngleRadians: finite(lunar.phaseAngleRadians, 'moon.phaseAngleRadians', 0, Math.PI),
     }),
     atmosphere: weather.atmosphere,
     clouds: weather.clouds,
@@ -800,11 +916,20 @@ export class EnvironmentTimeline {
         weather.atmosphere,
         weather.clouds,
       );
+    const lunar = this._fixedMoon ? fixedLunarPosition(this._fixedMoon) : computeLunarPosition(
+      this._epochMilliseconds,
+      this.config.latitude,
+      this.config.longitude,
+      weather.atmosphere,
+      weather.clouds,
+      solar,
+    );
     const instant = formatInstant(this._epochMilliseconds);
     return freeze({
       version: ENVIRONMENT_TIMELINE_VERSION,
       algorithmVersion: ENVIRONMENT_TIMELINE_ALGORITHM_VERSION,
       solarAlgorithmVersion: solar.algorithmVersion,
+      lunarAlgorithmVersion: lunar.algorithmVersion,
       weatherAlgorithmVersion: ENVIRONMENT_TIMELINE_WEATHER_ALGORITHM_VERSION,
       latitude: this.config.latitude,
       longitude: this.config.longitude,
@@ -820,6 +945,8 @@ export class EnvironmentTimeline {
       // `sun` is a deliberate compatibility/readability alias.  `solar` also
       // carries astronomical diagnostics such as refraction and air mass.
       sun: solar,
+      lunar,
+      moon: lunar,
       weather,
       atmosphere: weather.atmosphere,
       clouds: weather.clouds,
@@ -886,6 +1013,7 @@ export function fromStaticEnvironmentConfig(staticConfig, {
       }],
     },
   });
+  timeline._fixedMoon = normalized.moon;
   return timeline;
 }
 

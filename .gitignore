@@ -23,3 +23,6 @@ public/assets/trees_src/
 
 # Offline capture output from scripts/shot.mjs — debug artifacts, not sources.
 shots/
+
+# Persistent local Course Creator proposal threads, captures, and semantic history.
+.course-builder/

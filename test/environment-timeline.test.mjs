@@ -65,10 +65,26 @@ test('same timeline produces deterministic solar and weather snapshots', () => {
   assert.ok(first.snapshot().solar.intensity > 0);
 });
 
+test('lunar ephemeris is deterministic, phase-ordered, and carried into frame state', () => {
+  const full = new EnvironmentTimeline(config({ date: '2026-01-03', time: '10:00:00Z' })).snapshot();
+  const nearNew = new EnvironmentTimeline(config({ date: '2026-01-18', time: '19:00:00Z' })).snapshot();
+  assert.equal(full.lunar.algorithmVersion, 'low-precision-lunar-position-v1');
+  assert.strictEqual(full.moon, full.lunar);
+  assert.ok(Math.abs(full.lunar.azimuthRadians - 4.3652843586) < 1e-6);
+  assert.ok(Math.abs(full.lunar.elevationRadians - 1.1539223465) < 1e-6);
+  assert.ok(full.lunar.illuminatedFraction > 0.99);
+  assert.ok(nearNew.lunar.illuminatedFraction < 0.01);
+  assert.ok(full.lunar.intensity > nearNew.lunar.intensity * 100);
+  const frame = toEnvironmentFrameStateConfig(full);
+  assert.equal(frame.moon.illuminatedFraction, full.lunar.illuminatedFraction);
+  assert.equal(frame.moon.angularRadiusRadians, full.lunar.angularRadiusRadians);
+});
+
 test('solar position is physically ordered through daylight and uses true-north azimuth', () => {
   const timeline = new EnvironmentTimeline(config({ latitude: 37, longitude: 0, date: '2026-06-21', time: '12:00:00Z' }));
   const noon = timeline.snapshot().solar;
   assert.ok(noon.elevationRadians > 1.25, `expected summer noon, got ${noon.elevationRadians}`);
+  assert.equal(noon.daylightFactor, 1);
   assert.ok(Math.abs(noon.azimuthRadians - Math.PI) < 0.08, `expected sun south at noon, got ${noon.azimuthRadians}`);
 
   timeline.seek({ date: '2026-06-21', time: '06:00:00Z' });
@@ -81,15 +97,17 @@ test('solar position is physically ordered through daylight and uses true-north 
   assert.ok(evening.azimuthRadians > Math.PI);
 });
 
-test('dawn and night are finite, direct sun is extinguished, and frame mapping clamps only the legacy boundary', () => {
+test('dawn and night are finite, direct sun is extinguished, and frame mapping preserves signed celestial elevation', () => {
   const timeline = new EnvironmentTimeline(config({ latitude: 75, longitude: 0, date: '2026-12-21', time: '12:00:00Z' }));
   const snapshot = timeline.snapshot();
   assert.ok(snapshot.solar.elevationRadians < CIVIL_TWILIGHT_ELEVATION_RADIANS);
+  assert.equal(snapshot.solar.daylightFactor, 0);
   assert.equal(snapshot.solar.intensity, 0);
   assert.ok(Number.isFinite(snapshot.solar.azimuthRadians));
   assert.ok(Number.isFinite(snapshot.solar.direction.y));
   const frame = timeline.frameStateConfig();
-  assert.equal(frame.sun.elevationRadians, 0.001);
+  assert.equal(frame.sun.elevationRadians, snapshot.solar.elevationRadians);
+  assert.equal(frame.moon.elevationRadians, snapshot.lunar.elevationRadians);
   assert.equal(frame.sun.intensity, 0);
   assert.ok(frame.sun.color.r >= 0 && frame.sun.color.b <= 64);
 });
@@ -138,6 +156,7 @@ test('static EnvironmentFrameState config maps to an exact paused timeline bound
     seed: 42,
     tickSeconds: 1 / 120,
     sun: { azimuthRadians: 1.2, elevationRadians: 0.8, intensity: 85000, color: { r: 1, g: 0.93, b: 0.78 } },
+    moon: { azimuthRadians: 4.2, elevationRadians: -0.3, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.7, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.8 },
     atmosphere: WEATHER.atmosphere,
     clouds: WEATHER.clouds,
     wind: WEATHER.wind,

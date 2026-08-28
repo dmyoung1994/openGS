@@ -5,10 +5,12 @@ import {
 } from 'three';
 import { PMREMGenerator, RenderPipeline, Renderer, StandardNodeLibrary } from 'three/webgpu';
 import {
-  pass, mrt, output, velocity, uniform, uv, Fn, If, float, vec2,
+  pass, mrt, output, velocity, uniform, uv, Fn, If, float, vec2, renderOutput,
 } from 'three/tsl';
+import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { GpuPassProfiler } from '../diagnostics/GpuPassProfiler.js';
 import { CloudTemporalNode } from './CloudTemporalNode.js';
+import { golfBloom } from './GolfBloomNode.js';
 import { resettableTraa } from './ResettableTRAANode.js';
 import { StrictWebGPUBackend } from './StrictWebGPUBackend.js';
 import { WeatherSky, WEATHER_SKY_WORKLOADS, cloudsAreEnabled } from './WeatherSky.js';
@@ -81,6 +83,7 @@ function daylightPmremVectorDelta(a, b) {
 function daylightPmremVectorAngle(a, b) {
   const aLength = Math.hypot(a.x, a.y, a.z);
   const bLength = Math.hypot(b.x, b.y, b.z);
+  if (aLength <= 1e-8 && bLength <= 1e-8) return 0;
   if (aLength <= 1e-8 || bLength <= 1e-8) return Infinity;
   const dot = (a.x * b.x + a.y * b.y + a.z * b.z) / (aLength * bLength);
   return Math.acos(Math.min(1, Math.max(-1, dot)));
@@ -99,6 +102,11 @@ export function readDaylightPmremState(environment) {
     direction: daylightPmremVector(environment.sunDirection?.value),
     sunIlluminanceScale: Number(environment.sunIlluminanceScale?.value ?? 0),
     sunColor: daylightPmremVector(environment.sunColor?.value),
+    moonDirection: daylightPmremVector(environment.moonDirection?.value),
+    moonIlluminanceScale: Number(environment.moonIlluminanceScale?.value ?? 0),
+    moonColor: daylightPmremVector(environment.moonColor?.value),
+    moonIlluminatedFraction: Number(environment.moonIlluminatedFraction?.value ?? 0),
+    celestialExposure: Number(environment.celestialExposure?.value ?? 1),
     atmosphere: [
       Number(atmosphere?.x ?? 0),
       Number(atmosphere?.y ?? 0),
@@ -117,6 +125,7 @@ export function measureDaylightPmremChange(previous, current, {
   if (!previous || !current) {
     return {
       sunAngleRadians: Infinity,
+      moonAngleRadians: Infinity,
       atmosphericDelta: Infinity,
       radianceDelta: Infinity,
       elapsedMs: Infinity,
@@ -137,6 +146,14 @@ export function measureDaylightPmremChange(previous, current, {
       Math.max(1, Math.abs(previous.sunIlluminanceScale)),
     ),
     daylightPmremVectorDelta(current.sunColor, previous.sunColor),
+    daylightPmremScaledDelta(
+      current.moonIlluminanceScale,
+      previous.moonIlluminanceScale,
+      Math.max(1, Math.abs(previous.moonIlluminanceScale)),
+    ),
+    daylightPmremVectorDelta(current.moonColor, previous.moonColor),
+    Math.abs(current.moonIlluminatedFraction - previous.moonIlluminatedFraction),
+    Math.abs(current.celestialExposure - previous.celestialExposure) / 7,
   );
   const elapsedMs = Number.isFinite(lastCaptureAt) && Number.isFinite(now)
     ? Math.max(0, now - lastCaptureAt)
@@ -144,6 +161,7 @@ export function measureDaylightPmremChange(previous, current, {
 
   return {
     sunAngleRadians: daylightPmremVectorAngle(current.direction, previous.direction),
+    moonAngleRadians: daylightPmremVectorAngle(current.moonDirection, previous.moonDirection),
     atmosphericDelta,
     radianceDelta,
     elapsedMs,
@@ -168,6 +186,10 @@ export function resolveDaylightPmremUpdate({
   const reasons = [];
   if (change.sunAngleRadians >= DAYLIGHT_PMREM_SUN_ANGLE_THRESHOLD_RADIANS) {
     reasons.push('sun-angle');
+  }
+  if (change.moonAngleRadians >= DAYLIGHT_PMREM_SUN_ANGLE_THRESHOLD_RADIANS
+    && Math.max(current.moonIlluminanceScale, previous.moonIlluminanceScale) > 0.001) {
+    reasons.push('moon-angle');
   }
   if (change.atmosphericDelta >= DAYLIGHT_PMREM_ATMOSPHERIC_THRESHOLD) {
     reasons.push('atmosphere');
@@ -357,10 +379,9 @@ export class SceneManager {
   // or paused shot still presents real frames whose GPU pressure matters.
   get renderingPaused() { return this._renderingPaused; }
 
-  // Node post-processing: subtle bloom on genuine highlights, a saturation lift
-  // and a soft vignette. The renderer's Neutral tone-map + sRGB output are applied
-  // to the final node automatically (outputColorTransform), so the grade lives in
-  // linear light before the tone-mapping curve — a graded-broadcast finish, not a filter.
+  // Node post-processing: temporal resolve, depth-aware cloud transport, and
+  // selective HDR bloom. Neutral tone mapping + sRGB output are applied to the
+  // final node automatically, so highlight glare is composed in linear light.
   _setupPost() {
     if (!this.environmentTier) throw new Error('SceneManager post pipeline requires a resolved environment device tier.');
     // Weather configuration can arrive immediately after WebGPU initialization,
@@ -370,6 +391,8 @@ export class SceneManager {
     this._cloudTemporal?.dispose();
     this._scenePass?.dispose();
     this._traa?.dispose();
+    this._bloomPass?.dispose();
+    this._fxaaPass?.textureNode?.dispose?.();
     this.postProcessing?.dispose();
 
     // TRAA (temporal AA) resolves the sub-pixel shimmer of thin grass blades that
@@ -431,10 +454,6 @@ export class SceneManager {
     // required a second scene render for an 8% dark decal and cost almost as much as
     // the beauty pass on this hardware; it also contradicted the no-fake-AO bar.
     const resolvedScene = aa.rgb;
-    // Neutral retains real sun/water/ball highlights without a second glare copy.
-    // The former 6.5% bloom was visually negligible in the fixed suite but forced
-    // another offscreen render and full-screen composition on this hardware.
-    this._bloomPass = null;
     const cloudTransport = cloudLayer ? Fn(() => {
       const sampleUv = uv();
       const lowSize = cloudLayer.size();
@@ -481,10 +500,31 @@ export class SceneManager {
       ? resolvedScene.mul(cloudTransport.a).add(cloudTransport.rgb)
       : resolvedScene;
 
+    // Read TRAA's existing HDR texture directly so bloom does not force a second
+    // full-resolution copy of the scene/cloud expression. Cloud transmittance
+    // then attenuates the glare consistently when a volume occludes the sun. The
+    // 1.0 linear threshold keeps ordinary turf, sky, and cloud body out.
+    this._bloomPass = golfBloom(aa.getTextureNode(), 0.10, 1.0, 0.125);
+    const bloomRgb = this._bloomPass.getTextureNode().rgb;
+    const gradedRgb = rgb.add(cloudTransport ? bloomRgb.mul(cloudTransport.a) : bloomRgb);
+
+    // FXAA requires display-referred input. Own the Neutral + sRGB transform
+    // explicitly, then run one final current-frame edge cleanup after temporal AA.
+    // This catches newly exposed palm/flag/turf pixels that correctly rejected
+    // history during a fast camera move and therefore cannot yet be temporally
+    // averaged. Bloom remains upstream in linear HDR and cannot amplify this pass.
+    const displayRgb = renderOutput(
+      gradedRgb,
+      this.renderer.toneMapping,
+      this.renderer.outputColorSpace,
+    );
+    this._fxaaPass = fxaa(displayRgb);
+
     // RenderPipeline is the current Three.js API. The former PostProcessing alias
     // emits a warning on every startup despite using the same implementation.
     this.postProcessing = new RenderPipeline(this.renderer);
-    this.postProcessing.outputNode = rgb;
+    this.postProcessing.outputColorTransform = false;
+    this.postProcessing.outputNode = this._fxaaPass;
     this._weatherSkyGraphRevision = (this._weatherSkyGraphRevision ?? 0) + 1;
   }
 
@@ -629,7 +669,10 @@ export class SceneManager {
     // renderer's fixed daylight calibration. Neutral needs a slightly higher
     // reference exposure than ACES to hold the same midtone value while
     // retaining the source sky/rock chromaticity in its highlight shoulder.
-    this.renderer.toneMappingExposure = Math.min(1.65, Math.max(0.70, environment.atmosphereExposure.value * 1.20));
+    this.renderer.toneMappingExposure = Math.min(6.0, Math.max(
+      0.70,
+      environment.atmosphereExposure.value * 1.20 * (environment.celestialExposure?.value ?? 1),
+    ));
     const horizon = environment.horizonColor.value;
     this.scene.fog.color.setRGB(horizon.x, horizon.y, horizon.z);
     // Turbidity owns both aerial perspective and sky extinction. Keeping these
@@ -650,7 +693,11 @@ export class SceneManager {
     // the shared sky still supplies coloured open-sky detail in forest shadows.
     // This is the same shared HDR/analytic source captured below; only its renderer-relative
     // return is calibrated here, and it follows the authored illuminance scale.
-    this.scene.environmentIntensity = 0.34 * Math.sqrt(Math.max(0, environment.sunIlluminanceScale.value));
+    const indirectStrength = Math.max(
+      Math.sqrt(Math.max(0, environment.sunIlluminanceScale.value)),
+      Math.sqrt(Math.max(0, environment.moonIlluminanceScale?.value ?? 0)) * 0.22,
+    );
+    this.scene.environmentIntensity = 0.34 * indirectStrength;
     const now = this._daylightPmremNow();
     const current = readDaylightPmremState(environment);
     const decision = resolveDaylightPmremUpdate({
@@ -689,20 +736,13 @@ export class SceneManager {
     if (!environment || !this.weatherSky || (!force && this._daylightPmremRevision === environment.daylightRevision)) {
       return false;
     }
-    // HDRLoader returns its texture handle synchronously, but the Radiance pixels
-    // arrive later. Never ask PMREMGenerator to convolve that placeholder image;
-    // startup explicitly calls rebuildDaylightPmrem() after weatherSky.ready.
-    if (this.skyManifest && !this.weatherSky.skyTextureLoaded) return false;
     // Three r185's WebGPU PMREMGenerator can capture a Scene.backgroundNode after
     // renderer.init(). A compact 64px cube is sufficient for matte turf, bark, rock,
     // and water while keeping this weather-change-only operation inexpensive.
     this._pmremGenerator ??= new PMREMGenerator(this.renderer);
     const captureScene = new Scene();
-    // Capture the same HDR node used by water/reflections, with its solar disc
-    // replaced by the analytic sky. fromEquirectangular(raw HDR) would preserve
-    // that six-pixel ~60k-linear disc and create an unshadowed duplicate sun.
-    // WeatherSky applies the manifest yaw in its equirectangular lookup, so the
-    // PMREM and visible background have identical world orientation.
+    // Capture the same analytic atmosphere used by the visible background, with
+    // direct celestial discs excluded so IBL cannot create unshadowed duplicate keys.
     captureScene.backgroundNode = this.weatherSky.iblBackgroundNode;
     const next = this._pmremGenerator.fromScene(captureScene, 0.035, 0.1, 10, { size: 64 });
     // PMREM's capture Scene is intentionally ephemeral, but WebGPURenderer stores
@@ -710,7 +750,7 @@ export class SceneManager {
     // GPU lifetime immediately after the synchronous cube capture.
     disposeWebGPUSceneBackground(this.renderer, captureScene);
     this.scene.environmentRotation.set(0, 0, 0);
-    next.texture.name = this.skyManifest ? 'polyhaven-kloofendal-daylight-pmrem' : 'analytic-daylight-pmrem';
+    next.texture.name = 'analytic-celestial-pmrem';
     const previous = this._daylightPmremTarget;
     this._daylightPmremTarget = next;
     this._daylightPmremRevision = environment.daylightRevision;
@@ -944,6 +984,7 @@ export class SceneManager {
       ),
       deltas: {
         sunAngleRadians: finiteOrNull(change.sunAngleRadians),
+        moonAngleRadians: finiteOrNull(change.moonAngleRadians),
         atmospheric: finiteOrNull(change.atmosphericDelta),
         radiance: finiteOrNull(change.radianceDelta),
         elapsedMs: finiteOrNull(change.elapsedMs),
@@ -973,13 +1014,14 @@ export class SceneManager {
         temporalHistory: targetSize(this._traa?._historyRenderTarget),
         temporalResolve: targetSize(this._traa?._resolveRenderTarget),
         bloom: targetSize(this._bloomPass?._target),
+        displayAntialias: targetSize(this._fxaaPass?.textureNode?.renderTarget),
       },
       renderResolution: this.readRenderResolutionDiagnostics(),
       daylightPmrem: this.readDaylightPmremDiagnostics(),
       // TRAA deliberately changes the sub-pixel offset every frame while the
       // pipeline renders. It must be cleared before control returns here. Ignore
-      // the remembered (but disabled) jitter tuple so stable-frame comparisons do
-      // not mistake normal sample progression for a live camera crop/resize.
+      // the remembered jitter tuple so stable-frame comparisons do not mistake
+      // normal sample progression for a live camera crop/resize.
       cameraView: cameraView?.enabled ? {
         enabled: true,
         fullWidth: cameraView.fullWidth,
@@ -1046,11 +1088,13 @@ export class SceneManager {
     // turn the volume into a static undersampled slice and defeat reconstruction.
     if (this.weatherSky) this.weatherSky.setTemporalFrame(this.weatherSky.temporalFrame + 1);
     this._beginMotionFrame();
-    // A moving broadcast camera already supplies real sub-pixel sample diversity.
-    // At rest, retain the bounded Halton sequence in clear and cloudy weather;
-    // CloudTemporalNode captures those actual matrices for its own reprojection.
+    // Every presented view needs real sub-pixel coverage. Camera translation is
+    // not a substitute for projection jitter: disabling the Halton sequence in
+    // flight reduced palms, flags, tracer edges, turf boundaries, and shadows to
+    // one hard sample per frame. Motion vectors already reproject the jittered
+    // scene, and CloudTemporalNode records the same actual camera matrices.
     if (this._traa) {
-      this._traa.cameraJitterEnabled = !this._cameraMoving;
+      this._traa.cameraJitterEnabled = true;
     }
     this.postProcessing.render();
   }
@@ -1130,9 +1174,9 @@ export class SceneManager {
           break;
         }
       }
-      // Use a much tighter threshold than camera-cut detection. This flag controls
-      // only projection jitter, so even a slow result orbit should retain an exact
-      // lens while it moves. The epsilon rejects matrix noise on a static camera.
+      // Use a much tighter threshold than camera-cut detection. This flag remains
+      // useful to temporal diagnostics even though antialiasing stays active during
+      // motion. The epsilon rejects matrix noise on a static camera.
       this._cameraMoving = positionDelta > 1e-5 || rotationDelta > 1e-6 || projectionJump;
       if (positionJump || rotationJump || projectionJump || delayedTransition) {
         this.invalidateTemporalHistory('automatic camera discontinuity');

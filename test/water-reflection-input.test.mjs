@@ -25,6 +25,7 @@ function environment() {
       azimuthRadians: 0.8, elevationRadians: 0.7, intensity: 85000,
       color: { r: 1, g: 0.94, b: 0.82 },
     },
+    moon: { azimuthRadians: 4, elevationRadians: -0.4, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.8, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.6 },
     atmosphere: {
       turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005,
       mieDirectionalG: 0.76, exposure: 1,

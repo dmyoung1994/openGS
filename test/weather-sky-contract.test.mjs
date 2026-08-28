@@ -15,6 +15,7 @@ function state(cloudCoverage = 0.38) {
     seed: 8008,
     tickSeconds: 1 / 120,
     sun: { azimuthRadians: 0.8, elevationRadians: 0.65, intensity: 85000, color: { r: 1, g: 0.96, b: 0.84 } },
+    moon: { azimuthRadians: 4, elevationRadians: -0.4, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.8, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.6 },
     atmosphere: { turbidity: 2.4, rayleigh: 1.5, mieCoefficient: 0.004, mieDirectionalG: 0.76, exposure: 1 },
     clouds: { coverage: cloudCoverage, density: cloudCoverage > 0 ? 0.62 : 0.0, baseHeight: 1250, thickness: 700, advectionScale: 1 },
     wind: {
@@ -76,7 +77,7 @@ test('WeatherSky accepts only the authoritative GPU environment bridge and expos
   assert.equal(WEATHER_SKY_WORKLOADS.high.raySteps, 16);
   assert.equal(diagnostics.lightTransportSamples, sky.workload.lightTransportSamples);
   assert.equal(diagnostics.lightProbeSteps, 8);
-  assert.equal(diagnostics.lightTransportMode, 'paired-sun-offset-volume-probe');
+  assert.equal(diagnostics.lightTransportMode, 'paired-celestial-offset-volume-probe');
   assert.equal(Object.hasOwn(diagnostics, 'hasSkyPass'), false);
   assert.equal(diagnostics.renderTopology, 'fused-temporal-volume');
   assert.equal(diagnostics.noiseOctaves, sky.workload.noiseOctaves);
@@ -212,9 +213,8 @@ test('temporal jitter is deterministic, current/previous, and validates external
 
 test('WeatherSky uses one GPU sky-volume path and never a proxy/fallback renderer', async () => {
   const source = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
-  assert.match(source, /HDRLoader/);
-  assert.doesNotMatch(source, /RGBELoader/);
-  assert.match(source, /EquirectangularReflectionMapping|textureNode/);
+  assert.doesNotMatch(source, /HDRLoader|RGBELoader|EquirectangularReflectionMapping|textureNode/);
+  assert.match(source, /environment\.skyRadiance\(direction\.normalize\(\), \{ includeSun \}\)/);
   assert.doesNotMatch(source, /WebGLRenderer|WebGLBackend|createFallback|fallback\s*:/);
   assert.match(source, /wind field/i);
   assert.match(source, /Storage3DTexture/);
@@ -366,25 +366,17 @@ test('cloud temporal resolve is a real same-target ping-pong with reprojection a
   assert.doesNotMatch(source, /copyTextureToBuffer|readback|noise/i);
 });
 
-test('HDR PMREM waits for decoded pixels and keeps the solar disc out of IBL', async () => {
+test('analytic PMREM excludes celestial discs and has no captured-HDR dependency', async () => {
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   const weather = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
-  assert.match(weather, /skyTextureLoaded = false/);
-  assert.match(weather, /skyTextureLoaded = true/);
-  assert.match(source, /if \(this\.skyManifest && !this\.weatherSky\.skyTextureLoaded\) return/);
+  assert.doesNotMatch(weather, /skyTexture|HDRLoader|equirectUV/);
+  assert.doesNotMatch(source, /weatherSky\.skyTextureLoaded|fromEquirectangular/);
   assert.match(source, /captureScene\.backgroundNode = this\.weatherSky\.iblBackgroundNode/);
   assert.match(source, /fromScene\(captureScene/);
   assert.match(source, /disposeWebGPUSceneBackground\(this\.renderer, captureScene\)/,
     'the ephemeral PMREM scene must release its renderer-owned sky sphere');
-  assert.doesNotMatch(source, /fromEquirectangular\(this\.weatherSky\.skyTexture\)/);
   assert.match(weather, /includeSun = false/);
-  assert.match(weather, /directMask/);
-  assert.match(weather, /sourceSunDirection/);
-  assert.match(weather, /Math\.cos\(5 \* Math\.PI \/ 180\)/);
-  assert.match(weather, /environment\.skyRadiance\(normalized, \{ includeSun: true \}\)\.sub\(clearSky\)/);
-  assert.match(weather, /rotationRadians/);
-  assert.match(weather, /normalized\.x\.mul\(c\)\.add\(normalized\.z\.mul\(s\)\)/);
-  assert.match(weather, /normalized\.z\.mul\(c\)\.sub\(normalized\.x\.mul\(s\)\)/);
+  assert.match(source, /analytic-celestial-pmrem/);
   assert.match(source, /environmentRotation\.set\(0, 0, 0\)/);
 });
 
@@ -398,17 +390,18 @@ test('WeatherSky and SceneManager own rebuild/disposal boundaries', async () => 
   assert.match(weather, /this\.clearBackgroundNode = null/);
   assert.match(weather, /this\.iblBackgroundNode = null/);
   assert.match(weather, /this\.backgroundNode = null/);
-  assert.match(weather, /this\.skyTexture = null/);
+  assert.doesNotMatch(weather, /this\.skyTexture/);
   assert.match(scene, /this\._daylightPmremTarget\?\.dispose\(\)/);
   assert.match(scene, /this\.scene\.environment = null/);
   assert.match(scene, /previous\?\.dispose\(\)/);
 });
 
-test('WeatherSky disposes the actual late HDR callback handle after reconfigure', async () => {
-  const source = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
-  assert.match(source, /loader\.load\(this\.skyManifest\.url, \(loadedTexture\) =>/);
-  assert.match(source, /this\._disposed \|\| this\.skyTexture !== loadedTexture/);
-  assert.match(source, /loadedTexture\?\.dispose\(\)/);
-  assert.match(source, /resolveReady\(loadedTexture\)/);
-  assert.doesNotMatch(source, /if \(this\._disposed\) \{\s*this\.skyTexture\?\.dispose/);
+test('WeatherSky readiness includes the pinned lunar map without captured-sky assets', async () => {
+  const [source, environment] = await Promise.all([
+    readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/environment/EnvironmentGpuBindings.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(source, /Promise\.resolve\(environment\.moonTextureReady\)/);
+  assert.match(environment, /moon_lroc_color_2k\.jpg/);
+  assert.doesNotMatch(source, /skyTextureReady|sourceSunDirection/);
 });

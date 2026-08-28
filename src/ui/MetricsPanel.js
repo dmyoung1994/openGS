@@ -62,6 +62,22 @@ export class MetricsPanel {
   }
   getEnv() { return { ...this.env }; }
 
+  setEnv(values, { notify = false } = {}) {
+    for (const field of ENV_FIELDS) {
+      if (values[field.key] === undefined) continue;
+      const value = Math.min(field.max, Math.max(field.min, Number(values[field.key])));
+      this.env[field.key] = value;
+      const input = this._fieldEls?.[field.key];
+      if (input) {
+        input.value = value;
+        const output = input.closest('.gs-field')?.querySelector('output');
+        if (output) output.textContent = formatFieldValue(field, value);
+      }
+    }
+    if (notify) this.onEnvironmentChange?.(this.getEnv());
+    return this.getEnv();
+  }
+
   applyPreset(name) {
     const preset = DEVELOPMENT_LAUNCH_PRESETS[name];
     if (!preset) return;

@@ -5,7 +5,12 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8');
 
 test('range target furniture uses recessed cups and one merged cloth draw', () => {
-  assert.match(source, /poleGeometry: new CylinderGeometry\(0\.026, 0\.034, 2\.48/);
+  assert.match(source, /poleGeometry: new CylinderGeometry\(0\.006, 0\.0075, 2\.48, 16\)/);
+  assert.match(source, /premium_walnut_albedo_1k\.png/);
+  assert.match(source, /poleMaterial: new MeshPhysicalMaterial/);
+  assert.match(source, /clearcoat: 0\.62/);
+  assert.match(source, /clearcoatRoughness: 0\.24/);
+  assert.match(source, /targetPropsReady/);
   assert.match(source, /cupGeometry: new CylinderGeometry\(0\.075, 0\.075, 0\.035/);
   assert.match(source, /dummy\.position\.set\(t\.x, y - 0\.026, t\.z\)/);
   assert.match(source, /new FlagClothSystem/);

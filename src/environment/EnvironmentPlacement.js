@@ -84,8 +84,11 @@ export function resolveEnvironmentPlacements(course, catalog, terrain, biomeFiel
     }
   }
 
-  if (result.length !== course.environment.objectCount) {
-    throw new Error(`Environment placement count mismatch: ${result.length}/${course.environment.objectCount}.`);
+  const catalogObjectCount = course.environment.syntheticTrees
+    ? course.environment.objectCount - course.environment.syntheticTrees.length
+    : course.environment.objectCount;
+  if (result.length !== catalogObjectCount) {
+    throw new Error(`Catalog environment placement count mismatch: ${result.length}/${catalogObjectCount}.`);
   }
   return Object.freeze(result);
 }

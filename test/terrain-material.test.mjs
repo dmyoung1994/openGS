@@ -28,6 +28,12 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'mown/rough bake transition needs an irregular world-space ecotone');
   assert.match(source, /const maintainedTransition\s*=\s*smoothstep\(-2\.0, 2\.0, edgeSD\)/,
     'mown/rough bake transition must follow a world-space shoulder, not a camera radius');
+  assert.match(source, /const visualGreen = smoothstep\(-0\.04, 0\.04, sd\.g\)/,
+    'green/collar construction must use the exact hard mowing cut');
+  assert.match(source, /const visualFringe = smoothstep\(-0\.04, 0\.04, sd\.g\.add\(zones\.fringeW\)\)/,
+    'the collar outer cut must remain exact rather than inheriting a biome warp');
+  assert.doesNotMatch(source, /targetWarp/,
+    'green and fringe boundaries must not reuse the ecological fairway warp');
   assert.match(source, /w\s*=\s*mix\(w, float\(1\.0\), m\.fringe\)/,
     'green surrounds must remain on the maintained turf path');
   assert.match(source, /const reliefAmplitude\s*=\s*reliefScale\.mul\(0\.94\)\.mul\(cutMicroGain\)\.clamp\(0\.22, 1\.8\)/,
@@ -46,11 +52,21 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'each maintained cut must suppress competing macro mottling');
   assert.match(source, /const macroAlbedo\s*=\s*float\(1\.0\)\.add\(macroVariation\.b\.sub\(0\.5\)/,
     'macro albedo must remain a bounded reflectance around unity');
-  assert.match(source, /cutMesoStrength = mix\(cutMesoStrength, float\(0\.12\), m\.green\)/,
-    'short green turf must carry cleaner restrained meso pigment than fairway');
-  assert.match(source, /const stripLay\s*=\s*smoothstep\(0\.40, 0\.60, stripWave\)/,
+  assert.match(source, /const greenNap = luminance\(sourceAlbedo\)\.div\(0\.1525\)[\s\S]*?\.clamp\(0\.76, 1\.24\)/,
+    'green nap must amplify only source detail that survives physical footprint filtering');
+  assert.match(source, /cutNap = mix\(cutNap, fringeNap, m\.fringe\)[\s\S]*?cutNap = mix\(cutNap, greenNap, m\.green\)/,
+    'collar and putting surface must retain distinct filtered cut-grass response');
+  assert.match(source, /cutMesoStrength = mix\(cutMesoStrength, float\(0\.24\), m\.green\)/,
+    'short green turf must retain bounded world-scale maintenance variation');
+  assert.match(source, /const texelsPerM = this\.finiteCanvas[\s\S]*?\? 20[\s\S]*?: Math\.min\(5, 2048 \/ spanX, 2048 \/ spanZ\)/,
+    'the creator collar needs hero-scale nap texels without imposing that allocation on full courses');
+  assert.match(source, /greenNapNormalStrength = mix\(greenNapNormalStrength, float\(0\.38\), m\.fringe\)[\s\S]*?float\(0\.20\), m\.green/,
+    'the longer fringe cut must carry a stronger real-light canopy normal than the putting surface');
+  assert.match(source, /const fringeNapLuma = greenNapVariation\.r\.sub\(0\.5\)\.mul\(0\.24\)[\s\S]*?greenNapVariation\.g\.sub\(0\.5\)\.mul\(0\.20\)/,
+    'the fringe needs registered sub-metre density contrast instead of a flat dark ring');
+  assert.match(source, /const stripLay\s*=\s*smoothstep\(0\.28, 0\.72, stripWave\)/,
     'mower runs must form equal-width passes instead of one long cosine gradient');
-  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(0\.045\)/,
+  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(0\.006\)/,
     'fairway pigment must support rather than paint the reel-pass response');
   assert.match(source, /const mowResolution\s*=\s*oneMinus\(smoothstep\(0\.28, 1\.10, duvM\)\)/,
     'mowing must recede by surface footprint without a camera or ball-centred cutoff');
@@ -134,7 +150,7 @@ test('high-end ground pass retains broad pigment, relief, and matte variation af
     'turf needs an ecological-scale world-space soil drift below the blade atlas');
   assert.match(source, /fibreField\).*\.mul\(0\.34\)/,
     'maintained turf needs enough stable normal relief to survive distance filtering');
-  assert.match(source, /cutMesoNormal = mix\(cutMesoNormal, float\(0\.19\), m\.visualFairway\)[\s\S]*?cutMesoNormal = mix\(cutMesoNormal, float\(0\.065\), m\.green\)[\s\S]*?mesoGradient\.mul\(cutMesoNormal\)/,
+  assert.match(source, /cutMesoNormal = mix\(cutMesoNormal, float\(0\.19\), m\.visualFairway\)[\s\S]*?cutMesoNormal = mix\(cutMesoNormal, float\(0\.095\), m\.green\)[\s\S]*?mesoGradient\.mul\(cutMesoNormal\)/,
     'turf needs class-specific broad normal breakup, not only mower grain');
   assert.match(source, /nativeRockPatch[\s\S]*?nativeBump = mesoGradient\.mul\(0\.34\)/,
     'native mineral response must follow real slope and registered world-space relief');

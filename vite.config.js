@@ -14,6 +14,7 @@ const threeWebGPU = fileURLToPath(
 );
 
 const courseManifestPath = fileURLToPath(new URL('./course.json', import.meta.url));
+const courseProjectManifestPath = fileURLToPath(new URL('./course.project.json', import.meta.url));
 const premiumRangeManifestPath = fileURLToPath(new URL('./premium-range.json', import.meta.url));
 
 // The course manifest is authored beside the source tree so the local course
@@ -26,10 +27,13 @@ function requiredCourseManifest() {
     apply: 'build',
     buildStart() {
       const source = readFileSync(courseManifestPath, 'utf8');
+      const projectSource = readFileSync(courseProjectManifestPath, 'utf8');
       const premiumSource = readFileSync(premiumRangeManifestPath, 'utf8');
       JSON.parse(source);
+      JSON.parse(projectSource);
       JSON.parse(premiumSource);
       this.emitFile({ type: 'asset', fileName: 'course.json', source });
+      this.emitFile({ type: 'asset', fileName: 'course.project.json', source: projectSource });
       this.emitFile({ type: 'asset', fileName: 'premium-range.json', source: premiumSource });
     },
   };
@@ -44,13 +48,15 @@ export default defineConfig({
   // a stale module graph. Fail loudly instead so there is exactly one canonical
   // range server to reload and diagnose.
   server: { port: 5173, host: true, strictPort: true },
-  // Two entry points: the game, and viewer.html — an isolated per-asset preview so a
-  // ball / turf tile / bunker can be iterated on without the whole course loaded.
+  // First-class landing, range, creator, play, and isolated asset-viewer pages.
   build: {
     target: 'esnext',
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        range: fileURLToPath(new URL('./range.html', import.meta.url)),
+        creator: fileURLToPath(new URL('./creator.html', import.meta.url)),
+        play: fileURLToPath(new URL('./play.html', import.meta.url)),
         viewer: fileURLToPath(new URL('./viewer.html', import.meta.url)),
       },
     },

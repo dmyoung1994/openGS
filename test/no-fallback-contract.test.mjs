@@ -39,8 +39,12 @@ test('required environment assets fail closed before rendering', async () => {
   assert.match(main, /await range\.assetsReady/);
   assert.match(main, /loadCourse\('\/course\.json', \{ catalogAssetIds: environmentCatalog\.byId \}\)/);
   assert.doesNotMatch(main, /e\.code === 'Digit[12]'/);
-  assert.match(range, /Promise\.all\(\[\s*this\.terrain\.assetsReady,\s*this\.backdrop\.assetsReady,\s*treesReady, environmentPropsReady, ballReady,\s*waterReady,\s*this\.waterReflection\.assetsReady,\s*\]\)/,
-    'terrain, backdrop, trees, props, ball, water assets, and reflection readiness must all gate the ready state');
+  assert.match(range, /const backdropReady = this\.creatorCanvas \? Promise\.resolve\(\) : this\.backdrop\.assetsReady/,
+    'the blank creator canvas may omit backdrop assets while authored courses still fail closed');
+  assert.match(range, /const waterReflectionReady = this\.creatorCanvas \? Promise\.resolve\(\) : this\.waterReflection\.assetsReady/,
+    'the blank creator canvas may omit water while authored-course reflection readiness stays required');
+  assert.match(range, /const creatorFrameReady = this\.creatorCanvasFrame\?\.userData\?\.assetsReady \|\| Promise\.resolve\(\)[\s\S]*?const targetPropsReady = this\._targetPropsReady \|\| Promise\.resolve\(\)[\s\S]*?Promise\.all\(\[\s*this\.terrain\.assetsReady, backdropReady,\s*treesReady, environmentPropsReady, ballReady, waterReady,\s*waterReflectionReady, creatorFrameReady, targetPropsReady,\s*\]\)/,
+    'every asset present in the selected runtime must gate the ready state');
   assert.match(range, /this\.backdrop\?\.dispose\(\)/,
     'range rebuilds must explicitly release backdrop node textures and geometry');
   assert.match(range, /backdropOwned\.has\(o\)/,

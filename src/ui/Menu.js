@@ -17,7 +17,8 @@ export class Menu {
     // driving the shell — `node scripts/shot.mjs --game` relies on it — but it is also
     // just useful when you are iterating on the range and reloading all day.
     const wanted = new URL(window.location).searchParams.get('view');
-    this.setView(['practice', 'creator', 'play'].includes(wanted) ? wanted : 'menu');
+    const routeView = ({ '/range.html': 'practice', '/creator.html': 'creator', '/play.html': 'play' })[window.location.pathname];
+    this.setView(routeView ?? (['practice', 'creator', 'play'].includes(wanted) ? wanted : 'menu'));
     // Refresh the creator stats HUD a couple times a second while it's visible.
     setInterval(() => { if (this.view === 'creator') this._renderStats(); }, 500);
   }
@@ -47,7 +48,7 @@ export class Menu {
         <footer class="gm-foot">Select an experience</footer>
       </div>`;
     document.body.appendChild(menu);
-    menu.querySelectorAll('.gm-card').forEach((c) => c.addEventListener('click', () => this.setView(c.dataset.go)));
+    menu.querySelectorAll('.gm-card').forEach((c) => c.addEventListener('click', () => this._navigate(c.dataset.go)));
 
     // Course-select (Play).
     const play = document.createElement('div');
@@ -82,7 +83,7 @@ export class Menu {
         </div>
       </div>`;
     document.body.appendChild(play);
-    play.querySelector('[data-play]').addEventListener('click', () => this.setView('practice'));
+    play.querySelector('[data-play]').addEventListener('click', () => this._navigate('practice'));
     this.thumbEl = play.querySelector('.gp-selected .gp-thumb');
 
     // Top-right utility stack. A flex column so in-scene chrome (Menu button, LIVE
@@ -96,7 +97,7 @@ export class Menu {
       <div class="gc-live"><span class="gc-dot"></span>Live preview</div>`;
     document.body.appendChild(tr);
     this.topRight = tr;
-    tr.querySelector('#gs-menu-btn').addEventListener('click', () => this.setView('menu'));
+    tr.querySelector('#gs-menu-btn').addEventListener('click', () => this._navigate('menu'));
 
     // Creator stats HUD (bottom-right).
     const hud = document.createElement('div');
@@ -109,8 +110,15 @@ export class Menu {
       </div>`;
     document.body.appendChild(hud);
 
-    for (const b of document.querySelectorAll('[data-back]')) b.addEventListener('click', () => this.setView('menu'));
-    window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && this.view !== 'menu') this.setView('menu'); });
+    for (const b of document.querySelectorAll('[data-back]')) b.addEventListener('click', () => this._navigate('menu'));
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape' && this.view !== 'menu' && !e.target?.closest?.('textarea,input') && !document.querySelector('#gb-panel.menu-open')) this._navigate('menu');
+    });
+  }
+
+  _navigate(view) {
+    const path = { menu: '/', practice: '/range.html', creator: '/creator.html', play: '/play.html' }[view] ?? '/';
+    window.location.assign(path);
   }
 
   _card(go, num, title, sub) {
@@ -156,6 +164,7 @@ export class Menu {
       body[data-view="menu"] #gs-menu-btn, body[data-view="play"] #gs-menu-btn { display: none; }
       body[data-view="practice"] #gb-panel { display: none; }
       body[data-view="creator"] .gs-panel, body[data-view="creator"] #gs-fps { display: none; }
+      body[data-view="creator"] #gs-topright, body[data-view="creator"] #gs-creator-hud { display: none; }
       #gs-menu-btn { display: flex; }
 
       /* ---------- full-screen overlays: soft, warm, airy glass over the live scene ---------- */
@@ -163,8 +172,8 @@ export class Menu {
         font-family: var(--sans); animation: gmFade .7s ease both; }
       #gs-menu { background: linear-gradient(180deg, rgba(246,245,243,.50) 0%, rgba(233,227,216,.56) 100%);
         backdrop-filter: blur(26px) saturate(1.05) brightness(1.06); color: var(--ink); }
-      #gs-play { background: linear-gradient(180deg, rgba(58,60,58,.42) 0%, rgba(40,44,44,.56) 100%);
-        backdrop-filter: blur(24px) saturate(1.04) brightness(.98); color: #f4f1ea; }
+      #gs-play { background: linear-gradient(180deg, rgba(8,16,13,.05) 0%, rgba(8,14,12,.20) 100%);
+        backdrop-filter: none; color: #f4f1ea; }
       #gs-menu::after, #gs-play::after { content:''; position:absolute; inset:0; pointer-events:none;
         box-shadow: inset 0 0 200px 30px rgba(0,0,0,.14); }
       @keyframes gmFade { from { opacity: 0; } to { opacity: 1; } }

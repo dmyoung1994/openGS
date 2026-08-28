@@ -1245,8 +1245,8 @@ function foliageMaterial(atlas, materialMask, environment, projectionScale, moti
   if (labControls) {
     // Isolated viewer control only. Shipping forests never receive this pre-lit
     // term; the lab retains it solely for inspecting the aligned thickness mask.
-    const labBacklight = shapedNormalWorld.dot(environment.sunDirection).negate().clamp(0, 1)
-      .mul(mask.g).mul(environment.sunIlluminanceScale.max(0)).mul(0.10 * transmissionStrength);
+    const labBacklight = shapedNormalWorld.dot(environment.keyDirection).negate().clamp(0, 1)
+      .mul(mask.g).mul(environment.keyIlluminanceScale.max(0)).mul(0.10 * transmissionStrength);
     material.colorNode = productionAlbedo.mul(float(1).add(labBacklight));
   }
   if (debugMode === 'alpha') material.colorNode = vec3(albedo.a);

@@ -41,7 +41,7 @@ const maxRenderPasses = Number(arg('max-render-passes', 8));
 // Canonical cloudy runtime contract. These values describe the shipped GPU
 // resource and the single low-resolution sky integration plus its ping-pong resolve.
 const cloudVolumeDimensions = '96x96x96';
-const cloudLightTransportMode = 'paired-sun-offset-volume-probe';
+const cloudLightTransportMode = 'paired-celestial-offset-volume-probe';
 // Sub-byte average error and two-tenths of one percent high-delta coverage remain
 // well below visible motion, while accommodating the fixed-resolution volumetric
 // cloud resolve at extreme sky-heavy camera pitches. Earlier broken resize/LOD

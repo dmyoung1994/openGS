@@ -89,7 +89,10 @@ function loadTurfMaps() {
     [0.08400000, 0.16600000, 0.03400000], 0.75, 0.32);
   const green = set('blendkit_green', 1.5,
     [0.61920959, 1.0, 0.99607843], 0.11012081, true, 2048,
-    [0.07500000, 0.20000000, 0.04500000], 0.75, 0.24);
+    // Preserve the compact bentgrass character through ordinary green-review
+    // distances. The old +0.75 mip bias and 24% source contrast averaged the
+    // dedicated scan into a flat pigment before lighting could reveal its nap.
+    [0.07500000, 0.20000000, 0.04500000], 0.30, 0.40);
   const rough = set('roughdetail', 2.0, [0.50762, 0.66504, 0.54402], TURF_LUM, false, 2048);
   const makeArray = (name, srgb) => {
     const array = new DataArrayTexture(new Uint8Array(3 * 4), 1, 1, 3);
@@ -185,6 +188,7 @@ const TURF_NORMAL_VARIANCE_SPECULAR = 0.18;
 //   spacing:     meters between grid samples (default 2)
 //   heightFn:    (x, z) => elevation meters
 //   surfaceFn:   (x, z) => key into SURFACES
+//   variationSeed: stable course seed for world-anchored turf nap
 export class Terrain {
   constructor(config) {
     // `spacing` is the FINE physics/collision grid (heightAt/normalAt sample it, so
@@ -194,7 +198,8 @@ export class Terrain {
     const {
       bounds, spacing = 2, renderSpacing = spacing, heightFn, surfaceFn, zones,
       motionHistory = null, renderer, biomeField = null,
-      analyticHeightFn = null, analyticPatchContains = null,
+      analyticHeightFn = null, analyticPatchContains = null, finiteCanvas = false,
+      finiteOutline = null, finiteCutout = null, variationSeed = 0,
     } = config;
     if (!renderer?.isWebGPURenderer) {
       throw new Error('Terrain requires the strict WebGPU renderer for its GPU-authored variation field.');
@@ -213,6 +218,17 @@ export class Terrain {
     this._biomeField = biomeField;
     this._coastSandAsset = biomeField?.hasTransitions ? acquireCoastSandTextures() : null;
     this.motionHistory = motionHistory;
+    this.finiteCanvas = finiteCanvas === true;
+    this.finiteOutline = Array.isArray(finiteOutline) && finiteOutline.length >= 3
+      ? finiteOutline.map(({ x, z }) => Object.freeze({ x, z }))
+      : null;
+    this.finiteCutout = this.finiteCanvas
+      && Number.isFinite(finiteCutout?.x)
+      && Number.isFinite(finiteCutout?.z)
+      && Number.isFinite(finiteCutout?.radius)
+      && finiteCutout.radius > 0
+      ? Object.freeze({ x: finiteCutout.x, z: finiteCutout.z, radius: finiteCutout.radius })
+      : null;
 
     this.nx = Math.floor((bounds.maxX - bounds.minX) / spacing) + 1;
     this.nz = Math.floor((bounds.maxZ - bounds.minZ) / spacing) + 1;
@@ -258,6 +274,7 @@ export class Terrain {
     // never re-derives zone membership per pixel (see ZoneMap.js).
     this._zoneMap = buildZoneMap(zones, bounds);
     this._initMacroVariation(renderer);
+    this._initGreenNapVariation(renderer, variationSeed);
 
     this._initDivots();          // divot scar field (GPU compute-stamped mask, read by the turf shader)
     this._bake();
@@ -559,6 +576,8 @@ export class Terrain {
     this.analyticHeightFn = null;
     this.analyticPatchContains = null;
     this.surfaceFn = null;
+    this.finiteOutline = null;
+    this.finiteCutout = null;
     this._heightTex?.dispose();
     this._zoneMap?.texture?.dispose();
     this._zoneMap?.waterTexture?.dispose();
@@ -567,6 +586,8 @@ export class Terrain {
     this._divotTex?.dispose();
     this._macroTexture?.dispose();
     this._macroInit?.dispose();
+    this._greenNapTexture?.dispose();
+    this._greenNapInit?.dispose();
     this._turfMaps?.albedoArray?.dispose();
     this._turfMaps?.nrhArray?.dispose();
     if (this._coastSandAsset?.textures) releaseCoastSandTextures(this._coastSandAsset.textures);
@@ -630,7 +651,70 @@ export class Terrain {
     renderer.compute(this._macroInit);
   }
 
+  // A dedicated maintained-turf nap field fills the scale gap between the authored
+  // 1.5 m / 2K bentgrass scan and the 0.5 m course-scale macro bake. The scan owns
+  // individual shoots; this field owns coherent 0.2--1.2 m density/leaf-lay patches
+  // that remain visible from a normal green-inspection camera. Baking once at a
+  // declared world resolution keeps the signal deterministic and lets the mip chain
+  // retire it cleanly instead of evaluating live full-screen noise or stretching the
+  // source atlas beyond its physical scale.
+  _initGreenNapVariation(renderer, variationSeed = 0) {
+    const { minX, maxX, minZ, maxZ } = this.bounds;
+    const spanX = maxX - minX;
+    const spanZ = maxZ - minZ;
+    // The finite creator maquette is a small hero object, so it can afford the
+    // 5 cm authoring texels needed for a visibly plush collar. Full courses retain
+    // the capped 20 cm field; their closer play cameras resolve the source scans.
+    const texelsPerM = this.finiteCanvas
+      ? 20
+      : Math.min(5, 2048 / spanX, 2048 / spanZ);
+    const width = Math.max(2, Math.round(spanX * texelsPerM));
+    const height = Math.max(2, Math.round(spanZ * texelsPerM));
+    const seed = Number.isFinite(variationSeed) ? (variationSeed >>> 0) / 0xffffffff : 0;
+
+    const textureOut = new StorageTexture(width, height);
+    textureOut.name = 'terrain-green-nap-gpu';
+    textureOut.magFilter = LinearFilter;
+    textureOut.minFilter = LinearMipmapLinearFilter;
+    textureOut.wrapS = textureOut.wrapT = ClampToEdgeWrapping;
+    textureOut.generateMipmaps = true;
+    textureOut.mipmapsAutoUpdate = true;
+    this._greenNapTexture = textureOut;
+
+    this._greenNapInit = Fn(() => {
+      const id = instanceIndex;
+      const ix = id.mod(width);
+      const iy = id.div(width);
+      const wx = float(ix).add(0.5).div(width).mul(spanX).add(minX);
+      const wz = float(iy).add(0.5).div(height).mul(spanZ).add(minZ);
+      const seedPhase = seed * 37.0;
+
+      // The channels are deliberately incommensurate. Their frequencies follow the
+      // declared bake resolution: the creator resolves roughly 12 cm collar clumps,
+      // while a full course bottoms out near 0.5 m and relies on its closer camera
+      // plus the authored atlas for finer shoots. B remains the broader wet/dry
+      // cuticle response used only to perturb roughness/chroma.
+      const napFrequency = Math.min(3.4, texelsPerM * 0.22);
+      const densityFrequency = Math.min(8.4, texelsPerM * 0.42);
+      const cuticleFrequency = Math.min(1.8, texelsPerM * 0.12);
+      const nap = mx_noise_float(vec3(
+        wx.mul(napFrequency), wz.mul(napFrequency * 0.86), float(401.0 + seedPhase),
+      ));
+      const density = mx_noise_float(vec3(
+        wx.mul(densityFrequency), wz.mul(densityFrequency * 0.84), float(719.0 + seedPhase * 0.73),
+      ));
+      const cuticle = mx_noise_float(vec3(
+        wx.mul(cuticleFrequency), wz.mul(cuticleFrequency * 1.18), float(977.0 + seedPhase * 1.17),
+      ));
+      textureStore(textureOut, uvec2(ix, iy), vec4(nap, density, cuticle, 1.0))
+        .toWriteOnly();
+    })().compute(width * height, [64]);
+    this._greenNapInit.name = 'Terrain green nap initialize';
+    renderer.compute(this._greenNapInit);
+  }
+
   _buildMesh() {
+    if (this.finiteCanvas) return this._buildFiniteCanvasMesh();
     // Fixed nested camera-centred rings. Each ring is a shared static grid with a
     // centre hole (except L0), so it has no overdraw/z-fight with its finer neighbour.
     // Every level is an exact multiple of the authoritative 0.6 m height grid and
@@ -684,6 +768,159 @@ export class Terrain {
         geometryBytes: fullNx * fullNz * 32 + (fullNx - 1) * (fullNz - 1) * 6 * 4,
       },
       previousChunkGrid: { cellsPerChunk: 24, draws: Math.ceil((fullNx - 1) / 24) * Math.ceil((fullNz - 1) / 24) },
+    };
+    return group;
+  }
+
+  // The ordinary course uses camera-centred clipmap rings and sends out-of-bounds
+  // vertices below the scene so the authored edge can meet its backdrop. The blank
+  // creator deliberately exposes that edge as a maquette, so it needs an exact
+  // finite grid: a sentinel-clipped ring produces huge edge triangles at oblique
+  // angles. This remains the same Terrain material and authoritative height map.
+  _buildFiniteCanvasMesh() {
+    if (this.finiteOutline) return this._buildFiniteOutlineMesh();
+    const width = this.bounds.maxX - this.bounds.minX;
+    const depth = this.bounds.maxZ - this.bounds.minZ;
+    const cellsX = Math.ceil(width / this.renderSpacing);
+    const cellsZ = Math.ceil(depth / this.renderSpacing);
+    const vertsX = cellsX + 1;
+    const vertsZ = cellsZ + 1;
+    const positions = new Float32Array(vertsX * vertsZ * 3);
+    const normals = new Float32Array(vertsX * vertsZ * 3);
+    for (let z = 0; z < vertsZ; z++) for (let x = 0; x < vertsX; x++) {
+      const index = z * vertsX + x;
+      positions[index * 3] = this.bounds.minX + width * x / cellsX;
+      positions[index * 3 + 2] = this.bounds.minZ + depth * z / cellsZ;
+      normals[index * 3 + 1] = 1;
+    }
+    const indices = new Uint32Array(cellsX * cellsZ * 6);
+    let cursor = 0;
+    for (let z = 0; z < cellsZ; z++) for (let x = 0; x < cellsX; x++) {
+      const a = z * vertsX + x;
+      const b = a + 1;
+      const d = a + vertsX;
+      const e = d + 1;
+      indices.set([a, d, b, b, d, e], cursor);
+      cursor += 6;
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new BufferAttribute(normals, 3));
+    geometry.setIndex(new BufferAttribute(indices, 1));
+    const origin = uniform(new Vector2());
+    const mesh = new Mesh(geometry, this._buildTurfMaterial(origin));
+    mesh.name = 'terrain-creator-finite-grid';
+    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.frustumCulled = false;
+    mesh.layers.enable(2);
+    const group = new Group();
+    group.name = 'terrain-creator-finite-canvas';
+    group.add(mesh);
+    this._rings = [{ half: width / 2, step: width / cellsX, inner: 0, origin, mesh, static: true }];
+    this.drawStats = {
+      draws: 1,
+      vertices: vertsX * vertsZ,
+      triangles: cellsX * cellsZ * 2,
+      geometryBytes: positions.byteLength + normals.byteLength + indices.byteLength,
+      finiteCanvas: true,
+    };
+    return group;
+  }
+
+  // The creator showcase is a deliberately finite terrain maquette, but its top is
+  // the generated fringe outline rather than the course's square sampling bounds.
+  // A star-convex radial grid keeps every boundary vertex on that exact outline,
+  // while the ordinary height texture remains the sole source of visible elevation.
+  _buildFiniteOutlineMesh() {
+    const outline = this.finiteOutline;
+    // A cutout needs a true inner boundary, so use the cup itself as the radial
+    // origin. Creator outlines are authored star-convex around the green centre;
+    // this keeps every strip from the cup rim to the outer fringe non-crossing.
+    const center = this.finiteCutout
+      ? { x: this.finiteCutout.x, z: this.finiteCutout.z }
+      : outline.reduce((sum, point) => ({
+        x: sum.x + point.x / outline.length,
+        z: sum.z + point.z / outline.length,
+      }), { x: 0, z: 0 });
+    const maxRadius = Math.max(...outline.map((point) => Math.hypot(point.x - center.x, point.z - center.z)));
+    const rings = Math.max(2, Math.ceil(maxRadius / this.renderSpacing));
+    const segments = outline.length;
+    const hasCutout = Boolean(this.finiteCutout);
+    const vertexCount = hasCutout ? (rings + 1) * segments : 1 + rings * segments;
+    const positions = new Float32Array(vertexCount * 3);
+    const normals = new Float32Array(vertexCount * 3);
+    if (hasCutout) {
+      for (let segment = 0; segment < segments; segment += 1) {
+        // Preserve each outline ray's authored angle at the inner boundary. The
+        // organic outline can begin at any world rotation; using segment index as
+        // an absolute angle would twist all spokes between the cup and first ring.
+        const dx = outline[segment].x - center.x;
+        const dz = outline[segment].z - center.z;
+        const length = Math.hypot(dx, dz) || 1;
+        positions[segment * 3] = center.x + dx / length * this.finiteCutout.radius;
+        positions[segment * 3 + 2] = center.z + dz / length * this.finiteCutout.radius;
+        normals[segment * 3 + 1] = 1;
+      }
+    } else {
+      positions[0] = center.x;
+      positions[2] = center.z;
+      normals[1] = 1;
+    }
+    for (let ring = 1; ring <= rings; ring += 1) {
+      const amount = ring / rings;
+      for (let segment = 0; segment < segments; segment += 1) {
+        const point = outline[segment];
+        const vertex = (hasCutout ? ring * segments : 1 + (ring - 1) * segments) + segment;
+        positions[vertex * 3] = center.x + (point.x - center.x) * amount;
+        positions[vertex * 3 + 2] = center.z + (point.z - center.z) * amount;
+        normals[vertex * 3 + 1] = 1;
+      }
+    }
+
+    const indexData = [];
+    if (!hasCutout) {
+      for (let segment = 0; segment < segments; segment += 1) {
+        const next = (segment + 1) % segments;
+        indexData.push(0, 1 + next, 1 + segment);
+      }
+    }
+    for (let ring = hasCutout ? 1 : 2; ring <= rings; ring += 1) {
+      const innerStart = hasCutout ? (ring - 1) * segments : 1 + (ring - 2) * segments;
+      const outerStart = hasCutout ? ring * segments : 1 + (ring - 1) * segments;
+      for (let segment = 0; segment < segments; segment += 1) {
+        const next = (segment + 1) % segments;
+        const inner = innerStart + segment;
+        const innerNext = innerStart + next;
+        const outer = outerStart + segment;
+        const outerNext = outerStart + next;
+        indexData.push(inner, outerNext, outer, inner, innerNext, outerNext);
+      }
+    }
+    const indices = new Uint32Array(indexData);
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new BufferAttribute(normals, 3));
+    geometry.setIndex(new BufferAttribute(indices, 1));
+    const origin = uniform(new Vector2());
+    const mesh = new Mesh(geometry, this._buildTurfMaterial(origin));
+    mesh.name = 'terrain-creator-organic-outline';
+    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.frustumCulled = false;
+    mesh.layers.enable(2);
+    const group = new Group();
+    group.name = 'terrain-creator-finite-canvas';
+    group.add(mesh);
+    this._rings = [{ half: maxRadius, step: maxRadius / rings, inner: 0, origin, mesh, static: true }];
+    this.drawStats = {
+      draws: 1,
+      vertices: vertexCount,
+      triangles: indices.length / 3,
+      geometryBytes: positions.byteLength + normals.byteLength + indices.byteLength,
+      finiteCanvas: true,
+      finiteOutline: true,
+      finiteCutout: this.finiteCutout ? { ...this.finiteCutout } : null,
     };
     return group;
   }
@@ -756,6 +993,7 @@ export class Terrain {
   // local vertex index.
   update(camera) {
     if (!this._rings || !camera) return;
+    if (this.finiteCanvas) return;
     const anchorStep = this._rings[this._rings.length - 1].step;
     const x = Math.floor(camera.position.x / anchorStep) * anchorStep;
     const z = Math.floor(camera.position.z / anchorStep) * anchorStep;
@@ -862,6 +1100,7 @@ export class Terrain {
       worldXZ.y.sub(this.bounds.minZ).div(this.bounds.maxZ - this.bounds.minZ),
     );
     const macroVariation = texture(this._macroTexture, macroUv);
+    const greenNapVariation = texture(this._greenNapTexture, macroUv);
     const zoneSample = texture(this._zoneMap.texture, macroUv).toVar('zoneSD');
     const waterZoneSample = texture(this._zoneMap.waterTexture, macroUv).toVar('waterBankSample');
     let biomeLand = null;
@@ -1202,9 +1441,10 @@ export class Terrain {
     const stripCoordinate = worldXZ.x.add(worldXZ.y.mul(MOW_STRIPE_CROSS_SLOPE));
     const stripPhase = stripCoordinate.mul(6.2831853 / MOW_STRIPE_PERIOD_M);
     const stripWave = stripPhase.cos().mul(0.5).add(0.5);
-    // Equal-width passes with a clean but antialiased reel boundary. Contrast remains
-    // physical and restrained below; this only defines which way the leaf is laid.
-    const stripLay = smoothstep(0.40, 0.60, stripWave);
+    // Equal-width passes with a broad transition through the real inter-pass overlap.
+    // The former near-step made the fairway look painted even after albedo contrast
+    // was reduced; this softer lay still changes sign at the exact reel boundary.
+    const stripLay = smoothstep(0.28, 0.72, stripWave);
     // Adjacent mower runs lay the leaf canopy in opposite directions along the pass.
     // This is a real directional normal response (sun/view dependent), not a painted
     // shadow or height corrugation.  The ~2.3 degree lean remains appropriate for
@@ -1220,7 +1460,7 @@ export class Terrain {
     // Fade only as the footprint approaches the 2.54 m pass' Nyquist limit;
     // derivatives provide natural recession without a radial LOD boundary.
     const mowResolution = oneMinus(smoothstep(0.28, 1.10, duvM));
-    const mowBump = layDirection.mul(stripLay.sub(0.5).mul(0.22))
+    const mowBump = layDirection.mul(stripLay.sub(0.5).mul(0.035))
       .mul(fairwayMowMask).mul(mowResolution);
     // Surface-wide meso relief prevents a perfectly planar fairway/green after
     // the atlas is minified. The warped isotropic field avoids long directional
@@ -1241,9 +1481,22 @@ export class Terrain {
     let cutMesoNormal = float(0.0);
     cutMesoNormal = mix(cutMesoNormal, float(0.19), m.visualFairway);
     cutMesoNormal = mix(cutMesoNormal, float(0.14), m.fringe);
-    cutMesoNormal = mix(cutMesoNormal, float(0.065), m.green);
+    cutMesoNormal = mix(cutMesoNormal, float(0.095), m.green);
     cutMesoNormal = mix(cutMesoNormal, float(0.105), m.tee);
     const mesoBump = mesoGradient.mul(cutMesoNormal);
+    // The green-specific field is a real intermediate-scale normal response. It is
+    // separate from both terrain contours and blade relief: density/leaf-lay clumps
+    // on tightly maintained turf alter how the real sun catches the canopy, while
+    // mip filtering removes the response before it can sparkle at distance.
+    const greenNapSignal = greenNapVariation.r.mul(0.66)
+      .add(greenNapVariation.g.mul(0.34));
+    const greenNapBand = oneMinus(smoothstep(0.16, 0.72, duvM));
+    let greenNapNormalStrength = float(0.0);
+    greenNapNormalStrength = mix(greenNapNormalStrength, float(0.38), m.fringe);
+    greenNapNormalStrength = mix(greenNapNormalStrength, float(0.20), m.green);
+    const greenNapBump = vec3(
+      dFdx(greenNapSignal), 0.0, dFdy(greenNapSignal),
+    ).mul(greenNapNormalStrength).mul(greenNapBand);
     // The packed NRH height is a second, broader source of the same authored blade
     // relief. Its screen derivative reads as coherent shoot-scale roll at a grazing
     // angle, while the footprint band retires it before a pixel spans the source
@@ -1254,7 +1507,7 @@ export class Terrain {
     let cutHeightNormal = float(0.0);
     cutHeightNormal = mix(cutHeightNormal, float(0.16), m.visualFairway);
     cutHeightNormal = mix(cutHeightNormal, float(0.10), m.fringe);
-    cutHeightNormal = mix(cutHeightNormal, float(0.055), m.green);
+    cutHeightNormal = mix(cutHeightNormal, float(0.075), m.green);
     cutHeightNormal = mix(cutHeightNormal, float(0.09), m.tee);
     const canopyHeightBump = canopyHeightGradient.mul(cutHeightNormal)
       .mul(visualMaintained).mul(flat).mul(canopyGradientBand);
@@ -1273,6 +1526,7 @@ export class Terrain {
     const bankRelief = vec3(dFdx(m.waterMottle), 0.0, dFdy(m.waterMottle))
       .mul(0.42).mul(m.waterBank);
     const maintainedNormal = grassNormal.add(fibreBump).add(mowBump).add(mesoBump)
+      .add(greenNapBump)
       .add(canopyHeightBump).add(nativeBump).add(bankRelief).normalize();
     // Normal-variance/specular AA: source turf normals and the mower lay can carry
     // more directional change than one pixel can resolve. Estimating variance from
@@ -1372,6 +1626,8 @@ export class Terrain {
     const baseMicroRoughness = mix(canopyRoughness, scannedRoughness, mownW);
     const rGrass = baseMicroRoughness
       .add(fibreRoughness)
+      .add(greenNapVariation.b.sub(0.5).mul(0.055)
+        .mul(m.green.add(m.fringe).clamp(0.0, 1.0)))
       .add(moisture.sub(0.5).mul(0.05));
     // Scuffed soil in the divots is matte — kill the grass sheen there so a scar doesn't
     // glint like turf. One extra sample of the divot mask (0 outside its region).
@@ -1436,7 +1692,7 @@ export class Terrain {
     const layAlignment = viewAlongLay.mul(0.70).add(sunAlongLay.mul(0.30));
     const mowOptical = stripLay.sub(0.5).mul(layAlignment)
       .mul(grazingLay).mul(fairwayMowMask).mul(mowResolution);
-    const mowAnisotropy = mowOptical.mul(0.14);
+    const mowAnisotropy = mowOptical.mul(0.025);
     const rGrassV = rGrassD.add(graze.mul(0.16)).add(mowAnisotropy).clamp(0.68, 0.98);
     const steepR = smoothstep(0.82, 0.55, terrainNormal.y);
     let zoneRoughness = float(0.91);
@@ -1470,7 +1726,7 @@ export class Terrain {
     // Opposite mower lays expose a bounded amount of cuticle to the same real light.
     // The inverse relationship with roughness avoids a wet/plastic lobe: the pass
     // made rougher above also carries less dielectric return here (maximum +/-16%).
-    const mowSpecular = oneMinus(mowOptical.mul(0.24)).clamp(0.86, 1.14);
+    const mowSpecular = oneMinus(mowOptical.mul(0.04)).clamp(0.97, 1.03);
     // Cut height changes the coherence of the dielectric leaf return. Keep every
     // surface in a restrained matte-turf range while allowing green, tee, collar,
     // and fairway to separate under the one shared sun/PMREM state.
@@ -1540,17 +1796,29 @@ export class Terrain {
       maintainedCoverage: visualMaintained, sourceAlbedo: tAlb.rgb,
       fairwayMowMask, stripLay, nativeRockPatch,
       canopyHeight: tFar.x, nativeBiomeWeight,
+      greenNapVariation,
     }, macroVariation, terrainNormal);
+    // An isolated creator maquette has no surrounding rough/native context to make
+    // the cut-height hierarchy legible. Grade the same authored source maps by their
+    // analytic green mask so the 20 mm collar remains visibly deeper/darker than the
+    // 4 mm putting surface without adding geometry, a decal, or a second material.
+    const presentedTurfColor = this.finiteOutline
+      ? mix(
+        turfColor.mul(vec3(0.68, 0.78, 0.58)),
+        turfColor.mul(vec3(1.16, 1.16, 1.00)),
+        m.green,
+      )
+      : turfColor;
     if (this._biomeField?.hasTransitions && coastWeights && coastSand) {
       const strand = biomeLand.g;
-      const ecotoneGrass = turfColor.mul(vec3(0.86, 0.91, 0.72));
+      const ecotoneGrass = presentedTurfColor.mul(vec3(0.86, 0.91, 0.72));
       mat.colorNode = mix(
-        mix(turfColor, ecotoneGrass, strand.mul(0.34)),
+        mix(presentedTurfColor, ecotoneGrass, strand.mul(0.34)),
         coastSand.color,
         coastWeights.beachWeight,
       );
     } else {
-      mat.colorNode = turfColor;
+      mat.colorNode = presentedTurfColor;
     }
     // Do not lift shaded bunker walls or sand with emissive compensation. Their
     // readability comes from the carved terrain, real sun/sky fill, and the
@@ -1681,13 +1949,11 @@ function turfZoneMasks(sd, waterSample, zones) {
     positionWorld.x.mul(0.045), positionWorld.z.mul(0.036), 317.0,
   )).sub(0.5).mul(2.8);
   const edgeSD = sd.r.add(edgeWarp);
-  // Green and collar remain derived from the authored SDF, but their render response
-  // resolves over a turf-maintenance shoulder instead of a sub-pixel pigment ring.
-  // Reusing the fairway's seeded warp prevents perfect concentric bands while leaving
-  // gameplay classification and collision untouched.
-  const targetWarp = edgeWarp.mul(0.12);
-  const visualGreen = smoothstep(-0.72, 0.72, sd.g.add(targetWarp));
-  const visualFringe = smoothstep(-0.90, 0.90, sd.g.add(zones.fringeW).add(targetWarp.mul(0.65)));
+  // Green construction is not a biome ecotone. A reel/collar cut is a hard authored
+  // boundary, so both sides resolve over only eight centimetres and use the exact
+  // green SDF—no ecological warp and no metre-wide pigment blend.
+  const visualGreen = smoothstep(-0.04, 0.04, sd.g);
+  const visualFringe = smoothstep(-0.04, 0.04, sd.g.add(zones.fringeW));
   const maintainedTransition = smoothstep(-2.0, 2.0, edgeSD);
   // A wider but still bounded visual mix carries the same ecotone into albedo,
   // directional response, and bake ownership. It is not a gameplay mask.
@@ -1828,18 +2094,54 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
     // let the same world-space macro, moisture, reel-pass, and lighting terms act on
     // that real pigment. Rough/native pixels keep the established shared grade.
     c = mix(c, sourceAlbedo, maintainedCoverage);
+    // Restore the filtered source's cut-grass nap after pigment recentering. This is
+    // not another texture sample: it amplifies only variation that survived the real
+    // screen-space footprint of the dedicated fairway/green atlas. Unresolved fibers
+    // therefore still converge to one, while readable clumps keep enough contrast to
+    // catch daylight instead of averaging into a flat color swatch.
+    const fringeNap = luminance(sourceAlbedo).div(0.139).sub(1.0)
+      .mul(2.0).add(1.0).clamp(0.78, 1.22);
+    const greenNap = luminance(sourceAlbedo).div(0.1525).sub(1.0)
+      .mul(2.35).add(1.0).clamp(0.76, 1.24);
+    let cutNap = float(1.0);
+    cutNap = mix(cutNap, fringeNap, m.fringe);
+    cutNap = mix(cutNap, greenNap, m.green);
+    c = c.mul(cutNap);
+    // A green needs readable density/nap at the camera distance where the 2K source
+    // scan has correctly minified to its mean. This world-scale field is a separate
+    // physical band, not an enlarged copy of the blade atlas. Its restrained scalar
+    // variation and wet/dry chroma stay registered with the normal/roughness response
+    // under the shared sun and disappear through ordinary mip filtering.
+    const greenNapVariation = zones.greenNapVariation;
+    const puttingNapLuma = greenNapVariation.r.sub(0.5).mul(0.14)
+      .add(greenNapVariation.g.sub(0.5).mul(0.08))
+      .add(1.0);
+    const fringeNapLuma = greenNapVariation.r.sub(0.5).mul(0.24)
+      .add(greenNapVariation.g.sub(0.5).mul(0.20))
+      .add(1.0);
+    let maintainedNapLuma = float(1.0);
+    maintainedNapLuma = mix(maintainedNapLuma, fringeNapLuma, m.fringe);
+    maintainedNapLuma = mix(maintainedNapLuma, puttingNapLuma, m.green);
+    const greenNapChroma = mix(
+      vec3(0.975, 1.012, 0.958),
+      vec3(1.025, 0.992, 1.018),
+      greenNapVariation.b,
+    );
+    const maintainedNapCoverage = m.green.add(m.fringe).clamp(0.0, 1.0);
+    c = c.mul(maintainedNapLuma)
+      .mul(mix(vec3(1.0), greenNapChroma, maintainedNapCoverage));
     // The reel pass is the fairway's readable directional signal. Keep the
     // persistent macro field, but compress its contrast over maintained turf so
     // stochastic lime mottling cannot compete with the directional cut pattern.
     let cutMacroStrength = float(0.115);
     cutMacroStrength = mix(cutMacroStrength, float(0.090), m.fringe);
-    cutMacroStrength = mix(cutMacroStrength, float(0.055), m.green);
+    cutMacroStrength = mix(cutMacroStrength, float(0.095), m.green);
     cutMacroStrength = mix(cutMacroStrength, float(0.080), m.tee);
     const macroStrength = mix(float(0.21), cutMacroStrength, maintainedCoverage);
     const macroAlbedo = float(1.0).add(macroVariation.b.sub(0.5).mul(macroStrength));
     let cutMesoStrength = float(0.30);
     cutMesoStrength = mix(cutMesoStrength, float(0.22), m.fringe);
-    cutMesoStrength = mix(cutMesoStrength, float(0.12), m.green);
+    cutMesoStrength = mix(cutMesoStrength, float(0.24), m.green);
     cutMesoStrength = mix(cutMesoStrength, float(0.18), m.tee);
     const mesoStrength = mix(float(0.82), cutMesoStrength, maintainedCoverage);
     const mesoAlbedo = float(1.0).add(meso.mul(mesoStrength));
@@ -1876,13 +2178,13 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   // Former live source (now represented by the baked channel):
   // const mowFineAlbedoA = mx_noise_float(vec3(wx.mul(0.018), wz.mul(0.024), 157.0));
   const stripLay = zones.stripLay;
-  // Restrained ±2.25% pigment response supports the directional normal lay above.
+  // Restrained ±0.3% pigment response supports the directional normal lay above.
   // Most of the read still comes from real light, but the bands remain identifiable
   // under diffuse overcast illumination where directional sheen is naturally weak.
   // A real mower pass is primarily a change in leaf lay. Keep enough pigment
   // separation to read under diffuse sky, but below the contrast that made the
   // overview resemble alternating painted lanes.
-  const mowBand = stripLay.sub(0.5).mul(0.045);
+  const mowBand = stripLay.sub(0.5).mul(0.006);
   c = c.mul(float(1.0).add(mowBand.mul(fairwayMowMask).mul(zones.mowResolution)));
 
   // A restrained grade separates cut turf families at gameplay distance while

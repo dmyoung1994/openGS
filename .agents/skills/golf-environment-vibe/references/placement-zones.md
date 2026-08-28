@@ -59,7 +59,8 @@ objects; premium single-hole dressing should normally stay below 700.
 
 ## Final audit
 
-- Every object has a valid external-model `catalogId`.
+- Every object has exactly one declared source: a valid catalog `assetId`, or a
+  registered synthetic-tree archetype plus stable ID and deterministic parameters.
 - Seeds are stable and regions are reproducible.
 - Same-ID spacing and slope ranges pass catalog rules.
 - No grid, repeated yaw sequence, uniform scale, floating base, or intersection.

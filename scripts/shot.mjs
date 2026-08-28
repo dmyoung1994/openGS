@@ -87,7 +87,7 @@ const cameraSweepLook = parseTriple(arg('look-to'), 'look-to');
 if ((cameraSweepPose || cameraSweepLook) && (!cameraPose || !cameraLook || !cameraSweepPose || !cameraSweepLook)) {
   throw new Error('A camera sweep requires --cam, --look, --cam-to, and --look-to together.');
 }
-const url = new URL(game ? '/index.html' : '/viewer.html', base);
+const url = new URL(game ? arg('route', '/index.html') : '/viewer.html', base);
 if (game) {
   url.searchParams.set('view', arg('view', 'practice'));   // skip the landing menu
 }
@@ -293,6 +293,8 @@ try {
             jitterIndex: window.golf.sm._traa?._jitterIndex,
             historyAge: window.golf.sm._traa?._historyAge?.value,
           },
+          shadow: window.golf.lighting.readDiagnostics(),
+          ballCastShadow: window.golf.range.ballMesh.castShadow,
         })),
         canvas.screenshot(),
       ]);
@@ -313,12 +315,22 @@ try {
         ? [{ frame: index, from: states[index - 1].phase, to: state.phase }]
         : []
     ));
+    const movingStates = states.filter((state) => state.ballState !== 'rest');
+    const shadowFocusSignatures = new Set(movingStates.map((state) => JSON.stringify(state.shadow.shadowFocus)));
+    const movingShadowRenderCounts = new Set(movingStates.map((state) => state.shadow.shadowRenderCount));
     console.log(`shot-${sequenceName} frames=${states.length} phases=${phases.join(',')} viewportSignatures=${signatures.size} changes=${JSON.stringify(phaseChanges)}`);
+    console.log(`shot-shadow stableFocuses=${shadowFocusSignatures.size} movingMapVersions=${movingShadowRenderCounts.size} ballCasterDuringMotion=${movingStates.some((state) => state.ballCastShadow)}`);
     if (signatures.size !== 1) throw new Error('Shot transition changed viewport/backing-store dimensions.');
-    const jitteredMotionFrames = states.filter((state) => state.temporal.cameraMoving
-      && state.temporal.cameraJitterEnabled !== false);
-    if (jitteredMotionFrames.length) {
-      throw new Error(`Shot transition exposed projection jitter on ${jitteredMotionFrames.length} moving-camera frames.`);
+    if (shadowFocusSignatures.size !== 1 || movingShadowRenderCounts.size !== 1) {
+      throw new Error('Shot flight changed the cached course shadow projection or map version.');
+    }
+    if (movingStates.some((state) => state.ballCastShadow)) {
+      throw new Error('Moving ball re-entered the cached course shadow map before rest.');
+    }
+    const unjitteredMotionFrames = states.filter((state) => state.temporal.cameraMoving
+      && state.temporal.cameraJitterEnabled !== true);
+    if (unjitteredMotionFrames.length) {
+      throw new Error(`Shot transition lost temporal sample jitter on ${unjitteredMotionFrames.length} moving-camera frames.`);
     }
     } finally {
       await page.evaluate((lockId) => {
@@ -376,7 +388,11 @@ try {
   if (err) logs.push(`[viewer] ${err}`);
 
   await mkdir(dirname(out), { recursive: true });
-  const buf = await canvas.screenshot();
+  // UI QA captures the complete page so translucent creator chrome is evidence too;
+  // renderer-only checks retain the canonical canvas capture by default.
+  const buf = has('page')
+    ? await page.screenshot({ captureBeyondViewport: false })
+    : await canvas.screenshot();
   await writeFile(out, buf);
   const rendered = decodePNG(buf);
   let nearBlack = 0;

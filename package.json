@@ -15,11 +15,13 @@
     "capture:sizzle": "node scripts/capture-sizzle-reel.mjs",
     "capture:foliage": "node scripts/capture-generated-foliage-matrix.mjs",
     "promote:foliage": "node tools/foliage-pipeline/promote-pack.mjs",
+    "migrate:course": "node scripts/migrate-course-v3-to-v4.mjs",
     "verify:no-fallback-browser": "node scripts/verify-no-fallback-browser.mjs",
     "verify:visual-assets": "node scripts/verify-visual-assets.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@openai/codex-sdk": "^0.150.1",
     "three": "^0.185.1"
   },
   "devDependencies": {

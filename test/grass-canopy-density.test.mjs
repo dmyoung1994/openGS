@@ -87,13 +87,16 @@ test('canopy suppression changes only stable candidate density, never grass geom
     'the suppression field must remain static and world-space authored');
 });
 
-test('Range shares its exact selected tree records between beauty and grass bake', async () => {
+test('Range shares both explicit tree sources between beauty and grass bake', async () => {
   const source = await rangeSource();
-  assert.match(source, /const allTreePlacements = this\._treePlacements\(\)/);
-  assert.match(source, /const treePlacements = allTreePlacements/,
-    'the curated runtime uses one Poly Haven placement set for both paths');
-  assert.match(source, /canopyPlacements: treePlacements/);
-  assert.match(source, /this\._buildTreeLine\(treePlacements\)/);
+  assert.match(source, /const catalogTreePlacements = this\._treePlacements\(\)/);
+  assert.match(source, /const syntheticTreePlacements = this\._syntheticTreePlacements\(\)/);
+  assert.match(source, /const canopyPlacements = \[\.\.\.catalogTreePlacements, \.\.\.syntheticTreePlacements\]/,
+    'catalog and explicitly synthetic trees must share their exact beauty records with the grass bake');
+  assert.match(source, /canopyPlacements,/);
+  assert.match(source, /this\._buildTreeLine\(catalogTreePlacements, syntheticTreePlacements\)/);
   assert.match(source, /canopyRadius: asset\.bounds\.radius \* placement\.scale/,
     'suppression radius must come from the visible asset crown and authored scale');
+  assert.match(source, /canopyRadius: proceduralTreeCanopyRadius\(placement\)/,
+    'synthetic suppression radius must come from the same archetype geometry used for beauty');
 });

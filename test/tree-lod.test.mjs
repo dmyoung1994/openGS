@@ -144,9 +144,9 @@ test('LOD1 branchlet cards tighten only to measured source-alpha bounds', () => 
 test('conifer foliage uses bounded, sun-oriented two-sided transmission', () => {
   assert.match(source, /function needleTransmissionFactor\(/);
   assert.match(source, /function needleTransmission\(/);
-  assert.match(source, /sunFacingBack = needleNormalWorld\.dot\(environment\.sunDirection\)/);
-  assert.match(source, /sunToEye = viewDirectionWorld\.dot\(environment\.sunDirection\)/);
-  assert.match(source, /environment\.sunIlluminanceScale\.max\(0\)/);
+  assert.match(source, /sunFacingBack = needleNormalWorld\.dot\(environment\.keyDirection\)/);
+  assert.match(source, /sunToEye = viewDirectionWorld\.dot\(environment\.keyDirection\)/);
+  assert.match(source, /environment\.keyIlluminanceScale\.max\(0\)/);
   assert.match(source, /\.clamp\(0, 0\.12\)/);
   assert.match(source, /\.toVarying\('vTreeNeedleTransmission'\)/);
   assert.match(source, /const needleNormalWorld = rotateYaw\(normalLocal\)\.normalize\(\)/);

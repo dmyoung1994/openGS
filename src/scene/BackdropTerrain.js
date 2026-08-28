@@ -1793,12 +1793,12 @@ function maritimeOceanMaterial({ environment, detailTexture, bounds }) {
   const fresnel = float(0.022).add(oneMinus(viewDotNormal).pow(5).mul(0.72)).clamp(0.022, 0.76);
   const reflection = sky.mul(fresnel);
   const sunAlignment = environment
-    ? reflectedDirection.dot(environment.sunDirection.normalize()).clamp(0, 1)
+    ? reflectedDirection.dot(environment.keyDirection.normalize()).clamp(0, 1)
     : float(0);
   const sunGlint = environment
     ? smoothstep(0.985, 0.9997, sunAlignment).pow(3)
-      .mul(environment.sunColor)
-      .mul(environment.sunIlluminanceScale.max(0).pow(0.35))
+      .mul(environment.keyColor)
+      .mul(environment.keyIlluminanceScale.max(0).pow(0.35))
       .mul(0.24)
     : vec3(0);
   const whitecap = smoothstep(7.0, 12.5, windSpeed)

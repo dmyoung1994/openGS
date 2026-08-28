@@ -58,8 +58,8 @@ test('terrain uses separate physical source scales without another material samp
     /set\('blendkit_fairway', 1\.8,\s*\[0\.44124056, 1\.0, 0\.90948934\], 0\.08483945, true, 2048,\s*\[0\.08400000, 0\.16600000, 0\.03400000\], 0\.75, 0\.32\)/,
     'runtime must retain the fairway physical scale, measured means, and controlled albedo response');
   assert.match(source,
-    /set\('blendkit_green', 1\.5,\s*\[0\.61920959, 1\.0, 0\.99607843\], 0\.11012081, true, 2048,\s*\[0\.07500000, 0\.20000000, 0\.04500000\], 0\.75, 0\.24\)/,
-    'runtime must retain the green physical scale, measured means, and cleaner albedo response');
+    /set\('blendkit_green', 1\.5,\s*\[0\.61920959, 1\.0, 0\.99607843\], 0\.11012081, true, 2048,\s*[\s\S]*?\[0\.07500000, 0\.20000000, 0\.04500000\], 0\.30, 0\.40\)/,
+    'runtime must retain the green physical scale, measured means, and readable compact albedo response');
   assert.match(source, /readTier\(maps\.green\)/, 'green must use its own normal/height tier');
   assert.match(source, /alb: 'vec4'/, 'existing albedo sample must carry packed roughness');
   assert.equal(source.match(/textureLevel\(\s*turfAlbedoArrayNode/g)?.length, 1,

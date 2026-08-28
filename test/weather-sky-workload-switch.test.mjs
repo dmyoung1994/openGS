@@ -21,6 +21,7 @@ function environment() {
       intensity: 85000,
       color: { r: 1, g: 0.96, b: 0.84 },
     },
+    moon: { azimuthRadians: 4, elevationRadians: -0.4, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.8, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.6 },
     atmosphere: {
       turbidity: 2.4,
       rayleigh: 1.5,
@@ -90,7 +91,7 @@ test('setWeatherSkyWorkload replaces the fixed GPU workload at an explicit bound
     assert.equal(result.workloadId, 'balanced');
     assert.notEqual(manager.weatherSky, previous);
     assert.equal(manager.weatherSky.environment, bindings);
-    assert.equal(manager.weatherSky.skyManifest, skyManifest);
+    assert.equal(manager.weatherSky.skyManifest, undefined);
     assert.equal(manager.weatherSky.workload.id, 'balanced');
     assert.equal(manager.weatherSky.temporalFrame, 0);
     assert.equal(manager.weatherSky.usesVolumetricClouds, true);

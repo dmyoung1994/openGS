@@ -175,6 +175,11 @@ const environmentState = new EnvironmentFrameState({
     intensity: 85000,
       color: { r: 1.0, g: 0.965, b: 0.90 },
   },
+  moon: {
+    azimuthRadians: 0, elevationRadians: -Math.PI / 2, intensity: 0,
+    color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0,
+    angularRadiusRadians: 0.0045, phaseAngleRadians: Math.PI,
+  },
   atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.0 },
   clouds: { coverage: 0.26, density: 0.44, baseHeight: 1100, thickness: 1200, advectionScale: 1.0 },
   wind: {

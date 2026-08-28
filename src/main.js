@@ -18,7 +18,8 @@ import { sitDepth } from './physics/groundInteraction.js';
 import { BallLie } from './scene/BallLie.js';
 import { renderedBallSitDepth } from './scene/NearTurfPolicy.js';
 import { airDensity, airViscosity } from './physics/constants.js';
-import { loadCourse } from './course/course.js';
+import { loadCourse, normalizeCourse } from './course/course.js';
+import { createCreatorCanvasCourse, creatorCanvasCameraPose } from './course/CreatorCanvas.js';
 import { MPH_TO_MS, DEG_TO_RAD, M_TO_YARD } from './util/units.js';
 import {
   ENVIRONMENT_FRAME_STATE_VERSION, ENVIRONMENT_WIND_ALGORITHM_VERSION,
@@ -101,6 +102,10 @@ const DEFAULT_TIMELINE_CLOCK = Object.freeze({
 });
 const startupQuery = new URL(window.location.href).searchParams;
 const coursePath = startupQuery.get('course') === 'premium-range' ? '/premium-range.json' : '/course.json';
+const isCreatorPage = window.location.pathname === '/creator.html'
+  || startupQuery.get('view') === 'creator';
+let creatorCanvasActive = isCreatorPage;
+let creatorCanvasVariant = 0;
 
 const app = document.getElementById('app');
 const sm = new SceneManager(app);
@@ -554,6 +559,7 @@ let environmentBindings = null;
 let environmentTickRemainder = 0;
 let environmentTickCount = 0;
 let environmentTimeline = null;
+let environmentTimelineAtmosphereSignature = null;
 let environmentTimelineIso = null;
 let environmentTimelineRenderRemainder = 0;
 let env = null;
@@ -592,6 +598,15 @@ function makeEnvironmentState(seed, {
       elevationRadians: Math.asin(SUN.y),
       intensity: 85000,
       color: { r: 1.0, g: 0.955, b: 0.87 },
+    },
+    moon: {
+      azimuthRadians: 0,
+      elevationRadians: -Math.PI / 2,
+      intensity: 0,
+      color: { r: 0.78, g: 0.84, b: 1.0 },
+      illuminatedFraction: 0,
+      angularRadiusRadians: 0.0045,
+      phaseAngleRadians: Math.PI,
     },
     atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.0 },
     clouds: { coverage: cloudCoverage, density: 0.44, baseHeight: 1100, thickness: 1200, advectionScale: 1.0 },
@@ -662,29 +677,50 @@ const launchMonitorApi = Object.freeze({
   get capabilities() { return launchMonitor.capabilities; },
 });
 
-function createEnvironmentTimeline(seed) {
+const SEASON_TIMELINE_DATES = Object.freeze({
+  spring: '2026-04-15', summer: '2026-07-15', autumn: '2026-10-15', winter: '2026-01-15',
+});
+
+function authoredAtmosphereWeather(atmosphere) {
+  if (!atmosphere) return null;
+  const profile = {
+    clear: { density: 0.28, turbidity: 2.0, mieCoefficient: 0.0035 },
+    'partly-cloudy': { density: 0.44, turbidity: 2.3, mieCoefficient: 0.005 },
+    overcast: { density: 0.67, turbidity: 3.2, mieCoefficient: 0.008 },
+    mist: { density: 0.58, turbidity: 5.1, mieCoefficient: 0.014 },
+    'light-rain': { density: 0.72, turbidity: 4.0, mieCoefficient: 0.011 },
+  }[atmosphere.weather];
+  return {
+    date: SEASON_TIMELINE_DATES[atmosphere.season],
+    time: `${atmosphere.localTime}:00.000Z`,
+    profile,
+  };
+}
+
+function createEnvironmentTimeline(seed, atmosphere = null) {
   const previous = environmentTimeline?.snapshot();
   const conditions = panel.getEnv();
+  const authored = authoredAtmosphereWeather(atmosphere);
   return new EnvironmentTimeline({
     version: ENVIRONMENT_TIMELINE_VERSION,
     algorithmVersion: ENVIRONMENT_TIMELINE_ALGORITHM_VERSION,
     ...DEFAULT_TIMELINE_LOCATION,
-    date: previous?.date ?? DEFAULT_TIMELINE_CLOCK.date,
-    time: previous?.time ?? DEFAULT_TIMELINE_CLOCK.time,
+    date: authored?.date ?? previous?.date ?? DEFAULT_TIMELINE_CLOCK.date,
+    time: authored?.time ?? previous?.time ?? DEFAULT_TIMELINE_CLOCK.time,
     playback: previous?.playback ?? DEFAULT_TIMELINE_CLOCK.playback,
     seed: seed >>> 0,
     tickSeconds: 1 / 120,
     weather: {
       atmosphere: {
-        turbidity: 2.3,
+        turbidity: authored?.profile.turbidity ?? 2.3,
         rayleigh: 1.7,
-        mieCoefficient: 0.005,
+        mieCoefficient: authored?.profile.mieCoefficient ?? 0.005,
         mieDirectionalG: 0.76,
         exposure: 1.0,
       },
       clouds: {
         coverage: conditions.cloudCover / 100,
-        density: 0.44,
+        density: authored?.profile.density ?? 0.44,
         baseHeight: 1100,
         thickness: 1200,
         advectionScale: 1.0,
@@ -704,8 +740,8 @@ function createEnvironmentTimeline(seed) {
 }
 
 function updateTerrainSun() {
-  if (range?.terrain?.uSunDir && environmentBindings?.sunDirection?.value) {
-    range.terrain.uSunDir.value.copy(environmentBindings.sunDirection.value);
+  if (range?.terrain?.uSunDir && environmentBindings?.keyDirection?.value) {
+    range.terrain.uSunDir.value.copy(environmentBindings.keyDirection.value);
   }
 }
 
@@ -795,6 +831,7 @@ function wireBall(b) {
     // submitted twice when the rest event fires during the frame.
     if (tracer.count < tracer.max) tracer.push(b.position);
     flying = false;
+    setBallShadowCasting(true, 'ball-rest');
     director.onRest(b);
     panel.showResult(r);
     // Driving range: hold the rotating result view, then glide back to the tee for
@@ -826,10 +863,18 @@ function syncBallMesh() {
   // The ball collar is additionally surface-gated by BallLie.update(); this flag only
   // suppresses the otherwise-valid rough collar while the ball is airborne.
   if (ballLie[0]) ballLie[0].visible = ball.state !== 'airborne';
-  // The ball is a real layer-0 shadow caster. A flight step or address teleport
-  // invalidates the retained directional map; Lighting.follow() below also moves
-  // the frustum for flight, while this covers the caster mutation itself.
-  lighting.invalidateShadow();
+  // The regulation ball rejoins the cached map at address/rest. During a shot it
+  // is intentionally excluded: redrawing a course-scale map for a 42.7 mm moving
+  // caster is wasteful, while retaining its old depth sample creates a stuck,
+  // popping shadow as the camera follows it.
+  if (range.ballMesh.castShadow) lighting.invalidateShadow();
+}
+
+function setBallShadowCasting(enabled, reason) {
+  if (!range?.ballMesh || range.ballMesh.castShadow === enabled) return false;
+  range.ballMesh.castShadow = enabled;
+  lighting.invalidateShadow(true, { reason });
+  return true;
 }
 
 // A bad shot state must never abort SceneManager's frame callback forever. The
@@ -840,6 +885,7 @@ function containShotFailure(error) {
   const x = Number.isFinite(ball?.position.x) ? ball.position.x : 0;
   const z = Number.isFinite(ball?.position.z) ? ball.position.z : 2;
   flying = false;
+  setBallShadowCasting(true, 'shot-recovery');
   try {
     ball.placeAt(x, z);
     syncBallMesh();
@@ -898,7 +944,7 @@ function toAddress({ smooth = false } = {}) {
 // course first so repeated agent rebuilds don't leak GPU resources. The terrain is
 // baked from the spec's FEATURES — this is the only path course data takes into the
 // scene, so there is no terrain-editing surface to expose.
-function buildCourse(course) {
+function buildCourse(course, { creatorCanvas = false } = {}) {
   tracer.clearHistory();
   if (range) {
     if (_rangeRetentionProbe) {
@@ -908,9 +954,18 @@ function buildCourse(course) {
     range.dispose();
   }
   flying = false;
-  const seedChanged = !environmentTimeline || environmentTimeline.config.seed !== course.environmentSeed;
-  if (seedChanged) {
-    environmentTimeline = createEnvironmentTimeline(course.environmentSeed);
+  if (course.atmosphere) panel.setEnv({
+    windSpeed: course.atmosphere.windSpeedMph,
+    windDir: course.atmosphere.windDirectionDegrees,
+    cloudCover: course.atmosphere.cloudCoverage * 100,
+  });
+  const atmosphereSignature = JSON.stringify(course.atmosphere ?? null);
+  const timelineChanged = !environmentTimeline
+    || environmentTimeline.config.seed !== course.environmentSeed
+    || environmentTimelineAtmosphereSignature !== atmosphereSignature;
+  if (timelineChanged) {
+    environmentTimeline = createEnvironmentTimeline(course.environmentSeed, course.atmosphere);
+    environmentTimelineAtmosphereSignature = atmosphereSignature;
     environmentTimelineIso = null;
     environmentTimelineRenderRemainder = 0;
     environmentTickRemainder = 0;
@@ -942,8 +997,9 @@ function buildCourse(course) {
   range = new Range(sm.scene, sm.camera, course, {
     renderer: sm.renderer, motionHistory: sm.motionHistory, lighting,
     environmentTier: sm.environmentTier, environment: environmentBindings,
-    environmentCatalog,
+    environmentCatalog, creatorCanvas,
   });
+  lighting.setCourseShadowCoverage(course.bounds);
   // Initial quality selection happens before Range construction. Apply the pending
   // mode once the grass workload hook exists, and repeat this after every rebuild.
   applyVisualQuality();
@@ -984,9 +1040,16 @@ try {
   // shipped as the rollback A/B baseline (docs/BACKDROP_PLAN.md).
   sm.configureSkyManifest(null);
   setBootstrapStage('course-loading', { detail: 'Loading and validating the authored course…' });
-  const initialCourse = coursePath === '/course.json'
+  const authoredInitialCourse = coursePath === '/course.json'
     ? await loadCourse('/course.json', { catalogAssetIds: environmentCatalog.byId })
     : await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
+  const initialCourse = creatorCanvasActive
+    ? normalizeCourse(createCreatorCanvasCourse({
+      atmosphere: authoredInitialCourse.atmosphere,
+      seed: authoredInitialCourse.environmentSeed,
+      variant: creatorCanvasVariant,
+    }), { catalogAssetIds: environmentCatalog.byId })
+    : authoredInitialCourse;
   const initialAssetIds = collectEnvironmentAssetIds(initialCourse);
   setBootstrapStage('asset-integrity', {
     detail: `Verifying ${initialAssetIds.size} course-referenced asset${initialAssetIds.size === 1 ? '' : 's'}…`,
@@ -1001,7 +1064,7 @@ try {
   });
   await environmentAssetIntegrityReady;
   setBootstrapStage('course-building', { detail: 'Building the verified course environment…' });
-  buildCourse(initialCourse);
+  buildCourse(initialCourse, { creatorCanvas: creatorCanvasActive });
   // The renderer is deliberately gated on the complete environment. The synchronous
   // material objects may exist while images decode, but no placeholder/partial course
   // is ever presented as a valid frame.
@@ -1027,7 +1090,14 @@ async function rebuildCourseFromDisk() {
   if (wasRunning) sm.pauseRendering();
   try {
     setBootstrapStage('course-loading', { detail: 'Loading and validating the edited course…' });
-    const nextCourse = await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
+    const authoredCourse = await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
+    const nextCourse = creatorCanvasActive
+      ? normalizeCourse(createCreatorCanvasCourse({
+        atmosphere: authoredCourse.atmosphere,
+        seed: authoredCourse.environmentSeed,
+        variant: creatorCanvasVariant,
+      }), { catalogAssetIds: environmentCatalog.byId })
+      : authoredCourse;
     const nextAssetIds = collectEnvironmentAssetIds(nextCourse);
     setBootstrapStage('asset-integrity', {
       detail: `Re-verifying ${nextAssetIds.size} course-referenced asset${nextAssetIds.size === 1 ? '' : 's'}…`,
@@ -1042,7 +1112,7 @@ async function rebuildCourseFromDisk() {
     });
     await environmentAssetIntegrityReady;
     setBootstrapStage('course-building', { detail: 'Rebuilding from verified course assets…' });
-    buildCourse(nextCourse);
+    buildCourse(nextCourse, { creatorCanvas: creatorCanvasActive });
     setBootstrapStage('asset-decoding', { detail: 'Decoding the rebuilt environment…' });
     await range.assetsReady;
     setBootstrapStage('atmosphere-ready', { detail: 'Finalizing rebuilt daylight and water reflections…' });
@@ -1058,6 +1128,50 @@ async function rebuildCourseFromDisk() {
     // fallback environment. A later successful rebuild may explicitly recover it.
     throw error;
   }
+}
+
+async function previewCourse(rawCourse) {
+  const preview = normalizeCourse(rawCourse, { catalogAssetIds: environmentCatalog.byId });
+  const assetIds = collectEnvironmentAssetIds(preview);
+  await verifyEnvironmentCatalogAssets(environmentCatalog, { assetIds, memoize: true });
+  creatorCanvasActive = false;
+  buildCourse(preview);
+  await Promise.all([range.assetsReady, sm.weatherSky.ready]);
+  sm.rebuildDaylightPmrem();
+  return { name: preview.meta.name, assets: assetIds.size };
+}
+
+async function clearCoursePreview() {
+  creatorCanvasActive = isCreatorPage;
+  await rebuildCourseFromDisk();
+  frameCreatorCanvas();
+  return range.course.meta.name;
+}
+
+async function showAuthoredCreatorCourse() {
+  creatorCanvasActive = false;
+  await rebuildCourseFromDisk();
+  return range.course.meta.name;
+}
+
+async function showCreatorCanvas({ reroll = false } = {}) {
+  if (reroll) creatorCanvasVariant += 1;
+  creatorCanvasActive = isCreatorPage;
+  await rebuildCourseFromDisk();
+  frameCreatorCanvas();
+  return range.course.meta.name;
+}
+
+function frameCreatorCanvas() {
+  if (!creatorCanvasActive || !evaluatorCamera) return;
+  if (!evaluatorCamera.active) evaluatorCamera.enter();
+  evaluatorCamera.setPose(currentCreatorCanvasPose());
+  evaluatorCamera.unfreeze();
+}
+
+function currentCreatorCanvasPose() {
+  if (!range?.course || !range?.terrain) return null;
+  return creatorCanvasCameraPose(range.course, (x, z) => range.terrain.heightAt(x, z));
 }
 
 function applyEnvironmentConditions(conditions) {
@@ -1119,6 +1233,11 @@ function hit(params = null) {
   // intentionally the same path used by the at-rest visual preview.
   applyEnvironmentConditions(panel.getEnv());
 
+  // Keep the course/tree shadow projection fixed for the whole cinematic. The
+  // ball is sub-pixel through most of flight, so its moving course-scale shadow
+  // contribution is disabled until the final lie is known.
+  setBallShadowCasting(false, 'ball-flight');
+
   tracer.promoteActiveToWhite();
   tracer.reset();
   panel.beginShot(params);
@@ -1154,6 +1273,12 @@ const builder = new BuilderPanel({
   // rebuild below; this callback just surfaces the request result to the panel.
 });
 
+// Direct creator routes render stats during Menu construction, before the FPS
+// meter itself is mounted. Seed the value before route resolution so /creator.html
+// is a valid cold entry rather than depending on a prior range/menu transition.
+let _fps = 0;
+let _thumbCountdown = 0;
+
 // App shell: the premium landing menu routes between Practice (range), Course
 // Creator (builder), and Play (course select). On entering an in-scene view we drop
 // the cinematic orbit and reframe to the tee.
@@ -1172,7 +1297,7 @@ const shell = new Menu({
   // Live figures for the Course Creator HUD (Objects / FPS / Status).
   getStats: () => {
     const c = range?.course;
-    const objects = c ? c.greens.length + c.bunkers.length + c.ponds.length : 0;
+    const objects = c && !creatorCanvasActive ? c.greens.length + c.bunkers.length + c.ponds.length : 0;
     return { objects, fps: _fps || '—', status: builder?.busy ? 'Building' : 'Ready' };
   },
 });
@@ -1185,6 +1310,9 @@ evaluatorCamera = new EvaluatorCamera({
   director,
   freeCamera: freeCam,
 });
+if (creatorCanvasActive) {
+  frameCreatorCanvas();
+}
 
 // Slow cinematic orbit used as the menu's living backdrop (the real course renders
 // behind the overlay). Reframed to the tee by toAddress() when a view is entered.
@@ -1203,7 +1331,6 @@ function menuCinematic(dt) {
 // AA/half-resolution AO history and produced horizontal bands across the grass just
 // before the menu camera resumed its pan. Capturing the settled menu render keeps the
 // thumbnail live without ever presenting a transient camera state to the player.
-let _thumbCountdown = 0;
 function requestThumb() { if (_thumbCountdown === 0) _thumbCountdown = 4; }
 function thumbCapture() {
   // Direct toDataURL on the WebGPU canvas (drawImage from it returns blank). It holds
@@ -1236,7 +1363,7 @@ fpsEl.style.cssText = 'font:700 13px/1.3 ui-monospace,SFMono-Regular,monospace;c
   + 'background:rgba(14,20,26,.72);padding:4px 8px;border-radius:6px;pointer-events:none;';
 (document.getElementById('gs-topright') || document.body).appendChild(fpsEl);
 fpsEl.style.display = 'none';
-let _fpsLast = performance.now(), _fpsN = 0, _fpsAcc = 0, _fps = 0;
+let _fpsLast = performance.now(), _fpsN = 0, _fpsAcc = 0;
 let _qualityLastFrameAt = null;
 function updateFpsMeter() {
   const now = performance.now();
@@ -1428,7 +1555,16 @@ window.golf = {
   get environmentReady() { return Promise.all([environmentCatalogReady, environmentAssetIntegrityReady, visualAssetManifestReady, visualCriticalAssetsReady, range?.assetsReady, sm.weatherSky?.ready]); },
   get environmentLoadError() { return environmentLoadError; },
   refreshThumb: requestThumb,
+  toAddress,
   rebuild: rebuildCourseFromDisk,
+  previewCourse,
+  clearCoursePreview,
+  showAuthoredCreatorCourse,
+  showCreatorCanvas,
+  creatorCanvasPose: currentCreatorCanvasPose,
+  beginCreatorApply() { creatorCanvasActive = false; },
+  get creatorCanvasActive() { return creatorCanvasActive; },
+  get creatorCanvasVariant() { return creatorCanvasVariant; },
   // The robustness harness enables this before repeated real rebuilds. Creating the
   // WeakRef inside the application avoids DevTools retaining the Range merely because
   // an evaluation expression touched it.

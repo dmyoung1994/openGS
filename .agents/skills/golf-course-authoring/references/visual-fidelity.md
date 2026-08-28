@@ -33,9 +33,25 @@ All four scales must reinforce the same geology, climate, maintenance level, and
 
 - Treat sun direction, sun color, sky environment, ambient fill, fog, and exposure as one time-of-day system.
 - The sun drives the dominant shadow and warm/cool relationship. Environment light supplies believable fill but must not flatten form.
+- At night, hand dominant-light ownership to the moon only when its real contribution exceeds the residual solar contribution. Moon direction, phase, disc shading, cloud response, reflections, and shadows must agree.
+- Keep exposure continuous across golden hour, twilight, and night. Sunset should preserve playable turf and cloud detail without bleaching the warm horizon; night adaptation may lift the course while the sky retains a darker value hierarchy.
+- Render stars as sub-pixel or softly resolved points in world direction. Fade them through daylight, horizon air mass, turbidity, and lunar glare; reject repeated cells, square blocks, and star fields bright enough to contaminate environment lighting.
+- A readable moon may use a modest display-size concession at gameplay FOV, but preserve its astronomical direction and phase. Prefer a mission-derived, provenance-recorded global albedo map when authentic lunar identity is requested, then apply limb falloff and the shared solar incidence so it reads as a body rather than a flat white decal.
 - Use physically restrained screen-space ambient occlusion to restore contact at bunker lips, rock intersections, foliage bases, and terrain folds. It supports geometry; it cannot replace relief or shadows. Reject halos, dirty open turf, foliage-card rectangles, and camera-distance pumping.
 - Keep the sky seamless and horizon-aware. Match sky luminance and hue to the distant terrain and haze.
 - Evaluate exposure from both golfer height and broadcast height. Turf may not clip to neon green or collapse to black.
+
+## Mowing and maintained turf
+
+- Treat fairway striping primarily as directional leaf lay under the shared sun, moon, view, and sky—not alternating painted lanes.
+- Keep mower passes world-stable, course-aligned, physically scaled, and confined to authored fairway turf. Do not let the signal leak onto fringe, green, tee, sand, water banks, or the rough ecotone.
+- Use restrained albedo support only when diffuse conditions would otherwise erase the lay. Normal, roughness, specular, and pigment responses must remain registered and fade by screen-space footprint before they alias.
+- Judge pass contrast from golfer and broadcast height in multiple sun directions. Reject hard graphic boundaries, persistent equal-value bands in flat light, wet/plastic sheen, or stripes that dominate fairway contour and strategy.
+- Treat green-to-fringe and fringe-to-surround cuts as maintenance boundaries, not biome transitions. Resolve them against the exact authored green SDF over only the antialiasing width; do not reuse ecological edge warp or metre-scale crossfades.
+- Build showcase greens with a compact legal pin shelf plus distinct shoulders, ridges, swales, and drainage exits. A uniformly radial mound or softened oval does not demonstrate 3D authoring quality.
+- A small finite hero maquette may add one deterministic instanced short-blade canopy to make its collar readable from the elevated authoring camera. Root every blade strictly inside the exact fringe SDF, keep physical blade dimensions, and retain filtered PBR turf underneath; do not generalize the allocation to all maintained course turf without a measured performance review.
+- When a finite presentation exposes a soil section, use a provenance-recorded, physically scaled PBR soil material with seam-safe perimeter UVs. Do not substitute a flat brown wall; if the isolated void removes all plausible bounce, any restrained presentation lift must remain registered to the same albedo rather than becoming a flat emissive color.
+- Keep showcase flagsticks at believable physical diameter relative to the 108 mm cup. A premium wood treatment may use a provenance-recorded, longitudinal seamless albedo with real clearcoat response, but the texture must not justify enlarging the pole, baking highlights, or replacing the circular collision silhouette.
 
 ## Course-edge integration
 
@@ -62,6 +78,10 @@ Reject the result if any view shows texture grids, bright plastic turf, floating
 - Reuse geometry and textures, instance repeated forms, and use category-aware LOD distances. Preserve distant tree silhouettes longer than shrubs and groundcover; cull sub-pixel accents first.
 - Keep GTAO enabled as a low-frequency contact effect. At reduced quality, render it below native resolution and omit distant foliage from its normal buffer rather than deleting contact shading from terrain, bunker lips, rocks, and nearby vegetation.
 - Cache the directional shadow map while the sun and authored shadow casters are static. Moving spectacle pieces must not force a course-scale shadow redraw every frame.
+- Fit that cached directional map to a stable authored course footprint. Do not chase a flying ball with stepped shadow-camera recentering; exclude sub-pixel moving casters from the cache during motion and restore their real shadow at rest.
+- Apply bloom once from an existing resolved linear-HDR texture, before tone mapping, and attenuate it with cloud transmittance rather than materializing another full-resolution composite. Threshold it above ordinary sky, cloud, and turf radiance, keep the blur bounded and low resolution, and reject halos on white UI, tracers, fairways, or the lunar disc itself.
+- Keep temporal projection jitter active through moving broadcast cameras; camera translation is not antialiasing for the current frame. Reproject with real velocity/depth, reject disocclusions, and inspect palms, flags, tracer edges, turf boundaries, and shadow silhouettes throughout a complete shot—not only after the camera settles.
+- Follow the temporal resolve with a restrained display-referred spatial edge pass when fast camera disocclusions still expose hard one-frame samples. Keep it after HDR bloom and tone mapping so it cannot smear lighting energy or feed glare; reject foliage crawl, diagonal stair steps, and broad texture blur.
 - Compose novelty from stable seeded assemblies, not unique untracked meshes.
 - Keep protected gameplay and camera corridors deterministic and unchanged between runs.
 - Measure frame time with post-processing, shadows, water, and dense environment dressing active together.

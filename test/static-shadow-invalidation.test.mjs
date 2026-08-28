@@ -42,12 +42,35 @@ test('flight follow coalesces the pre-follow ball invalidation and sub-texel mot
   assert.equal(lighting.sun.shadow.needsUpdate, true);
 });
 
+test('course coverage keeps one stable shadow projection throughout a ball flight', () => {
+  const lighting = new Lighting(new Scene(), new Vector3(-0.72, 0.60, -0.32).normalize(), tier);
+  lighting.sun.shadow.needsUpdate = false;
+  lighting.setCourseShadowCoverage({ minX: -110, maxX: 110, minZ: -340, maxZ: 30 }, { now: 0 });
+  const initial = lighting.readDiagnostics();
+  const target = lighting.sun.target.position.clone();
+  assert.ok(initial.frustum.right > 200, 'the complete course must fit across the light-space X axis');
+  assert.ok(initial.texelSizeMeters.x > 0.2,
+    'diagnostics must report the fitted map density rather than the pre-coverage default');
+  assert.equal(initial.courseCoverage.anchor.z, -155);
+
+  lighting.sun.shadow.needsUpdate = false;
+  lighting.markShadowRendered(1);
+  assert.equal(lighting.follow(0, 0, { now: 2 }), false);
+  assert.equal(lighting.follow(18, -285, { now: 3 }), false);
+  assert.equal(lighting.sun.shadow.needsUpdate, false);
+  assert.deepEqual(lighting.sun.target.position.toArray(), target.toArray(),
+    'ball motion must not reproject cached terrain and tree shadows');
+  assert.equal(lighting.readDiagnostics().focus.z, -285,
+    'diagnostics still report the live point of interest');
+});
+
 test('lighting key direction, color, and intensity consume shared daylight state', () => {
   const state = new EnvironmentFrameState({
     version: ENVIRONMENT_FRAME_STATE_VERSION,
     algorithmVersion: ENVIRONMENT_WIND_ALGORITHM_VERSION,
     seed: 9, tickSeconds: 1 / 120,
     sun: { azimuthRadians: 0.7, elevationRadians: 0.65, intensity: 42500, color: { r: 1, g: 0.8, b: 0.6 } },
+    moon: { azimuthRadians: 4.0, elevationRadians: -0.4, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.8, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.6 },
     atmosphere: { turbidity: 2.4, rayleigh: 1.5, mieCoefficient: 0.004, mieDirectionalG: 0.76, exposure: 1 },
     clouds: { coverage: 0.3, density: 0.5, baseHeight: 1200, thickness: 650, advectionScale: 1 },
     wind: { speed: 0, directionRadians: 0, referenceHeight: 10, shearExponent: 0.2, gustStrength: 0, turbulenceStrength: 0, gustSpatialFrequency: 0.035, gustTemporalFrequency: 0.27 },

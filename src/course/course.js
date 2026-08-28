@@ -19,11 +19,13 @@ export const PLACEMENT_ALGORITHM_VERSION = 1;
 
 const ROOT_KEYS = new Set([
   'meta', 'catalogVersion', 'placementAlgorithmVersion', 'biome', 'biomeTransitions', 'environmentSeed',
-  'bounds', 'tee', 'corridor', 'fringeW', 'greens', 'bunkers', 'ponds', 'environment',
+  'bounds', 'tee', 'corridor', 'fringeW', 'greens', 'bunkers', 'ponds', 'landforms', 'atmosphere', 'environment',
 ]);
 const BIOMES = new Set(BIOME_IDS.filter((biome) => biome !== 'marine-ocean'));
 const SEMANTIC_ASSEMBLIES = new Set(['tree-line', 'forest-cluster', 'woodland-island', 'rock-outcrop', 'habitat-cluster']);
 const SEMANTIC_EDGES = new Set(['course-boundary', 'hazard-edge', 'rough-transition']);
+const SYNTHETIC_TREE_ARCHETYPES = new Set(['broadleaf-oak', 'live-oak', 'maple', 'monterey-cypress', 'douglas-fir', 'loblolly-pine']);
+const LAND_FORM_KINDS = new Set(['ridge', 'bowl', 'shelf', 'saddle', 'shoulder', 'drainage-channel', 'plateau', 'swale']);
 const ID_RE = /^[a-z][a-z0-9-]{2,63}$/;
 
 export class CourseSchemaError extends Error {
@@ -60,9 +62,11 @@ export function normalizeCourse(raw, { catalogAssetIds = BUILTIN_ENVIRONMENT_ASS
   const greens = array(c.greens, 'course.greens').map((green, index) => validateGreen(green, index, bounds));
   const bunkers = array(c.bunkers, 'course.bunkers').map((bunker, index) => validateBunker(bunker, index, bounds));
   const ponds = array(c.ponds, 'course.ponds').map((pond, index) => validatePond(pond, index, bounds));
+  const landforms = array(c.landforms ?? [], 'course.landforms').map((landform, index) => validateLandform(landform, index, bounds));
   const biomeTransitions = validateBiomeTransitions(c.biomeTransitions, {
     biome: c.biome, bounds, tee, corridor, greens, bunkers, ponds,
   }, fail);
+  const atmosphere = c.atmosphere === undefined ? undefined : validateAtmosphere(c.atmosphere);
   const catalog = toAssetMap(catalogAssetIds);
   const environment = validateEnvironment(c.environment, { biome: c.biome, bounds, tee, corridor, greens, bunkers, ponds, catalog });
 
@@ -74,9 +78,40 @@ export function normalizeCourse(raw, { catalogAssetIds = BUILTIN_ENVIRONMENT_ASS
     biomeTransitions,
     environmentSeed: normalizeSeed(c.environmentSeed),
     bounds: Object.freeze(bounds), tee: Object.freeze(tee), corridor: Object.freeze(corridor), fringeW: c.fringeW,
-    greens: Object.freeze(greens), bunkers: Object.freeze(bunkers), ponds: Object.freeze(ponds),
+    greens: Object.freeze(greens), bunkers: Object.freeze(bunkers), ponds: Object.freeze(ponds), landforms: Object.freeze(landforms),
+    ...(atmosphere ? { atmosphere: Object.freeze(atmosphere) } : {}),
     environment: Object.freeze(environment),
   });
+}
+
+function validateAtmosphere(raw) {
+  const path = 'course.atmosphere';
+  const value = object(raw, path);
+  rejectUnknown(value, new Set(['climate', 'season', 'localTime', 'weather', 'cloudCoverage', 'windSpeedMph', 'windDirectionDegrees']), path);
+  nonEmpty(value.climate, `${path}.climate`);
+  enumValue(value.season, new Set(['spring', 'summer', 'autumn', 'winter']), `${path}.season`);
+  if (typeof value.localTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.localTime)) fail(`${path}.localTime must be HH:MM`);
+  enumValue(value.weather, new Set(['clear', 'partly-cloudy', 'overcast', 'mist', 'light-rain']), `${path}.weather`);
+  range(value.cloudCoverage, 0, 1, `${path}.cloudCoverage`);
+  range(value.windSpeedMph, 0, 60, `${path}.windSpeedMph`);
+  range(value.windDirectionDegrees, 0, 360, `${path}.windDirectionDegrees`);
+  return { ...value };
+}
+
+function validateLandform(raw, index, bounds) {
+  const path = `course.landforms[${index}]`;
+  const value = object(raw, path);
+  rejectUnknown(value, new Set(['kind', 'points', 'width', 'height', 'falloff']), path);
+  enumValue(value.kind, LAND_FORM_KINDS, `${path}.kind`);
+  const points = array(value.points, `${path}.points`).map((point, pointIndex) => {
+    const pointPath = `${path}.points[${pointIndex}]`; const result = object(point, pointPath);
+    rejectUnknown(result, new Set(['x', 'z']), pointPath); exactNumber(result.x, `${pointPath}.x`); exactNumber(result.z, `${pointPath}.z`);
+    if (!insideBounds(result, bounds)) fail(`${pointPath} must remain inside course.bounds`);
+    return Object.freeze({ x: result.x, z: result.z });
+  });
+  if (!points.length || points.length > 24) fail(`${path}.points must contain 1..24 points`);
+  range(value.width, 1, 160, `${path}.width`); range(value.height, -20, 20, `${path}.height`); range(value.falloff, 1, 200, `${path}.falloff`);
+  return Object.freeze({ kind: value.kind, points: Object.freeze(points), width: value.width, height: value.height, falloff: value.falloff });
 }
 
 function validateMeta(raw) {
@@ -181,7 +216,7 @@ function validatePond(raw, index, bounds) {
 
 function validateEnvironment(raw, context) {
   const environment = object(raw, 'course.environment');
-  rejectUnknown(environment, new Set(['foliageAlias', 'foliageAliases', 'objectBudget', 'placements', 'scatter', 'assembly', 'edgeDressing', 'exclusions']), 'course.environment');
+  rejectUnknown(environment, new Set(['foliageAlias', 'foliageAliases', 'objectBudget', 'placements', 'scatter', 'assembly', 'edgeDressing', 'exclusions', 'syntheticTrees']), 'course.environment');
   const foliageAliasPattern = /^(builtin|local)\.[a-z0-9]+(?:[.-][a-z0-9]+)*\.v[1-9][0-9]*$/;
   const foliageAlias = environment.foliageAlias;
   if (foliageAlias !== undefined && (typeof foliageAlias !== 'string'
@@ -212,6 +247,11 @@ function validateEnvironment(raw, context) {
     uniqueRecordId(ids, result.id, `course.environment.placements[${index}]`);
     return result;
   });
+  const syntheticTrees = array(environment.syntheticTrees ?? [], 'course.environment.syntheticTrees').map((record, index) => {
+    const result = validateSyntheticTree(record, index, clearanceContext);
+    uniqueRecordId(ids, result.id, `course.environment.syntheticTrees[${index}]`);
+    return result;
+  });
   const scatter = array(environment.scatter, 'course.environment.scatter').map((record, index) => {
     const result = validateDistributedRecord(record, index, 'scatter', clearanceContext);
     uniqueRecordId(ids, result.id, `course.environment.scatter[${index}]`);
@@ -227,7 +267,7 @@ function validateEnvironment(raw, context) {
     uniqueRecordId(ids, result.id, `course.environment.edgeDressing[${index}]`);
     return result;
   });
-  const total = placements.length + sumCount(scatter) + sumCount(assembly) + sumCount(edgeDressing);
+  const total = placements.length + syntheticTrees.length + sumCount(scatter) + sumCount(assembly) + sumCount(edgeDressing);
   if (total > environment.objectBudget || total > ENVIRONMENT_OBJECT_BUDGET) {
     fail(`course.environment declares ${total} objects, exceeding its hard budget of ${environment.objectBudget}`);
   }
@@ -235,9 +275,36 @@ function validateEnvironment(raw, context) {
     ...(foliageAlias ? { foliageAlias } : {}),
     ...(foliageAliases ? { foliageAliases: Object.freeze([...foliageAliases]) } : {}),
     objectBudget: environment.objectBudget,
-    placements: Object.freeze(placements), scatter: Object.freeze(scatter), assembly: Object.freeze(assembly),
+    placements: Object.freeze(placements), syntheticTrees: Object.freeze(syntheticTrees), scatter: Object.freeze(scatter), assembly: Object.freeze(assembly),
     edgeDressing: Object.freeze(edgeDressing), exclusions: Object.freeze(exclusions), objectCount: total,
   };
+}
+
+function validateSyntheticTree(raw, index, context) {
+  const path = `course.environment.syntheticTrees[${index}]`;
+  const record = object(raw, path);
+  rejectUnknown(record, new Set(['id', 'archetype', 'x', 'z', 'rotationY', 'scale', 'seed', 'age', 'health', 'windExposure']), path);
+  identifier(record.id, `${path}.id`);
+  enumValue(record.archetype, SYNTHETIC_TREE_ARCHETYPES, `${path}.archetype`);
+  for (const key of ['x', 'z', 'rotationY', 'scale', 'age', 'health', 'windExposure']) exactNumber(record[key], `${path}.${key}`);
+  if (record.scale <= 0.35 || record.scale > 2.5) fail(`${path}.scale must be in (0.35, 2.5]`);
+  range(record.age, 0, 1, `${path}.age`); range(record.health, 0.25, 1, `${path}.health`); range(record.windExposure, 0, 1, `${path}.windExposure`);
+  uint32(record.seed, `${path}.seed`);
+  if (!insideBounds(record, context.bounds)) fail(`${path} is outside course.bounds`);
+  const radius = syntheticTreeRadius(record.archetype) * record.scale;
+  if (insideTee(record, context.tee, radius + 12)) fail(`${path} violates tee clearance`);
+  for (const feature of context.greens) if (signedDistanceToFeature(feature, record.x, record.z) > -(radius + 14)) fail(`${path} violates green clearance`);
+  for (const feature of context.bunkers) if (signedDistanceToFeature(feature, record.x, record.z) > -(radius + 2)) fail(`${path} violates bunker clearance`);
+  for (const feature of context.ponds) if (signedDistanceToFeature(feature, record.x, record.z) > -(radius + 2)) fail(`${path} violates water clearance`);
+  if (insideFairway(record, context.corridor, radius + 4)) fail(`${path} violates fairway clearance`);
+  for (const exclusion of context.exclusions) if (distance(record, exclusion) < radius + exclusion.r) fail(`${path} violates exclusion "${exclusion.id}"`);
+  return Object.freeze({ ...record });
+}
+
+function syntheticTreeRadius(archetype) {
+  if (archetype.includes('cypress')) return 2.6;
+  if (archetype.includes('fir') || archetype.includes('pine')) return 4.2;
+  return 5.8;
 }
 
 function validatePlacement(raw, index, context) {

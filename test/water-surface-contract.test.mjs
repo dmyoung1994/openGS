@@ -18,6 +18,7 @@ function environment(windSpeed = 2) {
     seed: 41,
     tickSeconds: 1 / 120,
     sun: { azimuthRadians: 0.8, elevationRadians: 0.7, intensity: 85000, color: { r: 1, g: 0.94, b: 0.82 } },
+    moon: { azimuthRadians: 4.0, elevationRadians: -0.4, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.8, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.6 },
     atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1 },
     clouds: { coverage: 0.34, density: 0.58, baseHeight: 1300, thickness: 720, advectionScale: 1 },
     wind: { speed: windSpeed, directionRadians: 0.4, referenceHeight: 10, shearExponent: 0.18, gustStrength: 0.2, turbulenceStrength: 0.2, gustSpatialFrequency: 0.035, gustTemporalFrequency: 0.27 },

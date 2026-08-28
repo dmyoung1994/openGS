@@ -13,6 +13,7 @@ function state() {
     seed: 42,
     tickSeconds: 1 / 120,
     sun: { azimuthRadians: 1.1, elevationRadians: 0.7, intensity: 80000, color: { r: 1, g: 0.95, b: 0.8 } },
+    moon: { azimuthRadians: 4.2, elevationRadians: -0.3, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.7, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.8 },
     atmosphere: { turbidity: 2.2, rayleigh: 1.6, mieCoefficient: 0.004, mieDirectionalG: 0.75, exposure: 1 },
     clouds: { coverage: 0.32, density: 0.58, baseHeight: 1200, thickness: 650, advectionScale: 1 },
     wind: {
@@ -34,6 +35,12 @@ test('GPU bindings mirror authoritative current and previous environment snapsho
   assert.equal(bindings.sunIntensity.value, data[7]);
   assert.equal(bindings.sunIlluminanceScale.value, data[7] / 85000);
   assert.deepEqual(bindings.sunColor.value.toArray(), Array.from(data.slice(8, 11)));
+  data.slice(48, 51).forEach((value, index) => {
+    assert.ok(Math.abs(bindings.moonDirection.value.toArray()[index] - value) < 1e-6);
+  });
+  assert.equal(bindings.moonIlluminanceScale.value, data[51] / 0.25);
+  assert.deepEqual(bindings.moonColor.value.toArray(), Array.from(data.slice(52, 55)));
+  assert.equal(bindings.moonIlluminatedFraction.value, data[55]);
   assert.equal(bindings.atmosphereExposure.value, data[11]);
   assert.ok(bindings.skyRadiance(bindings.sunDirection)?.isNode);
   assert.ok(bindings.horizonColor.value.x > bindings.zenithColor.value.x);

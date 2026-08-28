@@ -32,15 +32,15 @@ test('fairway mowing passes are straight, reel-width, and fairway-only', async (
     'mowing coordinate must contain no noise, warp, curvature, or phase perturbation');
   assert.match(source, /const stripPhase\s*=\s*stripCoordinate\.mul\(6\.2831853 \/ MOW_STRIPE_PERIOD_M\)/,
     'shader stripes must use a measurable physical period');
-  assert.match(source, /const stripLay\s*=\s*smoothstep\(0\.40, 0\.60, stripWave\)/,
-    'mowing response must resolve into equal-width passes with clean antialiased boundaries');
-  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(0\.045\)/,
-    'fairway albedo must remain a restrained support for physical leaf-lay contrast');
-  assert.match(source, /const mowBump\s*=\s*layDirection\.mul\(stripLay\.sub\(0\.5\)\.mul\(0\.22\)\)/,
+  assert.match(source, /const stripLay\s*=\s*smoothstep\(0\.28, 0\.72, stripWave\)/,
+    'mowing response must resolve into equal-width passes with a realistic overlap transition');
+  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(0\.006\)/,
+    'fairway albedo must remain subordinate to physical leaf-lay contrast');
+  assert.match(source, /const mowBump\s*=\s*layDirection\.mul\(stripLay\.sub\(0\.5\)\.mul\(0\.035\)\)/,
     'fairway passes must remain primarily a physical leaf-lay normal response');
   assert.match(source, /const mowResolution\s*=\s*oneMinus\(smoothstep\(0\.28, 1\.10, duvM\)\)/,
     '2.54m passes must recede by their real screen-space resolving limit');
-  assert.match(source, /const mowOptical\s*=\s*stripLay\.sub\(0\.5\)[\s\S]*?const mowSpecular\s*=\s*oneMinus\(mowOptical\.mul\(0\.24\)\)/,
+  assert.match(source, /const mowOptical\s*=\s*stripLay\.sub\(0\.5\)[\s\S]*?const mowSpecular\s*=\s*oneMinus\(mowOptical\.mul\(0\.04\)\)/,
     'mower roughness and specular response must share one registered directional signal');
   assert.match(source, /const fairwayMowMask = m\.fairway[\s\S]*?oneMinus\(m\.fringe\)[\s\S]*?oneMinus\(m\.green\)[\s\S]*?oneMinus\(m\.tee\)[\s\S]*?oneMinus\(m\.sand\)[\s\S]*?oneMinus\(m\.waterBank\)/,
     'mowing must be owned by the authored fairway and explicitly exclude every other surface');

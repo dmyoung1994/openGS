@@ -13,6 +13,7 @@ function config(overrides = {}) {
     seed: 0x1a2b3c4d,
     tickSeconds: 1 / 120,
     sun: { azimuthRadians: 1.2, elevationRadians: 0.8, intensity: 85000, color: { r: 1, g: 0.93, b: 0.78 } },
+    moon: { azimuthRadians: 4.3, elevationRadians: -0.4, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.8, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.64 },
     atmosphere: { turbidity: 2.3, rayleigh: 1.7, mieCoefficient: 0.005, mieDirectionalG: 0.76, exposure: 1.1 },
     clouds: { coverage: 0.35, density: 0.6, baseHeight: 1300, thickness: 700, advectionScale: 1.0 },
     wind: {
@@ -80,7 +81,7 @@ test('seed changes gust field without changing authored base wind', () => {
 });
 
 test('strict config and public input validation fail closed', () => {
-  assert.throws(() => new EnvironmentFrameState(config({ version: 2 })), /version/);
+  assert.throws(() => new EnvironmentFrameState(config({ version: 1 })), /version/);
   assert.throws(() => new EnvironmentFrameState(config({ seed: -1 })), /seed/);
   assert.throws(() => new EnvironmentFrameState(config({ wind: { ...config().wind, speed: 99 } })), /wind.speed/);
   const state = new EnvironmentFrameState(config());

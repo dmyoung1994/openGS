@@ -1,10 +1,10 @@
-// Authoritative deterministic fair-weather state shared by gameplay and GPU
-// rendering.  This module deliberately has no implicit configuration: callers
+// Authoritative deterministic all-day environment state shared by gameplay and GPU
+// rendering. This module deliberately has no implicit celestial configuration: callers
 // must author every environmental input so invalid content fails closed.
 
-export const ENVIRONMENT_FRAME_STATE_VERSION = 1;
+export const ENVIRONMENT_FRAME_STATE_VERSION = 2;
 export const ENVIRONMENT_WIND_ALGORITHM_VERSION = 'environment-wind-v1';
-export const ENVIRONMENT_GPU_UNIFORM_FLOATS = 48;
+export const ENVIRONMENT_GPU_UNIFORM_FLOATS = 60;
 
 const TWO_PI = Math.PI * 2;
 const MAX_WIND_SPEED_MPS = 15.6464; // 35 mph, fair-weather contract limit.
@@ -89,6 +89,7 @@ function validateConfig(config) {
   }
 
   const sun = object(root.sun, 'sun');
+  const moon = object(root.moon, 'moon');
   const atmosphere = object(root.atmosphere, 'atmosphere');
   const clouds = object(root.clouds, 'clouds');
   const wind = object(root.wind, 'wind');
@@ -100,9 +101,18 @@ function validateConfig(config) {
     tickSeconds: finite(root.tickSeconds, 'tickSeconds', 1 / 1000, 1),
     sun: Object.freeze({
       azimuthRadians: finite(sun.azimuthRadians, 'sun.azimuthRadians', 0, TWO_PI),
-      elevationRadians: finite(sun.elevationRadians, 'sun.elevationRadians', 0.001, Math.PI / 2),
+      elevationRadians: finite(sun.elevationRadians, 'sun.elevationRadians', -Math.PI / 2, Math.PI / 2),
       intensity: finite(sun.intensity, 'sun.intensity', 0, 100000),
       color: unitColor(sun.color, 'sun.color'),
+    }),
+    moon: Object.freeze({
+      azimuthRadians: finite(moon.azimuthRadians, 'moon.azimuthRadians', 0, TWO_PI),
+      elevationRadians: finite(moon.elevationRadians, 'moon.elevationRadians', -Math.PI / 2, Math.PI / 2),
+      intensity: finite(moon.intensity, 'moon.intensity', 0, 10),
+      color: unitColor(moon.color, 'moon.color'),
+      illuminatedFraction: finite(moon.illuminatedFraction, 'moon.illuminatedFraction', 0, 1),
+      angularRadiusRadians: finite(moon.angularRadiusRadians, 'moon.angularRadiusRadians', 0.0035, 0.0065),
+      phaseAngleRadians: finite(moon.phaseAngleRadians, 'moon.phaseAngleRadians', 0, Math.PI),
     }),
     atmosphere: Object.freeze({
       turbidity: finite(atmosphere.turbidity, 'atmosphere.turbidity', 1, 10),
@@ -148,7 +158,7 @@ function assertTime(time) {
 
 function writeUniformSnapshot(state) {
   const data = new Float32Array(ENVIRONMENT_GPU_UNIFORM_FLOATS);
-  const { sun, atmosphere, clouds, wind } = state.config;
+  const { sun, moon, atmosphere, clouds, wind } = state.config;
   const sunCos = Math.cos(sun.elevationRadians);
   data[0] = state.time;
   data[1] = state.tick;
@@ -187,6 +197,17 @@ function writeUniformSnapshot(state) {
   data[45] = state.coefficientD[1];
   data[46] = state.coefficientD[2];
   data[47] = state.coefficientD[3];
+  const moonCos = Math.cos(moon.elevationRadians);
+  data[48] = Math.sin(moon.azimuthRadians) * moonCos;
+  data[49] = Math.sin(moon.elevationRadians);
+  data[50] = Math.cos(moon.azimuthRadians) * moonCos;
+  data[51] = moon.intensity;
+  data[52] = moon.color.r;
+  data[53] = moon.color.g;
+  data[54] = moon.color.b;
+  data[55] = moon.illuminatedFraction;
+  data[56] = moon.angularRadiusRadians;
+  data[57] = moon.phaseAngleRadians;
   return Object.freeze({ version: ENVIRONMENT_FRAME_STATE_VERSION, tick: state.tick, time: state.time, data });
 }
 

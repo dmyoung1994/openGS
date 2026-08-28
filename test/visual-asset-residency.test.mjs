@@ -21,8 +21,8 @@ test('visual manifest is versioned, conservative, and resolves authored LOD vari
   const manifest = validateVisualAssetManifest(manifestRaw);
   assert.equal(manifest.version, 1);
   assert.deepEqual(Object.keys(manifest.variants), VISUAL_ASSET_VARIANTS);
-  assert.equal(manifest.files.length, 33);
-  assert.equal(manifest.assets.length, 30);
+  assert.equal(manifest.files.length, 38);
+  assert.equal(manifest.assets.length, 35);
   assert.ok(manifest.files.every((file) => /^\/assets\//.test(file.url)));
   assert.ok(manifest.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
   assert.ok(manifest.files.every((file) => file.memoryBytes >= file.bytes));
@@ -32,6 +32,9 @@ test('visual manifest is versioned, conservative, and resolves authored LOD vari
   const quality = resolveVisualAssetProfile(manifest, 'quality');
   const ultra = resolveVisualAssetProfile(manifest, 'ultra');
   assert.equal(critical.entries.length, balanced.entries.length);
+  const moon = critical.entries.find((entry) => entry.assetId === 'environment-moon-lroc-albedo');
+  assert.equal(moon.required, true);
+  assert.equal(moon.file.sha256, 'f7130a1822681fa7512d7dcfd40db8c10b9ba4f06777910348698260ed7a2170');
   assert.ok(quality.entries.length > balanced.entries.length);
   assert.ok(ultra.entries.length > quality.entries.length);
 
@@ -53,6 +56,17 @@ test('visual manifest is versioned, conservative, and resolves authored LOD vari
   assert.equal(packedCoast.file.url,
     '/assets/materials/aerial_beach_01/aerial_beach_01_diff_rough_2k.png');
   assert.match(packedCoast.asset.semantic, /albedo-roughness-packed/);
+  for (const assetId of ['creator-earth-albedo', 'creator-earth-normal', 'creator-earth-roughness']) {
+    const earthMap = critical.entries.find((entry) => entry.assetId === assetId);
+    assert.equal(earthMap.required, true);
+    assert.match(earthMap.file.url, /^\/assets\/materials\/dirt\//);
+    assert.deepEqual(earthMap.file.dimensions, { width: 1024, height: 1024 });
+  }
+  const flagstickWood = critical.entries.find((entry) => entry.assetId === 'flagstick-premium-walnut-albedo');
+  assert.equal(flagstickWood.required, true);
+  assert.equal(flagstickWood.file.url, '/assets/materials/flagstick/premium_walnut_albedo_1k.png');
+  assert.equal(flagstickWood.file.sha256, '98029f83b7a0559e6eee1c37542ca5e85cb94f23a144d64c308c41502998fab7');
+  assert.deepEqual(flagstickWood.file.dimensions, { width: 1024, height: 1024 });
 });
 
 test('manifest validation fails closed for unknown keys and malformed hashes', () => {

@@ -169,10 +169,10 @@ class TRAANode extends TempNode {
 		 */
 		this._jitterIndex = 0;
 		/**
-		 * Camera jitter is valuable while a view is settling, but exposing a new
-		 * Halton projection sample on every frame of a moving broadcast camera makes
-		 * the entire image appear to breathe. SceneManager disables it during real
-		 * camera motion; velocity reprojection remains active in either mode.
+		 * Camera jitter supplies fractional pixel coverage in both static and moving
+		 * views. Camera translation alone cannot antialias the currently presented
+		 * frame, so SceneManager keeps this enabled through broadcast flight while
+		 * velocity reprojection rejects invalid history.
 		 */
 		this.cameraJitterEnabled = true;
 		this._jitterAppliedThisFrame = false;
@@ -353,7 +353,7 @@ class TRAANode extends TempNode {
 	 */
 	setViewOffset( width, height ) {
 
-		// Never let a stale temporal offset leak into an unjittered motion frame.
+		// Never let a stale temporal offset leak across frame boundaries.
 		// `clearViewOffset()` is idempotent and restores the exact authored lens.
 		this.camera.clearViewOffset();
 
@@ -403,8 +403,7 @@ class TRAANode extends TempNode {
 
 		this._velocityNode.setProjectionMatrix( null );
 
-		// An unjittered motion frame must not consume a Halton sample. When the
-		// camera settles, accumulation resumes at the next deterministic phase.
+		// Only a frame that actually used a projection sample advances the sequence.
 		if ( this._jitterAppliedThisFrame ) {
 
 			this._jitterIndex ++;

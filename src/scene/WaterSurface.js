@@ -640,11 +640,11 @@ export class WaterSurface {
     // A very narrow, low-energy glint preserves the authored sun direction in
     // the basic-material path. It is a shared source term, not a fill or baked
     // highlight, and remains far below the body at ordinary view angles.
-    const sunAlignment = reflectedDirection.dot(this.environment.sunDirection.normalize())
+    const sunAlignment = reflectedDirection.dot(this.environment.keyDirection.normalize())
       .clamp(0, 1);
     const sunGlint = smoothstep(0.994, 0.9995, sunAlignment)
-      .mul(this.environment.sunColor)
-      .mul(this.environment.sunIlluminanceScale.max(0).pow(0.35))
+      .mul(this.environment.keyColor)
+      .mul(this.environment.keyIlluminanceScale.max(0).pow(0.35))
       .mul(0.035);
     const crestBreakup = detail.crest;
     // The detail atlas is permitted to break up normals and transient/contact

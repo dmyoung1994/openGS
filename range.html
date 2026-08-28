@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>Range — Rangeform</title>
+    <style>html,body{margin:0;height:100%;overflow:hidden;background:#0a0e12}*{box-sizing:border-box}#app{position:fixed;inset:0}canvas{display:block;width:100%;height:100%}#loading{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;color:#eef5ed;background:#0a0e12;font:500 14px system-ui;transition:opacity .5s}#loading.hidden{opacity:0;pointer-events:none}.brand{font-size:11px;letter-spacing:.2em;text-transform:uppercase;opacity:.7}.title{font-size:21px;margin-top:8px}.stage{margin-top:20px}.detail{margin-top:5px;opacity:.65;font-size:12px}progress{width:240px;margin-top:12px}</style>
+  </head>
+  <body><div id="app"></div><div id="loading"><div style="text-align:center"><div class="brand">Rangeform</div><div class="title">Preparing the range…</div><div id="loading-stage" class="stage">WebGPU initializing</div><div id="loading-detail" class="detail">Acquiring the strict WebGPU device…</div><progress id="loading-progress" max="1" value="0" hidden></progress></div></div><script type="module" src="/src/main.js"></script></body>
+</html>

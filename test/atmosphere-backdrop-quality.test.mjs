@@ -17,6 +17,7 @@ function environmentState(coverage = 0.35) {
       intensity: 85000,
       color: { r: 1, g: 0.96, b: 0.84 },
     },
+    moon: { azimuthRadians: 4.2, elevationRadians: -0.3, intensity: 0, color: { r: 0.78, g: 0.84, b: 1 }, illuminatedFraction: 0.7, angularRadiusRadians: 0.0045, phaseAngleRadians: 0.8 },
     atmosphere: {
       turbidity: 2.4,
       rayleigh: 1.5,

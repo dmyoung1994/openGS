@@ -1,8 +1,9 @@
 import {
   Group, Mesh, CylinderGeometry, BufferGeometry, BufferAttribute,
-  MeshStandardMaterial, InstancedMesh,
+  MeshStandardMaterial, MeshPhysicalMaterial, InstancedMesh,
   Object3D, Vector3, DoubleSide, CanvasTexture,
   TextureLoader, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter,
+  RepeatWrapping, ClampToEdgeWrapping,
 } from 'three';
 import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
@@ -26,6 +27,12 @@ import {
   bunkerGradeAt, roundedHazardFeature, signedDistanceToFeature,
 } from '../course/featureGeometry.js';
 import { compileBiomeTransitionField } from '../course/BiomeRegistry.js';
+import { semanticLandformHeight } from '../course/SemanticLandforms.js';
+import { ProceduralTreeForest, proceduralTreeCanopyRadius } from './ProceduralTrees.js';
+import { createCreatorCanvasFrame } from './CreatorCanvasFrame.js';
+import { createCreatorFringeGrass } from './CreatorFringeGrass.js';
+import { createCreatorCanvasOutline } from '../course/CreatorCanvas.js';
+import { createCreatorCup, GOLF_HOLE_RADIUS_M } from './CreatorCup.js';
 
 const _tex = new TextureLoader();
 
@@ -38,7 +45,7 @@ export class Range {
   // terrain from these (heightFn/surfaceFn below); nothing here edits raw heights.
   // That is what lets the whole course be (re)built from a prompt-driven course.json
   // with no terrain-editing surface exposed to the user.
-  constructor(scene, camera, course, { renderer, motionHistory, lighting, environmentTier, environment, environmentCatalog } = {}) {
+  constructor(scene, camera, course, { renderer, motionHistory, lighting, environmentTier, environment, environmentCatalog, creatorCanvas = false } = {}) {
     if (!environmentTier?.grassRadius || !environmentTier?.trees) {
       throw new Error('Range requires the resolved environment device tier.');
     }
@@ -54,6 +61,8 @@ export class Range {
     if (!environmentCatalog?.byId) throw new Error('Range requires the verified environment catalog.');
     this.environment = environment;
     this.environmentCatalog = environmentCatalog;
+    this.creatorCanvas = creatorCanvas === true;
+    this.creatorCanvasOutline = this.creatorCanvas ? createCreatorCanvasOutline(course) : null;
     // Quality can be selected before asynchronous tree GLBs finish decoding.
     // Retain the requested policy so every species applies it atomically when its
     // exact authored prototype becomes available.
@@ -66,11 +75,14 @@ export class Range {
     // internal contour; bunkers carve depressions (pot = deep steep revetted pit);
     // ponds are dished water basins. See _height/_surface for how they bake.
     this.targets = course.greens;
+    this.landforms = course.landforms || [];
     // Target furniture is deliberately shared within a Range rebuild: one cloth
     // solver, one painted-number atlas/mesh, and merged poles/cups avoid allocating
     // a separate render asset per target.
     this._targetPropAssets = null;
+    this._targetPropsReady = null;
     this.flagCloth = null;
+    this.creatorPin = null;
     this.bunkers = course.bunkers.map((feature, index) => {
       const rounded = roundedHazardFeature(feature, { kind: 'bunker', index });
       const sandFeature = rounded.pot ? null : Object.freeze({
@@ -78,7 +90,7 @@ export class Range {
       });
       return Object.freeze({
         ...rounded,
-        ...bunkerDrainageAxis(this.noise, rounded, index),
+        ...bunkerDrainageAxis(this.noise, rounded, index, this.landforms),
         _sandFeature: sandFeature,
       });
     });
@@ -133,7 +145,7 @@ export class Range {
           x: p.x, z: p.z, r: p.r, ...(p.shape ? { shape: p.shape } : {}),
         })),
         corridor: this.corridor,                                     // halfWidth = c0 + (-z)*k, then rough band
-        tee: { x: this.tee.boxHalfX, z0: this.tee.z0, z1: this.tee.z1 },
+        tee: this.creatorCanvas ? null : { x: this.tee.boxHalfX, z0: this.tee.z0, z1: this.tee.z1 },
         fringeW: this.fringeW,
       },
       motionHistory,
@@ -143,10 +155,40 @@ export class Range {
       analyticPatchContains: (x, z, padding = 0) => this.bunkers.some((bunker) => (
         bunker.pot && signedDistanceToFeature(bunker, x, z) > -padding
       )),
+      finiteCanvas: this.creatorCanvas,
+      finiteOutline: this.creatorCanvasOutline,
+      // The creator top mesh terminates at this regulation opening. The recessed
+      // liner added with the pin is therefore visible through real missing turf
+      // geometry, not through a dark decal or a cylinder hidden below a solid plane.
+      finiteCutout: this.creatorCanvas ? {
+        x: this.targets[0]?.x ?? 0,
+        z: this.targets[0]?.z ?? 0,
+        radius: GOLF_HOLE_RADIUS_M,
+      } : null,
+      variationSeed: this.environmentSeed,
     });
+    if (this.creatorCanvas) {
+      // Presentation exposure only: the same authored PBR maps and shared daylight
+      // remain authoritative, but the isolated maquette has no surrounding world to
+      // bounce light back into its turf or earthen edge.
+      this.terrain.uVal.value = 1.30;
+      this.terrain.uSat.value = 1.05;
+    }
     this.group.add(this.terrain.mesh);
+    this.creatorCanvasFrame = this.creatorCanvas ? createCreatorCanvasFrame({
+      outline: this.creatorCanvasOutline,
+      heightAt: (x, z) => this.terrain.heightAt(x, z),
+    }) : null;
+    if (this.creatorCanvasFrame) this.group.add(this.creatorCanvasFrame);
+    this.creatorFringeGrass = this.creatorCanvas ? createCreatorFringeGrass({
+      green: this.targets[0],
+      fringeWidth: this.fringeW,
+      heightAt: (x, z) => this.terrain.heightAt(x, z),
+      seed: this.environmentSeed,
+    }) : null;
+    if (this.creatorFringeGrass) this.group.add(this.creatorFringeGrass);
     this._buildPotBunkerPatches();
-    this.backdrop = new BackdropTerrain({
+    this.backdrop = this.creatorCanvas ? null : new BackdropTerrain({
       terrain: this.terrain,
       bounds: course.bounds,
       seed: this.environmentSeed,
@@ -157,30 +199,35 @@ export class Range {
       environment,
       renderer,
     });
-    this.group.add(this.backdrop.group);
+    if (this.backdrop) this.group.add(this.backdrop.group);
     this.terrain.waterHeightAt = (x, z) => this.waterHeightAt(x, z);
     this.environmentPlacements = resolveEnvironmentPlacements(course, environmentCatalog, this.terrain, this.biomeField);
     // Resolve one immutable tree record set for both the visible forest and the
     // grass bake. Canopy suppression therefore follows the exact authored roots
     // and scaled catalog crown bounds rather than a second procedural forest mask.
-    const allTreePlacements = this._treePlacements();
-    const treePlacements = allTreePlacements;
+    const catalogTreePlacements = this._treePlacements();
+    const syntheticTreePlacements = this._syntheticTreePlacements();
+    const canopyPlacements = [...catalogTreePlacements, ...syntheticTreePlacements];
 
     // Camera-relative grass (WebGPU / TSL). A world-cell-anchored field of ~1M
     // blades follows the camera every frame, sampling terrain height + surface
     // from GPU textures, with density/height LOD falling off with distance. So
     // wherever you look — tee, mid-fairway, a green after a shot — there's turf.
-    this.grass = new Grass({
+    this.grass = this.creatorCanvas ? null : new Grass({
       terrain: this.terrain, camera: this.camera, renderer, motionHistory, environment,
       radius: environmentTier.grassRadius,
-      canopyPlacements: treePlacements,
+      canopyPlacements,
     });
-    this.group.add(this.grass.mesh);
+    if (this.grass) this.group.add(this.grass.mesh);
 
-    this._buildTee();
-    this._buildTargets();
-    this._buildWater();
-    this.waterReflection = new PlanarWaterReflection({
+    if (this.creatorCanvas) {
+      this._buildCreatorPin();
+    } else {
+      this._buildTee();
+      this._buildTargets();
+      this._buildWater();
+    }
+    this.waterReflection = this.creatorCanvas ? null : new PlanarWaterReflection({
       renderer,
       scene,
       camera: this.camera,
@@ -189,9 +236,14 @@ export class Range {
       qualityContract: () => globalThis.window?.golf?.quality?.policySnapshot?.() ?? null,
       forceAnalyticOnHandheld: true,
     });
-    const treesReady = this._buildTreeLine(treePlacements);
-    const environmentPropsReady = this._buildEnvironmentProps();
-    const ballReady = this._buildBall();
+    const treesReady = this.creatorCanvas ? Promise.resolve() : this._buildTreeLine(catalogTreePlacements, syntheticTreePlacements);
+    const environmentPropsReady = this.creatorCanvas ? Promise.resolve() : this._buildEnvironmentProps();
+    const ballReady = this._buildBall().then((mesh) => {
+      // GolfBall intentionally reveals itself only after its required GLB and
+      // normal map resolve. Re-assert canvas visibility after that async reveal.
+      if (this.creatorCanvas) mesh.visible = false;
+      return mesh;
+    });
     // Replacing a course removes and recreates static shadow casters. Mark the
     // retained directional map dirty immediately; the async tree proxy marks it
     // again when its new GPU record set is ready.
@@ -200,10 +252,14 @@ export class Range {
     // Every visible asset is required. Bunker sand is part of the authoritative
     // terrain material rather than a second, independently tessellated surface.
     const waterReady = Promise.all((this._water || []).map((surface) => surface.assetsReady));
+    const backdropReady = this.creatorCanvas ? Promise.resolve() : this.backdrop.assetsReady;
+    const waterReflectionReady = this.creatorCanvas ? Promise.resolve() : this.waterReflection.assetsReady;
+    const creatorFrameReady = this.creatorCanvasFrame?.userData?.assetsReady || Promise.resolve();
+    const targetPropsReady = this._targetPropsReady || Promise.resolve();
     this.assetsReady = Promise.all([
-      this.terrain.assetsReady, this.backdrop.assetsReady,
+      this.terrain.assetsReady, backdropReady,
       treesReady, environmentPropsReady, ballReady, waterReady,
-      this.waterReflection.assetsReady,
+      waterReflectionReady, creatorFrameReady, targetPropsReady,
     ]);
   }
 
@@ -224,11 +280,13 @@ export class Range {
   }
 
   _baseHeight(x, z) {
+    if (this.creatorCanvas) return semanticLandformHeight(this.landforms, x, z);
     // Collision-authoritative course form. One lateral drainage swale, offset
     // maintained-ground benches, and elongated low rolls create readable terrain
     // shadows from golfer height. Every primitive is metre-scaled and aperiodic;
     // the low-amplitude fBm breaks their shoulders without becoming random moguls.
     let h = courseLandformHeight(this.noise, x, z);
+    h += semanticLandformHeight(this.landforms, x, z);
 
     // Greens inherit the continuous course landform. Their authored irregular SDF
     // still owns gameplay, cut height, pigment, roughness, and fringe. There is no
@@ -269,6 +327,11 @@ export class Range {
   }
 
   _surface(x, z) {
+    if (this.creatorCanvas) {
+      const green = this.targets[0];
+      if (!green) return 'fringe';
+      return signedDistanceToFeature(green, x, z) > 0 ? 'green' : 'fringe';
+    }
     // Closely mown natural teeing ground.
     if (Math.abs(x - this.tee.x) < this.tee.boxHalfX && z < this.tee.z1 && z > this.tee.z0) return 'tee';
 
@@ -360,16 +423,86 @@ export class Range {
 
   _targetProps() {
     if (this._targetPropAssets) return this._targetPropAssets;
+    let resolveWood, rejectWood;
+    const woodReady = new Promise((resolve, reject) => {
+      resolveWood = resolve;
+      rejectWood = reject;
+    });
+    const wood = _tex.load(
+      '/assets/materials/flagstick/premium_walnut_albedo_1k.png',
+      () => resolveWood(),
+      undefined,
+      (error) => {
+        console.error('[flagstick] required premium walnut texture failed to load');
+        rejectWood(error || new Error('Failed to load premium walnut flagstick texture'));
+      },
+    );
+    wood.name = 'flagstick:generated-premium-walnut-albedo';
+    wood.colorSpace = SRGBColorSpace;
+    wood.wrapS = RepeatWrapping;
+    wood.wrapT = ClampToEdgeWrapping;
+    wood.minFilter = LinearMipmapLinearFilter;
+    wood.magFilter = LinearFilter;
+    wood.generateMipmaps = true;
+    wood.anisotropy = 8;
+
     this._targetPropAssets = {
-      // The 2.48 m stick extends 8 cm below grade into a regulation-scale cup.
-      poleGeometry: new CylinderGeometry(0.026, 0.034, 2.48, 10),
-      poleMaterial: new MeshStandardMaterial({ color: 0x929a88, roughness: 0.68, metalness: 0.02 }),
+      // A slender 12--15 mm hardwood taper replaces the former 52--68 mm prop.
+      // The 2.48 m stick still extends 8 cm below grade into the cup, while sixteen
+      // radial faces keep the clear-coated silhouette round in the close creator view.
+      poleGeometry: new CylinderGeometry(0.006, 0.0075, 2.48, 16),
+      poleMaterial: new MeshPhysicalMaterial({
+        map: wood,
+        color: 0xffffff,
+        roughness: 0.42,
+        metalness: 0,
+        clearcoat: 0.62,
+        clearcoatRoughness: 0.24,
+      }),
       cupGeometry: new CylinderGeometry(0.075, 0.075, 0.035, 20),
       cupMaterial: new MeshStandardMaterial({ color: 0x20251f, roughness: 0.96, metalness: 0 }),
       markerGeometry: new CylinderGeometry(0.11, 0.105, 0.025, 24),
       markerMaterial: new MeshStandardMaterial({ color: 0xb8bcae, roughness: 0.82, metalness: 0 }),
+      assetsReady: woodReady,
     };
+    this._targetPropAssets.poleGeometry.name = 'premium-hardwood-flagstick-12-15mm';
+    this._targetPropAssets.poleMaterial.name = 'premium-clear-coated-walnut-flagstick';
+    this._targetPropsReady = woodReady;
     return this._targetPropAssets;
+  }
+
+  _buildCreatorPin() {
+    const assets = this._targetProps();
+    // The closer opening composition makes the production regulation dimensions
+    // readable without turning the pin into an oversized maquette prop.
+    const x = this.targets[0]?.x ?? 0;
+    const z = this.targets[0]?.z ?? 0;
+    const y = this.terrain.heightAt(x, z);
+    const pin = new Group();
+    pin.name = 'creator-center-pin';
+
+    const pole = new Mesh(assets.poleGeometry, assets.poleMaterial);
+    pole.name = 'creator-center-pin-pole';
+    pole.position.set(x, y + 1.16, z);
+    pole.castShadow = true;
+    pole.receiveShadow = true;
+    pin.add(pole);
+
+    const cup = createCreatorCup({ x, z, surfaceY: y });
+    pin.add(cup);
+
+    this.flagCloth = new FlagClothSystem({
+      anchors: [{ x, y: y + 2.34, z }],
+      environment: this.environment,
+      colors: [0xf24a3d],
+    });
+    this.flagCloth.mesh.name = 'creator-center-pin-cloth';
+    pin.add(this.flagCloth.mesh);
+    pin.userData.creatorPin = true;
+    pin.userData.windSource = 'environment-frame-state';
+    pin.userData.position = Object.freeze({ x, y, z });
+    this.creatorPin = pin;
+    this.group.add(pin);
   }
 
   _buildTargets() {
@@ -510,12 +643,20 @@ export class Range {
     });
   }
 
+  _syntheticTreePlacements() {
+    return (this.course.environment.syntheticTrees || []).map((placement) => Object.freeze({
+      ...placement,
+      rotY: placement.rotationY,
+      canopyRadius: proceduralTreeCanopyRadius(placement),
+    }));
+  }
+
   // Load a verified authored LOD0+LOD1 pair wherever the catalog provides one.
   // A catalog asset that currently owns only exact authored LOD0 remains on that
   // source mesh; it is never replaced by an impostor, billboard, procedural tree,
   // or another species.
-  async _buildTreeLine(placements = this._treePlacements()) {
-    if (!placements.length) return;
+  async _buildTreeLine(placements = this._treePlacements(), syntheticPlacements = this._syntheticTreePlacements()) {
+    if (!placements.length && !syntheticPlacements.length) return;
     const byAsset = new Map();
     for (const placement of placements) {
       if (!byAsset.has(placement.assetId)) byAsset.set(placement.assetId, []);
@@ -572,6 +713,18 @@ export class Range {
       this.treeBeauties.push(beauty);
       this.treeShadows.push(shadow);
     });
+    if (syntheticPlacements.length) {
+      const forest = new ProceduralTreeForest({
+        placements: syntheticPlacements,
+        camera: this.camera,
+        terrain: this.terrain,
+        seed: this.environmentSeed,
+      });
+      forest.setWorkloadPolicy(this.treeWorkloadPolicy);
+      this.trees.add(forest.group, forest.shadow.mesh);
+      this.treeBeauties.push(forest);
+      this.treeShadows.push(forest.shadow);
+    }
     this._treeBeautyCollection = null;
     this.group.add(this.trees);
   }
@@ -708,6 +861,7 @@ export class Range {
     // releasing the traversed meshes/materials so a retained diagnostic reference
     // cannot keep yardage textures or shared geometry alive.
     this._targetPropAssets = null;
+    this._targetPropsReady = null;
     // Terrain/grass node graphs contain texture and storage bindings that are not
     // enumerable material fields. Their explicit ownership releases each shared GPU
     // resource exactly once after the scene materials have been detached.
@@ -731,6 +885,11 @@ export class Range {
     this.trees = null;
     this.environmentProps = null;
     this.backdrop = null;
+    this.creatorCanvasFrame = null;
+    this.creatorFringeGrass = null;
+    this.creatorCanvasOutline = null;
+    this.creatorPin = null;
+    this.flagCloth = null;
     this.waterReflection = null;
     this._water = null;
   }
@@ -822,12 +981,11 @@ function inFeatureBounds(bounds, x, z, margin = 0) {
 // Resolve the actual local fall line from the same collision-authoritative course
 // form the bunker is cut into. The axis is cached on the compiled feature, so every
 // height sample receives one stable direction without repeating gradient probes.
-function bunkerDrainageAxis(noise, bunker, index) {
+function bunkerDrainageAxis(noise, bunker, index, landforms = []) {
   const step = 0.6;
-  const gx = (courseLandformHeight(noise, bunker.x + step, bunker.z)
-    - courseLandformHeight(noise, bunker.x - step, bunker.z)) / (step * 2);
-  const gz = (courseLandformHeight(noise, bunker.x, bunker.z + step)
-    - courseLandformHeight(noise, bunker.x, bunker.z - step)) / (step * 2);
+  const base = (x, z) => courseLandformHeight(noise, x, z) + semanticLandformHeight(landforms, x, z);
+  const gx = (base(bunker.x + step, bunker.z) - base(bunker.x - step, bunker.z)) / (step * 2);
+  const gz = (base(bunker.x, bunker.z + step) - base(bunker.x, bunker.z - step)) / (step * 2);
   const length = Math.hypot(gx, gz);
   if (length > 1e-5) return { _drainageX: -gx / length, _drainageZ: -gz / length };
   const fallback = (index + 1) * 2.399963229728653;

@@ -15,6 +15,8 @@ const DEFAULT_SUN_ANGLE_THRESHOLD_RADIANS = 0.0025;
 const DEFAULT_MIN_UPDATE_INTERVAL_MS = 100;
 const DEFAULT_MAX_SUN_UPDATE_INTERVAL_MS = 500;
 const DEFAULT_INVALIDATION_COALESCE_MS = 100;
+const DEFAULT_COURSE_COVERAGE_PADDING_METERS = 18;
+const DEFAULT_COURSE_COVERAGE_HEIGHT_METERS = 45;
 const EPSILON = 1e-8;
 
 const _worldUp = new Vector3(0, 1, 0);
@@ -198,6 +200,7 @@ export class Lighting {
     this._suppressedShadowUpdates = 0;
     this._pendingShadowReasons = new Set(['initial']);
     this._shadowRequestPending = true;
+    this._courseShadowCoverage = null;
     this._shadowUpdateListeners = new Set();
     this._shadowRenderListeners = new Set();
     this._offset = this._sunDirection.clone().multiplyScalar(this.shadowQuality.lightDistance);
@@ -281,16 +284,29 @@ export class Lighting {
       : null;
     return {
       mapSize: { width: this.sun.shadow.mapSize.x, height: this.sun.shadow.mapSize.y },
-      frustum: { ...this.shadowQuality.frustum },
+      frustum: {
+        left: this.sun.shadow.camera.left,
+        right: this.sun.shadow.camera.right,
+        top: this.sun.shadow.camera.top,
+        bottom: this.sun.shadow.camera.bottom,
+        near: this.sun.shadow.camera.near,
+        far: this.sun.shadow.camera.far,
+      },
       texelSizeMeters: {
-        x: this.shadowQuality.texelWidth,
-        y: this.shadowQuality.texelHeight,
+        x: (this.sun.shadow.camera.right - this.sun.shadow.camera.left) / this.sun.shadow.mapSize.x,
+        y: (this.sun.shadow.camera.top - this.sun.shadow.camera.bottom) / this.sun.shadow.mapSize.y,
       },
       focus: { x: this._focus.x, y: this._focus.y, z: this._focus.z },
       shadowFocus: { x: this._shadowFocus.x, y: this._shadowFocus.y, z: this._shadowFocus.z },
       focusDistanceMeters: focusDistance,
       focusThresholdMeters: this.shadowQuality.focusThresholdMeters,
       focusSnap: this.shadowQuality.focusSnap,
+      courseCoverage: this._courseShadowCoverage ? {
+        bounds: { ...this._courseShadowCoverage.bounds },
+        anchor: { ...this._courseShadowCoverage.anchor },
+        paddingMeters: this._courseShadowCoverage.paddingMeters,
+        casterHeightMeters: this._courseShadowCoverage.casterHeightMeters,
+      } : null,
       sunDirection: this._sunDirection.toArray(),
       shadowSunDirection: this._shadowSunDirection.toArray(),
       sunAngleSinceShadowRadians: angle,
@@ -409,8 +425,10 @@ export class Lighting {
     if (this._sunDirection.lengthSq() <= EPSILON) return this._snappedFocus.set(x, 0, z);
 
     this._updateLightBasis();
-    const texelX = this.shadowQuality.texelWidth;
-    const texelY = this.shadowQuality.texelHeight;
+    const texelX = (this.sun.shadow.camera.right - this.sun.shadow.camera.left)
+      / this.sun.shadow.mapSize.x;
+    const texelY = (this.sun.shadow.camera.top - this.sun.shadow.camera.bottom)
+      / this.sun.shadow.mapSize.y;
     const lightX = x * this._lightRight.x + z * this._lightRight.z;
     const lightY = x * this._lightUp.x + z * this._lightUp.z;
     const snappedX = Math.round(lightX / texelX) * texelX;
@@ -436,27 +454,103 @@ export class Lighting {
     this._setLightTransform(this._shadowFocus);
   }
 
+  _applyCourseShadowFrustum() {
+    const coverage = this._courseShadowCoverage;
+    if (!coverage) return;
+    this._updateLightBasis();
+    const { bounds, anchor, paddingMeters, casterHeightMeters } = coverage;
+    let projectedX = 0;
+    let projectedY = 0;
+    for (const x of [bounds.minX, bounds.maxX]) {
+      for (const z of [bounds.minZ, bounds.maxZ]) {
+        const dx = x - anchor.x;
+        const dz = z - anchor.z;
+        projectedX = Math.max(projectedX, Math.abs(dx * this._lightRight.x + dz * this._lightRight.z));
+        projectedY = Math.max(projectedY, Math.abs(dx * this._lightUp.x + dz * this._lightUp.z));
+      }
+    }
+    // Trees and flight furniture rise above the ground-plane bounds. Their
+    // vertical projection belongs in the light-space Y budget; the horizontal
+    // padding also protects authored edge vegetation and penumbrae.
+    projectedX += paddingMeters;
+    projectedY += paddingMeters + Math.abs(this._lightUp.y) * casterHeightMeters;
+    const baseX = Math.max(Math.abs(this.shadowQuality.frustum.left), Math.abs(this.shadowQuality.frustum.right));
+    const baseY = Math.max(Math.abs(this.shadowQuality.frustum.top), Math.abs(this.shadowQuality.frustum.bottom));
+    const extentX = Math.max(baseX, projectedX);
+    const extentY = Math.max(baseY, projectedY);
+    const camera = this.sun.shadow.camera;
+    camera.left = -extentX;
+    camera.right = extentX;
+    camera.top = extentY;
+    camera.bottom = -extentY;
+    camera.updateProjectionMatrix();
+  }
+
+  // Pin the retained directional map to the authored course rather than moving
+  // its projection in visible steps behind a flying ball. The complete bounds
+  // are projected into the current light basis so one cached map covers the tee,
+  // landing areas, tree line, and cinematic camera path.
+  setCourseShadowCoverage(bounds, {
+    paddingMeters = DEFAULT_COURSE_COVERAGE_PADDING_METERS,
+    casterHeightMeters = DEFAULT_COURSE_COVERAGE_HEIGHT_METERS,
+    now,
+  } = {}) {
+    if (!bounds || !['minX', 'maxX', 'minZ', 'maxZ'].every((key) => Number.isFinite(bounds[key]))
+      || bounds.minX >= bounds.maxX || bounds.minZ >= bounds.maxZ) {
+      throw new TypeError('Lighting.setCourseShadowCoverage requires finite positive-area X/Z bounds.');
+    }
+    if (!Number.isFinite(paddingMeters) || paddingMeters < 0
+      || !Number.isFinite(casterHeightMeters) || casterHeightMeters < 0) {
+      throw new RangeError('Course shadow padding and caster height must be finite non-negative values.');
+    }
+    const timestamp = nowMs(now);
+    const anchor = {
+      x: (bounds.minX + bounds.maxX) * 0.5,
+      z: (bounds.minZ + bounds.maxZ) * 0.5,
+    };
+    this._courseShadowCoverage = Object.freeze({
+      bounds: Object.freeze({
+        minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minZ, maxZ: bounds.maxZ,
+      }),
+      anchor: Object.freeze(anchor),
+      paddingMeters,
+      casterHeightMeters,
+    });
+    this._applyCourseShadowFrustum();
+    this._recenterShadowFocus(anchor.x, anchor.z);
+    this._requestShadowUpdate('course-coverage', timestamp, true);
+    return this.readDiagnostics();
+  }
+
   configureEnvironment(environment) {
     if (!environment?.sunDirection?.value || !environment?.sunColor?.value
-      || !environment?.sunIlluminanceScale || !environment?.horizonColor?.value) {
-      throw new TypeError('Lighting requires shared daylight EnvironmentGpuBindings.');
+      || !environment?.sunIlluminanceScale || !environment?.moonDirection?.value
+      || !environment?.moonIlluminanceScale || !environment?.moonColor?.value
+      || !environment?.horizonColor?.value) {
+      throw new TypeError('Lighting requires shared celestial EnvironmentGpuBindings.');
     }
     this._environmentUnsubscribe?.();
     const apply = () => {
       if (this._daylightRevision === environment.daylightRevision) return;
       const firstEnvironmentApply = this._daylightRevision < 0;
       this._daylightRevision = environment.daylightRevision;
-      this.sun.color.setRGB(
-        environment.sunColor.value.x,
-        environment.sunColor.value.y,
-        environment.sunColor.value.z,
-      );
+      const solarStrength = Math.max(0, environment.sunIlluminanceScale.value);
+      // Moon illuminance is normalized to a clear full moon in the bindings.
+      // Renderer calibration and bounded eye adaptation keep it subordinate to
+      // daylight while still producing readable form and shadows at night.
+      const lunarStrength = Math.max(0, environment.moonIlluminanceScale.value) * 0.18;
+      const moonOwnsKey = lunarStrength > solarStrength;
+      const keyColor = moonOwnsKey ? environment.moonColor.value : environment.sunColor.value;
+      const keyDirection = moonOwnsKey ? environment.moonDirection.value : environment.sunDirection.value;
+      const keyStrength = moonOwnsKey ? lunarStrength : solarStrength;
+      this._activeCelestialSource = moonOwnsKey ? 'moon' : 'sun';
+      this.sun.color.setRGB(keyColor.x, keyColor.y, keyColor.z);
       // Keep the key decisively ahead of sky bounce so terrain relief and real
       // caster shadows survive the tone-map shoulder. The authored illuminance
       // still scales the complete rig; this is only the renderer-relative
       // conversion.
       this.sun.intensity = KEY_INTENSITY_AT_REFERENCE
-        * Math.max(0, environment.sunIlluminanceScale.value);
+        * keyStrength;
       const horizon = environment.horizonColor.value;
       const zenith = environment.zenithColor.value;
       this.hemi.color.setRGB(
@@ -476,11 +570,11 @@ export class Lighting {
       // north-facing rock face or trunk retains chromatic detail instead of
       // collapsing to charcoal.
       this.hemi.intensity = HEMISPHERE_INTENSITY_AT_REFERENCE
-        * Math.sqrt(Math.max(0, environment.sunIlluminanceScale.value));
+        * Math.max(Math.sqrt(solarStrength), Math.sqrt(lunarStrength) * 0.62);
 
-      this.setSunDirection(environment.sunDirection.value, {
+      this.setSunDirection(keyDirection, {
         force: firstEnvironmentApply,
-        reason: 'environment-sun',
+        reason: `environment-${this._activeCelestialSource}`,
       });
     };
     apply();
@@ -521,7 +615,9 @@ export class Lighting {
         // Re-centre only when the shadow map can actually be paired with the new
         // transform. If a stagger interval suppresses this request, retain the
         // old map's focus and avoid sampling it through a new projection.
-        this._recenterShadowFocus(this._focus.x, this._focus.z);
+        if (this._courseShadowCoverage) this._applyCourseShadowFrustum();
+        const anchor = this._courseShadowCoverage?.anchor ?? this._focus;
+        this._recenterShadowFocus(anchor.x, anchor.z);
         requested = this._requestShadowUpdate(reason, timestamp, force || thresholdReached);
       } else {
         this._pendingShadowReasons.add(reason);
@@ -561,13 +657,20 @@ export class Lighting {
     const timestamp = nowMs(followOptions.now);
     this._syncShadowRenderState(timestamp);
     this._nextFocus.set(desiredX, 0, desiredZ);
+    this._focus.copy(this._nextFocus);
+    if (this._courseShadowCoverage) {
+      // The complete playable footprint is already resident. Moving this camera
+      // would reproject every cached tree/terrain shadow and was the source of the
+      // conspicuous flight-time popping this coverage mode is designed to avoid.
+      this._lastFollowAt = timestamp;
+      return false;
+    }
     const moved = !this._shadowFocusValid
       // Compare with the last shadow anchor, not merely the previous ball
       // sample. A ball can move less than the hysteresis distance every frame
       // while still traversing many shadow texels over a flight.
       || this._shadowFocus.distanceToSquared(this._nextFocus)
         > this.shadowQuality.focusThresholdMeters ** 2;
-    this._focus.copy(this._nextFocus);
     if (moved) {
       // Focus movement already has a world-space hysteresis gate. Once that
       // gate trips, update immediately so the ball never outruns its cached

@@ -84,6 +84,16 @@
       { "x": 70, "z": -126 }
     ] }
   ],
+  "landforms": [],
+  "atmosphere": {
+    "climate": "temperate-maritime",
+    "season": "summer",
+    "localTime": "15:30",
+    "weather": "partly-cloudy",
+    "cloudCoverage": 0.25,
+    "windSpeedMph": 8,
+    "windDirectionDegrees": 250
+  },
   "environment": {
     "objectBudget": 700,
     "placements": [

@@ -1,17 +1,18 @@
 ---
 name: golf-environment-vibe
-description: Dress playable golf holes with cohesive, strategic vegetation, rocks, groundcover, and deadwood selected from the licensed external-model catalog. Use when a user asks for a hole vibe, environmental character, foliage plan, landscaping, naturalization, biome dressing, tournament polish, or placement of environment-kit assets around a golf course.
+description: Dress playable golf holes with cohesive, strategic catalog-backed vegetation, rocks, groundcover, and deadwood, or explicit deterministic synthetic tree records. Use for hole vibe, foliage plans, landscaping, naturalization, biome dressing, and tournament polish.
 ---
 
 # Golf Environment Vibe
 
 > **Engine mapping:** claude-golfsim supports catalog-backed environment records in
-> `course.json` under `environment.placements`, `scatter`, `assembly`, and
-> `edgeDressing`. Read `golf-course-authoring/references/engine.md` first and map the
+> `course.project.json` under `site.environment`; the active hole compiles to
+> `course.json`. Read `golf-course-authoring/references/engine.md` first and map the
 > design guidance below onto those records rather than the legacy command names.
 
-Place real catalog models as a golf architect and landscape ecologist. Never
-create geometric substitutes.
+Place authored catalog models or explicitly requested deterministic synthetic
+trees as a golf architect and landscape ecologist. A synthetic record is a
+first-class source, never a fallback for a missing catalog GLB.
 
 ## Workflow
 
@@ -20,7 +21,7 @@ create geometric substitutes.
 3. Read `references/composite-assemblies.md` before building an outcrop, tree community, dense edge, or other multi-piece landmark.
 4. Read the current engine mapping in
    `../golf-course-authoring/references/engine.md` before editing the course.
-5. Inspect `public/assets/environment/catalog.json`. Use only cataloged IDs and
+5. For catalog objects, inspect `public/assets/environment/catalog.json`. Use only cataloged IDs and
    respect each entry's biome, dimensions, slope, spacing, grounding, and provenance.
    When `biomeTransitions` exist, inspect `classify_biome`/compiled transition
    weights and habitat metadata; retire vegetation on sand/water weights and use
@@ -30,7 +31,7 @@ create geometric substitutes.
    when the request is silent.
 7. Reserve gameplay zones first: tees, green, fairway landing ellipses,
    recovery routes, hazard sightlines, galleries, and camera corridors.
-8. Choose 5–9 compatible IDs with distinct jobs: canopy anchors, middle-story
+8. Choose 5–9 compatible catalog IDs or synthetic archetypes with distinct jobs: canopy anchors, middle-story
    masses, low drifts, and optional rock/deadwood punctuation. Use several age
    scales and rotations without exceeding catalog ranges.
 9. Use `environment.assembly` for signature communities and rock outcrops.
@@ -48,9 +49,11 @@ create geometric substitutes.
 
 ## Hard constraints
 
-- Require `catalogId` on every environment `place` command.
-- Never emit a raw primitive `kind`, image card, generated mesh, or procedural
-  fallback.
+- Require `assetId` on every catalog placement. A synthetic tree instead requires
+  a stable ID, registered `archetype`, seed, age, health, wind exposure, transform,
+  and scale; never mix the two source contracts.
+- Never emit a raw primitive, billboard, atlas, placeholder, or procedural fallback
+  for an authored catalog asset. Catalog load failures must remain terminal.
 - Keep large trees off greens, tees, bunker floors, water, primary landing
   areas, and the first 12 m of the tee sightline.
 - Use rocks as geologic systems following contours; do not salt-and-pepper
@@ -67,6 +70,6 @@ create geometric substitutes.
 
 ## Output
 
-When operating through the course agent, return one undoable response with a
-short palette rationale and no more than 80 commands. When editing course data
-directly, use the same catalog, seeding, zoning, and validation rules.
+When operating through the course agent, return a short palette rationale and no
+more than 80 proposal cards. Every tree has a stable object ID even when the UI
+groups the cards. Applying selected cards creates per-object history events.

@@ -1,19 +1,19 @@
 import {
-  ClampToEdgeWrapping, EquirectangularReflectionMapping, LinearFilter, Vector2,
+  ClampToEdgeWrapping, LinearFilter, Vector2,
 } from 'three';
-import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { Storage3DTexture } from 'three/webgpu';
 import {
   Break, cameraPosition, exp, float, fract, Fn, globalId, If, Loop,
-  max, min, mix, mx_noise_float, mx_worley_noise_float, oneMinus, equirectUV,
+  max, min, mix, mx_noise_float, mx_worley_noise_float, oneMinus,
   positionWorldDirection, screenCoordinate, smoothstep,
-  texture as textureNode, texture3D, textureStore, uniform, vec2, vec3, vec4,
+  texture3D, textureStore, uniform, vec2, vec3, vec4,
 } from 'three/tsl';
 import { EnvironmentGpuBindings } from '../environment/EnvironmentGpuBindings.js';
 
 // Analytic daylight plus a bounded, GPU-generated volumetric cloud layer. Cloud shape,
 // detail, transport, and lighting are integrated in one global camera-ray graph. The
-// optional HDR is only a clear-sky/IBL source; it never supplies cloud data.
+// Visible sky and IBL are fully analytic so every consumer follows the same
+// astronomical sun/moon state instead of inheriting a fixed captured daytime.
 
 const MIN_RAY_STEPS = 4;
 const MAX_RAY_STEPS = 32;
@@ -161,7 +161,7 @@ export const WEATHER_SKY_WORKLOADS = Object.freeze({
 /** Strict WebGPU/TSL sky source. Cloud weather is integrated through a global
  * camera-ray slab in a bounded sky target; the 96^3 field is generated on-GPU. */
 export class WeatherSky {
-  constructor(renderer, environment, workload, skyManifest = null) {
+  constructor(renderer, environment, workload) {
     if (!renderer?.isWebGPURenderer || typeof renderer.compute !== 'function') {
       throw new TypeError('WeatherSky requires the strict WebGPU renderer.');
     }
@@ -171,7 +171,6 @@ export class WeatherSky {
     this.renderer = renderer;
     this.environment = environment;
     this.workload = normaliseWorkload(workload);
-    this.skyManifest = skyManifest;
     this.cloudsEnabled = cloudsAreEnabled(environment.clouds.value);
     this.usesVolumetricClouds = this.cloudsEnabled;
     this.currentJitter = uniform(new Vector2(0, 0));
@@ -205,7 +204,7 @@ export class WeatherSky {
       raySteps: this.cloudsEnabled ? this.workload.raySteps : 0,
       lightTransportSamples: this.cloudsEnabled ? this.workload.lightTransportSamples : 0,
       lightProbeSteps: this.cloudsEnabled ? this.workload.lightProbeSteps : 0,
-      lightTransportMode: this.cloudsEnabled ? 'paired-sun-offset-volume-probe' : 'none',
+      lightTransportMode: this.cloudsEnabled ? 'paired-celestial-offset-volume-probe' : 'none',
       noiseOctaves: this.cloudsEnabled ? this.workload.noiseOctaves : 0,
       jitterPeriod: this.cloudsEnabled ? this.workload.jitterPeriod : 0,
       cloudVolume: volumeDiagnostics,
@@ -219,11 +218,12 @@ export class WeatherSky {
         temporalResolve: this.cloudsEnabled ? 'fused-raymarch-history' : 'none',
       }),
     });
-    this.skyTexture = null;
-    this.skyTextureLoaded = false;
     this._disposed = false;
-    this.skyTextureReady = this._loadSkyTexture();
-    this.ready = this.skyTextureReady.then(() => this._cloudDiagnostics);
+    // The moon map is part of the production sky rather than an optional late
+    // decoration. Propagate its load failure through the existing environment-ready
+    // contract so captures cannot silently accept an untextured analytic disc.
+    this.ready = Promise.resolve(environment.moonTextureReady)
+      .then(() => this._cloudDiagnostics);
 
     // IBL intentionally excludes the measured solar disc; the authoritative
     // DirectionalLight owns direct sun/shadows and visible sky adds its analytic disc.
@@ -332,57 +332,13 @@ export class WeatherSky {
     this._cloudVolumeInitDispatched = true;
   }
 
-  _loadSkyTexture() {
-    if (!this.skyManifest) return Promise.resolve(null);
-    const loader = new HDRLoader();
-    let resolveReady;
-    let rejectReady;
-    const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
-    this.skyTexture = loader.load(this.skyManifest.url, (loadedTexture) => {
-      if (this._disposed || this.skyTexture !== loadedTexture) {
-        loadedTexture?.dispose();
-        resolveReady(null);
-        return;
-      }
-      this.skyTextureLoaded = true;
-      resolveReady(loadedTexture);
-    }, undefined, rejectReady);
-    this.skyTexture.mapping = EquirectangularReflectionMapping;
-    this.skyTexture.name = this.skyManifest.id;
-    this.skyTexture.userData.rotationRadians = this.skyManifest.rotationRadians;
-    return ready;
-  }
-
   _buildSkyRadianceNode({ includeSun = false } = {}) {
     return this.skyRadiance(positionWorldDirection.normalize(), { includeSun });
   }
 
   skyRadiance(direction, { includeSun = false } = {}) {
     if (!direction?.isNode) throw new TypeError('WeatherSky.skyRadiance requires a TSL direction node.');
-    const normalized = direction.normalize();
-    if (!this.skyManifest || !this.skyTexture) {
-      return this.environment.skyRadiance(normalized, { includeSun });
-    }
-    const angle = this.skyManifest.rotationRadians;
-    const c = Math.cos(angle);
-    const s = Math.sin(angle);
-    const rotated = vec3(
-      normalized.x.mul(c).add(normalized.z.mul(s)),
-      normalized.y,
-      normalized.z.mul(c).sub(normalized.x.mul(s)),
-    );
-    const hdr = textureNode(this.skyTexture, equirectUV(rotated));
-    const sourceSun = vec3(...this.skyManifest.sourceSunDirection);
-    const sourceAlignment = rotated.dot(sourceSun).clamp(-1, 1);
-    const directMask = smoothstep(
-      Math.cos(5 * Math.PI / 180), Math.cos(1 * Math.PI / 180), sourceAlignment,
-    );
-    const clearSky = this.environment.skyRadiance(normalized, { includeSun: false });
-    const skyWithoutMeasuredSun = mix(hdr, clearSky, directMask);
-    if (!includeSun) return skyWithoutMeasuredSun;
-    return skyWithoutMeasuredSun.add(
-      this.environment.skyRadiance(normalized, { includeSun: true }).sub(clearSky),
-    );
+    return this.environment.skyRadiance(direction.normalize(), { includeSun });
   }
 
   async readDiagnostics() {
@@ -528,6 +484,12 @@ export class WeatherSky {
     if (!this.cloudsEnabled) return vec4(0, 0, 0, 1);
 
     const sunDirection = this.environment.sunDirection.normalize();
+    const moonDirection = this.environment.moonDirection.normalize();
+    const solarStrength = this.environment.sunIlluminanceScale.max(0).pow(0.35);
+    const lunarStrength = this.environment.moonIlluminanceScale.max(0).pow(0.35)
+      .mul(oneMinus(smoothstep(-0.20, 0.02, this.environment.sunDirection.y)));
+    const keyDirection = solarStrength.greaterThan(lunarStrength)
+      .select(sunDirection, moonDirection);
     const clouds = this.environment.clouds;
     // The ray's clear-sky radiance must use this explicit world direction too;
     // positionWorldDirection would resolve against the fullscreen quad camera.
@@ -583,10 +545,19 @@ export class WeatherSky {
     const horizonMask = oneMinus(smoothstep(7000, 18000, rayEntry))
       .mul(smoothstep(0.03, 0.11, direction.y));
     const cosine = direction.dot(sunDirection).clamp(-1, 1);
-    const phase = max(henyeyGreenstein(cosine, 0.60), henyeyGreenstein(cosine, 0.93).mul(0.62))
+    const solarPhase = max(henyeyGreenstein(cosine, 0.60), henyeyGreenstein(cosine, 0.93).mul(0.62))
       .mul(4.4).clamp(0.30, 2.9);
+    const moonCosine = direction.dot(moonDirection).clamp(-1, 1);
+    const lunarPhase = max(
+      henyeyGreenstein(moonCosine, 0.55),
+      henyeyGreenstein(moonCosine, 0.88).mul(0.46),
+    ).mul(3.2).clamp(0.24, 2.2);
     const sunTint = this.environment.sunColor
-      .mul(this.environment.sunIlluminanceScale.max(0).pow(0.35));
+      .mul(solarStrength);
+    // Full-moon clouds retain cool edge definition, but lunar radiance is not a
+    // daylight substitute. The former coefficient clipped whole cloud bodies to
+    // white after night adaptation and erased their internal volume.
+    const moonTint = this.environment.moonColor.mul(lunarStrength).mul(0.075);
     const ambientTop = this.environment.skyRadiance(vec3(0, 1, 0), { includeSun: false });
     const ambientLuma = ambientTop.dot(vec3(0.2126, 0.7152, 0.0722));
     const cloudAmbient = mix(ambientTop, vec3(ambientLuma), 0.75);
@@ -649,7 +620,7 @@ export class WeatherSky {
             If(i.mod(2).equal(0), () => {
               const cloudTop = clouds.z.add(slab);
               const sunPath = cloudTop.sub(position.y)
-                .div(sunDirection.y.max(0.15)).clamp(240, 1400);
+                .div(keyDirection.y.max(0.15)).clamp(240, 1400);
               const sunProbeDistance = sunPath.mul(0.45).min(600);
               // Sample the same bounded physical sun path at a tier-specific
               // number of positions. High keeps the silver lining coherent on
@@ -660,7 +631,7 @@ export class WeatherSky {
                 const probeFraction = float(probeIndex).add(0.5)
                   .div(this.workload.lightProbeSteps);
                 const sunProbePosition = position.add(
-                  sunDirection.mul(sunProbeDistance.mul(probeFraction)),
+                  keyDirection.mul(sunProbeDistance.mul(probeFraction)),
                 );
                 const sunProbe = this._cloudVolumeSample(
                   sunProbePosition, time, wind, advectionTime,
@@ -685,7 +656,8 @@ export class WeatherSky {
               const ambient = cloudAmbient.mul(float(0.38).add(normalizedHeight.mul(0.38)))
                 .mul(ambientOcclusion);
               const edgeLight = oneMinus(density).mul(0.75).add(0.55);
-              const direct = sunTint.mul(pairedSunTransmittance).mul(phase)
+              const celestialDirect = sunTint.mul(solarPhase).add(moonTint.mul(lunarPhase));
+              const direct = celestialDirect.mul(pairedSunTransmittance)
                 .mul(float(0.54).add(crown.mul(0.46))).mul(edgeLight).mul(1.90);
               const radiance = ambient.add(direct).mul(float(0.86).add(viewDepth.mul(0.10)));
               const opticalDepth = density.mul(fineStep).mul(CLOUD_EXTINCTION);
@@ -751,8 +723,5 @@ export class WeatherSky {
     this._cloudVolumeInit = null;
     this._cloudVolume?.dispose();
     this._cloudVolume = null;
-    this.skyTexture?.dispose();
-    this.skyTexture = null;
-    this.skyTextureLoaded = false;
   }
 }
