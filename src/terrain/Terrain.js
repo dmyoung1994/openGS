@@ -30,7 +30,7 @@ import {
   sampleCoastSand,
 } from '../scene/CoastSandDetail.js';
 import {
-  bakeDenseCanopyMask, CANOPY_DISTANCE_MAX_METERS, canopyOwnsExclusiveSurface,
+  bakeDenseCanopyMask, CANOPY_DISTANCE_MAX_METERS, canopyOwnsExclusiveSurface, clearTrunkFootprints,
   createCanopyDistanceTexture, createCanopyTexture, GRASS_GROWABLE_BIT,
   sampleCanopyForestFloorWeight,
 } from './CanopyField.js';
@@ -710,6 +710,12 @@ export class Terrain {
     // Surface ownership is immutable for this Terrain. Do not repeat every
     // polygon/route query when only the tree-canopy field changes.
     for (let index = 0; index < this._canopyData.length; index++) this._canopyData[index] |= this._growableData[index];
+    // After ownership is restored, take the trunks back out again: a blade growing
+    // out of a root is worse than a bare patch under a tree, which is what the
+    // ground looks like there anyway.
+    clearTrunkFootprints(this._canopyData, this.nx, this.nz, {
+      minX: this.bounds.minX, minZ: this.bounds.minZ, spacing: this.spacing,
+    }, placements);
     this._canopyTexture.needsUpdate = true;
     this._canopyDistanceTexture.needsUpdate = true;
     return this._canopyTexture;

@@ -21,6 +21,21 @@ export function proceduralTreeCanopyRadius(record, definitions) {
   return estimateTreeCanopyRadius(definition) * record.scale;
 }
 
+// Ground footprint of the trunk flare and its surface roots, in world metres. Grass
+// is excluded inside this so blades do not sprout through solid wood; it is derived
+// from the same numbers that build the flare, so the two cannot drift.
+export function proceduralTreeFlareRadius(record, definitions) {
+  const definition = definitions instanceof Map ? definitions.get(record?.definitionId)
+    : definitions?.find?.((candidate) => candidate.id === record?.definitionId);
+  if (!definition) throw new Error(`Missing procedural tree definition: ${record?.definitionId ?? 'missing'}`);
+  const parameters = definition.parameters ?? {};
+  const trunkRadius = (parameters.gScale ?? 0) * (parameters.ratio ?? 0);
+  if (!(trunkRadius > 0)) return 0;
+  const flare = 1 + (parameters.flare ?? 0);
+  const roots = definition.plant ? definition.plant.structure.rootSpread : 0;
+  return trunkRadius * Math.max(flare, roots) * (record.scale ?? 1);
+}
+
 // A generated tree is an explicit authored source. It never participates in the
 // catalog resolver and therefore cannot mask a failed Poly Haven asset load.
 export class ProceduralTreeForest {

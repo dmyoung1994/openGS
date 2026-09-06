@@ -144,3 +144,49 @@ test('the root section spreads flat against the soil rather than standing on edg
     `the section must lie flat, got ${spread.across.toFixed(3)} across `
     + `by ${spread.above.toFixed(3)} up`);
 });
+
+// Grass has no knowledge of a trunk, so without an explicit footprint it sprouts
+// straight through the flare and its roots.
+test('the trunk footprint clears grass exactly where the flare stands', async () => {
+  const { clearTrunkFootprints, GRASS_GROWABLE_BIT } = await import('../src/terrain/CanopyField.js');
+  const nx = 41, nz = 41, spacing = 0.5, grid = { minX: -10, minZ: -10, spacing };
+  const data = new Uint8Array(nx * nz).fill(GRASS_GROWABLE_BIT);
+  clearTrunkFootprints(data, nx, nz, grid, [{ x: 0, z: 0, flareRadius: 1.5 }]);
+
+  const growable = (x, z) => {
+    const i = Math.round((x - grid.minX) / spacing), j = Math.round((z - grid.minZ) / spacing);
+    return (data[j * nx + i] & GRASS_GROWABLE_BIT) !== 0;
+  };
+  assert.equal(growable(0, 0), false, 'no grass at the trunk itself');
+  assert.equal(growable(1.0, 0), false, 'nor inside the flare');
+  assert.equal(growable(0, -1.0), false, 'in every direction');
+  assert.equal(growable(3, 0), true, 'but turf resumes outside the footprint');
+  assert.equal(growable(-6, 4), true, 'and is untouched far away');
+
+  // A placement without a flare radius (a catalog GLB, which bakes its own base)
+  // must not silently clear ground.
+  const untouched = new Uint8Array(nx * nz).fill(GRASS_GROWABLE_BIT);
+  clearTrunkFootprints(untouched, nx, nz, grid, [{ x: 0, z: 0 }, { x: 1, z: 1, flareRadius: 0 }]);
+  assert.ok(untouched.every((value) => value === GRASS_GROWABLE_BIT));
+  assert.throws(() => clearTrunkFootprints(new Uint8Array(4), nx, nz, grid, []), /one byte per/);
+});
+
+test('the cleared footprint is derived from the same numbers that build the flare', async () => {
+  const { proceduralTreeFlareRadius } = await import('../src/scene/ProceduralTrees.js');
+  const definition = createTreePreset('tall-pine', 2);
+  const trunkRadius = definition.parameters.gScale * definition.parameters.ratio;
+  const record = { definitionId: definition.id, scale: 1 };
+  const radius = proceduralTreeFlareRadius(record, [definition]);
+
+  // It has to cover whichever reaches further: the flared trunk or its roots.
+  const roots = trunkRadius * definition.plant.structure.rootSpread;
+  const flare = trunkRadius * (1 + definition.parameters.flare);
+  assert.ok(Math.abs(radius - Math.max(roots, flare)) < 1e-9,
+    `footprint must cover the wider of flare and roots, got ${radius}`);
+  assert.ok(radius > trunkRadius, 'and always exceed the bare trunk');
+
+  // Scale is a placement property, so the footprint has to follow it.
+  const doubled = proceduralTreeFlareRadius({ ...record, scale: 2 }, [definition]);
+  assert.ok(Math.abs(doubled - radius * 2) < 1e-9, 'footprint must scale with the placement');
+  assert.throws(() => proceduralTreeFlareRadius({ definitionId: 'nope' }, [definition]), /Missing/);
+});

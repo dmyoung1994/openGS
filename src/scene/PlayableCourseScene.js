@@ -30,7 +30,7 @@ import {
 } from '../course/featureGeometry.js';
 import { compileBiomeTransitionField } from '../course/BiomeRegistry.js';
 import { semanticLandformHeight } from '../course/SemanticLandforms.js';
-import { ProceduralTreeForest, proceduralTreeCanopyRadius } from './ProceduralTrees.js';
+import { ProceduralTreeForest, proceduralTreeCanopyRadius, proceduralTreeFlareRadius } from './ProceduralTrees.js';
 import { createCreatorCanvasFrame } from './CreatorCanvasFrame.js';
 import { createCreatorFringeGrass } from './CreatorFringeGrass.js';
 import { createCreatorCanvasOutline } from '../course/CreatorCanvas.js';
@@ -841,6 +841,7 @@ export class PlayableCourseScene {
       ...placement,
       rotY: placement.rotationY,
       canopyRadius: proceduralTreeCanopyRadius(placement, definitions),
+      flareRadius: proceduralTreeFlareRadius(placement, definitions),
     }));
   }
 

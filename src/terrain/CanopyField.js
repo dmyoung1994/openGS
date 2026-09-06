@@ -315,3 +315,30 @@ export function createCanopyDistanceTexture(data, nx, nz) {
   result.needsUpdate = true;
   return result;
 }
+
+// Grass has no knowledge of a trunk, so without this it sprouts straight through the
+// flare and its surface roots. Clearing the growable bit inside each trunk footprint
+// is the whole fix: it is quantized to the terrain grid, which is coarse for a crown
+// but the right order of magnitude for a base a metre or so across.
+export function clearTrunkFootprints(data, nx, nz, { minX, minZ, spacing }, placements = []) {
+  if (!(data instanceof Uint8Array) || data.length !== nx * nz) {
+    throw new Error('Trunk footprint clearing requires one byte per terrain texel.');
+  }
+  for (const placement of placements) {
+    const radius = Number(placement?.flareRadius);
+    if (!Number.isFinite(radius) || radius <= 0) continue;
+    if (!Number.isFinite(placement.x) || !Number.isFinite(placement.z)) continue;
+    const reach = Math.ceil(radius / spacing);
+    const cx = (placement.x - minX) / spacing, cz = (placement.z - minZ) / spacing;
+    const i0 = Math.max(0, Math.floor(cx) - reach), i1 = Math.min(nx - 1, Math.ceil(cx) + reach);
+    const j0 = Math.max(0, Math.floor(cz) - reach), j1 = Math.min(nz - 1, Math.ceil(cz) + reach);
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const dx = (i - cx) * spacing, dz = (j - cz) * spacing;
+        if (dx * dx + dz * dz > radius * radius) continue;
+        data[j * nx + i] &= ~GRASS_GROWABLE_BIT;
+      }
+    }
+  }
+  return data;
+}
