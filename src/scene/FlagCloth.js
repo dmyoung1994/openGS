@@ -1,7 +1,9 @@
 import {
   BufferAttribute, BufferGeometry, Color, DoubleSide, DynamicDrawUsage,
-  Mesh, MeshStandardMaterial,
+  Mesh,
 } from 'three';
+import { MeshStandardNodeMaterial } from 'three/webgpu';
+import { Fn, attribute, positionGeometry, positionPrevious } from 'three/tsl';
 
 export const FLAG_WIDTH = 0.62;
 export const FLAG_HEIGHT = 0.38;
@@ -61,11 +63,19 @@ export class FlagClothSystem {
     const position = new BufferAttribute(this.positions, 3);
     position.setUsage(DynamicDrawUsage);
     this.geometry.setAttribute('position', position);
+    // Verlet's previous[] is the previous 1/120s solver step, not the previous
+    // presented shape. TRAA needs the latter to reproject waving cloth correctly.
+    this.renderPrevious = new BufferAttribute(this.positions.slice(), 3).setUsage(DynamicDrawUsage);
+    this.geometry.setAttribute('clothPreviousPosition', this.renderPrevious);
     this.geometry.setAttribute('color', new BufferAttribute(vertexColors, 3));
     this.geometry.setIndex(indices);
     this.geometry.computeVertexNormals();
     this.geometry.name = 'merged-fixed-step-target-flag-cloth';
-    this.material = new MeshStandardMaterial({ vertexColors: true, side: DoubleSide, roughness: 0.88, metalness: 0 });
+    this.material = new MeshStandardNodeMaterial({ vertexColors: true, side: DoubleSide, roughness: 0.88, metalness: 0 });
+    this.material.positionNode = Fn(() => {
+      positionPrevious.assign(attribute('clothPreviousPosition', 'vec3'));
+      return positionGeometry;
+    })();
     this.material.name = 'target-flag-cloth-pbr';
     this.mesh = new Mesh(this.geometry, this.material);
     this.mesh.name = 'target-flag-cloth-merged';
@@ -78,6 +88,8 @@ export class FlagClothSystem {
   _constraint(a, b, rest) { this._constraints.push({ a, b, rest }); }
 
   update() {
+    this.renderPrevious.array.set(this.positions);
+    this.renderPrevious.needsUpdate = true;
     const now = this.environment.time.value;
     const elapsed = Math.max(0, Math.min(0.25, now - this._simulatedTime));
     this._simulatedTime = now;

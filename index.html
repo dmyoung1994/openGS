@@ -38,24 +38,6 @@
         <progress id="loading-progress" max="1" value="0" hidden aria-label="Environment loading progress"></progress>
       </div>
     </div>
-    <!-- Candidate-only local foliage descriptors. They are inert unless the
-         query-gated lab switch in main.js requests the exact alias. A host may
-         replace this registry before the module loads when reviewing a promoted
-         pack. -->
-    <script>
-      if (!globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__) {
-        globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__ = {
-          'local.southern-live-oak.augusta.v1': {
-            rootUrl: '/assets/trees_candidates/generated_southern_live_oak/processed/v1',
-            compatibilityVersion: 1,
-          },
-          'local.loblolly-pine.southeast.v1': {
-            rootUrl: '/assets/trees_candidates/generated_loblolly_pine/processed/v1',
-            compatibilityVersion: 1,
-          },
-        };
-      }
-    </script>
     <!-- Bare specifiers ("three", "three/webgpu", "three/tsl", "three/addons/*")
          are resolved by Vite from node_modules; the three->three/webgpu alias in
          vite.config.js gives every module the WebGPU superset build. -->

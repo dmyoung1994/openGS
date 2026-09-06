@@ -9,6 +9,7 @@ import {
   texture3D, textureStore, uniform, vec2, vec3, vec4,
 } from 'three/tsl';
 import { EnvironmentGpuBindings } from '../environment/EnvironmentGpuBindings.js';
+import { CLOUD_SHADOW_SIZE, CLOUD_SHADOW_SPAN_M } from './Lighting.js';
 
 // Analytic daylight plus a bounded, GPU-generated volumetric cloud layer. Cloud shape,
 // detail, transport, and lighting are integrated in one global camera-ray graph. The
@@ -368,6 +369,46 @@ export class WeatherSky {
     return this._cloudDensity(worldPosition, previous ? this.environment.previousTime : this.environment.time);
   }
 
+  updateCloudShadow(lighting) {
+    if (!lighting) return;
+    if (!this.cloudsEnabled || lighting._sunDirection.y <= 0.04) {
+      lighting.cloudShadowEnabled.value = 0;
+      return;
+    }
+    const revision = `${this.environment.time.value}:${this.environment.daylightRevision}`;
+    // Config is immutable: weather edits replace it even when the clock is paused.
+    const config = this.environment._frameState.config;
+    lighting.cloudShadowEnabled.value = 1;
+    if (revision === this._cloudShadowRevision && config === this._cloudShadowConfig) return;
+    if (!this._cloudShadowCompute) {
+      const steps = this.workload.lightProbeSteps;
+      this._cloudShadowCompute = Fn(() => {
+        // Invocation IDs are unsigned: normalize in float space or every texel
+        // samples the same origin after integer division by the map size.
+        const mapUv = vec2(globalId.xy).add(0.5).div(CLOUD_SHADOW_SIZE);
+        const originXZ = mapUv.sub(0.5).mul(CLOUD_SHADOW_SPAN_M);
+        const direction = lighting.cloudShadowDirection;
+        const cloud = this.environment.clouds;
+        const stepM = cloud.w.div(direction.y.max(0.04)).div(steps);
+        const opticalDepth = float(0).toVar();
+        Loop(steps, ({ i }) => {
+          const height = cloud.z.add(float(i).add(0.5).mul(cloud.w.div(steps)));
+          const distance = height.div(direction.y.max(0.04));
+          const sample = vec3(originXZ.x, 0, originXZ.y).add(direction.mul(distance));
+          opticalDepth.addAssign(this.cloudDensityAt(sample).mul(stepM).mul(CLOUD_EXTINCTION));
+        });
+        const transmission = exp(opticalDepth.negate());
+        textureStore(lighting.cloudShadowTexture, globalId.xy,
+          vec4(transmission, transmission, transmission, 1)).toWriteOnly();
+      })().compute([CLOUD_SHADOW_SIZE / 8, CLOUD_SHADOW_SIZE / 8, 1], [8, 8, 1]);
+      this._cloudShadowCompute.name = 'Cloud direct-light transmittance';
+    }
+    this.renderer.compute(this._cloudShadowCompute);
+    lighting.cloudShadowEnabled.value = 1;
+    this._cloudShadowRevision = revision;
+    this._cloudShadowConfig = config;
+  }
+
   // The shared wind field advects every volume tap. X/Z are broad enough for connected
   // kilometre-scale parcels; Y is deliberately different so vertical samples traverse
   // genuine 3-D detail instead of repeating one 2-D carrier through the slab.
@@ -620,8 +661,10 @@ export class WeatherSky {
             If(i.mod(2).equal(0), () => {
               const cloudTop = clouds.z.add(slab);
               const sunPath = cloudTop.sub(position.y)
-                .div(keyDirection.y.max(0.15)).clamp(240, 1400);
-              const sunProbeDistance = sunPath.mul(0.45).min(600);
+                .div(keyDirection.y.max(0.04)).max(0);
+              // Integrate the interval actually sampled, using the visible density
+              // field. Extrapolating a dense near-field probe over the entire path
+              // made illuminated crowns look uniformly gray.
               // Sample the same bounded physical sun path at a tier-specific
               // number of positions. High keeps the silver lining coherent on
               // broad crowns; lower tiers retain the same Beer path and simply
@@ -631,14 +674,14 @@ export class WeatherSky {
                 const probeFraction = float(probeIndex).add(0.5)
                   .div(this.workload.lightProbeSteps);
                 const sunProbePosition = position.add(
-                  keyDirection.mul(sunProbeDistance.mul(probeFraction)),
+                  keyDirection.mul(sunPath.mul(probeFraction)),
                 );
                 const sunProbe = this._cloudVolumeSample(
                   sunProbePosition, time, wind, advectionTime,
                 );
                 const probeHeight = sunProbePosition.y.sub(clouds.z).div(slab).clamp(0, 1);
                 const neighborDensity = this._cloudDensityFromVolume(
-                  sunProbe, probeHeight, clouds, false,
+                  sunProbe, probeHeight, clouds, true,
                 );
                 pairedSunOpticalDepth.addAssign(
                   neighborDensity.mul(sunPath).mul(SUN_EXTINCTION)
@@ -702,6 +745,7 @@ export class WeatherSky {
   }
 
   dispose() {
+    this._cloudShadowCompute?.dispose();
     this._disposed = true;
     // WebGPURenderer's Background module owns a hidden SphereGeometry/NodeMaterial
     // for every Scene that renders one of these root nodes. It subscribes to the

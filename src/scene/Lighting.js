@@ -1,4 +1,10 @@
 import { DirectionalLight, HemisphereLight, Vector3 } from 'three';
+import { StorageTexture } from 'three/webgpu';
+import { Fn, If, float, positionWorld, texture, uniform } from 'three/tsl';
+import { CameraShadows } from './CameraShadows.js';
+
+export const CLOUD_SHADOW_SIZE = 512;
+export const CLOUD_SHADOW_SPAN_M = 12000;
 
 // Renderer-relative calibration at the authored 85 klux reference state. The
 // key remains intentionally dominant: open-sky colour comes from the analytic
@@ -135,10 +141,6 @@ export function resolveShadowQuality(environmentTier, overrides = {}) {
     qualityNumber(quality, ['invalidationCoalesceMs', 'focusCoalesceMs'], DEFAULT_INVALIDATION_COALESCE_MS),
     DEFAULT_INVALIDATION_COALESCE_MS,
   );
-  const cameraFocusWeight = clamp01(finiteNonNegative(
-    qualityNumber(quality, ['cameraFocusWeight', 'focusBlend'], 0),
-    0,
-  ));
 
   return Object.freeze({
     mapSize,
@@ -147,7 +149,6 @@ export function resolveShadowQuality(environmentTier, overrides = {}) {
     texelHeight,
     focusThresholdMeters,
     focusSnap: Boolean(focusSnap),
-    cameraFocusWeight,
     sunAngleThresholdRadians,
     minUpdateIntervalMs,
     maxSunUpdateIntervalMs,
@@ -183,6 +184,26 @@ export class Lighting {
     // chromaticity, and direction drive this actual shadow-casting key.
     this.sun = new DirectionalLight(0xffffff, 3.25);
     this._sunDirection = sunDir.clone().normalize();
+    this.cloudShadowTexture = new StorageTexture(CLOUD_SHADOW_SIZE, CLOUD_SHADOW_SIZE);
+    this.cloudShadowTexture.name = 'celestial-cloud-transmittance';
+    this.cloudShadowEnabled = uniform(0);
+    this.cloudShadowDirection = uniform(this._sunDirection);
+    this._keyRadiance = uniform(this.sun.color.clone().multiplyScalar(this.sun.intensity));
+    const cloudMap = texture(this.cloudShadowTexture);
+    this.sun.colorNode = Fn(() => {
+      const transmission = float(1).toVar();
+      If(this.cloudShadowEnabled.greaterThan(0.5), () => {
+        // Project each receiver down the same celestial ray to the map's y=0
+        // reference plane; elevated crowns and terrain retain the correct shade.
+        const direction = this.cloudShadowDirection;
+        const plane = positionWorld.xz.sub(direction.xz.mul(positionWorld.y.div(direction.y.max(0.04))));
+        const mapUv = plane.div(CLOUD_SHADOW_SPAN_M).add(0.5);
+        If(mapUv.greaterThanEqual(0).all().and(mapUv.lessThanEqual(1).all()), () => {
+          transmission.assign(cloudMap.sample(mapUv).r);
+        });
+      });
+      return this._keyRadiance.mul(transmission);
+    })();
     this._shadowSunDirection = this._sunDirection.clone();
     this._shadowSunDirectionValid = this._sunDirection.lengthSq() > EPSILON;
     this._focus = new Vector3(0, 0, 0);
@@ -224,10 +245,10 @@ export class Lighting {
     this.sun.shadow.camera.top = this.shadowQuality.frustum.top;
     this.sun.shadow.camera.bottom = this.shadowQuality.frustum.bottom;
     this.sun.shadow.camera.updateProjectionMatrix();
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.04;
-    this.sun.shadow.radius = 2;         // readable penumbra without erasing tree/terrain shadow structure
-    this.sun.shadow.intensity = 0.66;   // preserve chromatic turf under dense canopy casters
+    this.sun.shadow.bias = -0.0002;
+    this.sun.shadow.normalBias = 0.012;
+    this.sun.shadow.radius = 1;         // keep compact props present in the camera-focused map
+    this.sun.shadow.intensity = 0.9;    // retain readable authored branch/crown shadows on the forest floor
     // Layer 1 is reserved for GPU-only shadow proxies. ShadowNode preserves this
     // explicit 0|1 mask instead of copying the beauty camera's layer mask, while
     // ordinary world casters on layer 0 continue to render into the same map.
@@ -240,7 +261,7 @@ export class Lighting {
     // previous 0.09 left the underside of tree crowns and trunks at crushed
     // black once the key was occluded. Keep this well below the directional key
     // so it restores open-sky colour without flattening the raking shadows.
-    this.hemi = new HemisphereLight(0xb9d3e8, 0x566047, 0.14);
+    this.hemi = new HemisphereLight(0xb9d3e8, 0x566047, 0.10);
     scene.add(this.hemi);
     this._environmentUnsubscribe = null;
     this._daylightRevision = -1;
@@ -249,6 +270,14 @@ export class Lighting {
 
     if (typeof options.onShadowUpdate === 'function') this.onShadowUpdate(options.onShadowUpdate);
     if (typeof options.onShadowRendered === 'function') this.onShadowRendered(options.onShadowRendered);
+  }
+
+  enableCameraShadows(camera, renderer) {
+    if (!this.cameraShadows) {
+      this.cameraShadows = new CameraShadows(this.sun, camera, renderer);
+      this.sun.shadow.shadowNode = this.cameraShadows;
+    }
+    return this.cameraShadows;
   }
 
   _syncShadowRenderState(timestamp = nowMs()) {
@@ -283,6 +312,22 @@ export class Lighting {
       ? Math.max(0, timestamp - this._lastShadowRequestAt)
       : null;
     return {
+      mode: this.cameraShadows ? 'camera-cascades' : 'single-map',
+      cascades: this.cameraShadows ? {
+        cameraId: this.cameraShadows.camera.uuid,
+        maxDistanceMeters: this.cameraShadows.maxFar,
+        fade: this.cameraShadows.fade,
+        breaks: [...this.cameraShadows.breaks],
+        maps: this.cameraShadows.lights.map(({ shadow }) => ({
+          size: shadow.mapSize.toArray(),
+          featherRadiusTexels: shadow.radius,
+          extent: [shadow.camera.left, shadow.camera.right, shadow.camera.bottom, shadow.camera.top],
+          depth: [shadow.camera.near, shadow.camera.far],
+          casterLayers: shadow.camera.layers.mask,
+        })),
+      } : null,
+      // These compatibility fields describe the single-map configuration only;
+      // mode/cascades above are authoritative when camera cascades are active.
       mapSize: { width: this.sun.shadow.mapSize.x, height: this.sun.shadow.mapSize.y },
       frustum: {
         left: this.sun.shadow.camera.left,
@@ -526,7 +571,7 @@ export class Lighting {
     if (!environment?.sunDirection?.value || !environment?.sunColor?.value
       || !environment?.sunIlluminanceScale || !environment?.moonDirection?.value
       || !environment?.moonIlluminanceScale || !environment?.moonColor?.value
-      || !environment?.horizonColor?.value) {
+      || !environment?.horizonColor?.value || !environment?.daylightSkyEnvelope?.value) {
       throw new TypeError('Lighting requires shared celestial EnvironmentGpuBindings.');
     }
     this._environmentUnsubscribe?.();
@@ -551,6 +596,7 @@ export class Lighting {
       // conversion.
       this.sun.intensity = KEY_INTENSITY_AT_REFERENCE
         * keyStrength;
+      this._keyRadiance.value.copy(this.sun.color).multiplyScalar(this.sun.intensity);
       const horizon = environment.horizonColor.value;
       const zenith = environment.zenithColor.value;
       this.hemi.color.setRGB(
@@ -570,7 +616,7 @@ export class Lighting {
       // north-facing rock face or trunk retains chromatic detail instead of
       // collapsing to charcoal.
       this.hemi.intensity = HEMISPHERE_INTENSITY_AT_REFERENCE
-        * Math.max(Math.sqrt(solarStrength), Math.sqrt(lunarStrength) * 0.62);
+        * Math.max(environment.daylightSkyEnvelope.value.x, Math.sqrt(lunarStrength) * 0.62);
 
       this.setSunDirection(keyDirection, {
         force: firstEnvironmentApply,
@@ -634,22 +680,16 @@ export class Lighting {
     return this.setSunDirection(direction, options);
   }
 
-  // Keep the shadow frustum centered on a point of interest (normally the ball).
-  // An optional camera/position can contribute a bounded blend, which lets a
-  // cinematic camera and the gameplay ball share a stable near-course shadow
-  // footprint without changing the existing two-number call.
+  // The active camera owns visible shadow coverage. The two-number fallback is
+  // retained for isolated scenes without a camera, never blended with gameplay.
   follow(x, z, options = {}) {
     const followOptions = options?.isCamera ? { camera: options } : (options || {});
     const camera = followOptions.camera ?? followOptions.cameraPosition;
-    const weight = clamp01(finiteNonNegative(
-      followOptions.cameraWeight ?? this.shadowQuality.cameraFocusWeight,
-      0,
-    ));
     const cameraX = camera?.position?.x ?? camera?.x;
     const cameraZ = camera?.position?.z ?? camera?.z;
-    const hasCameraFocus = weight > 0 && Number.isFinite(cameraX) && Number.isFinite(cameraZ);
-    const desiredX = hasCameraFocus ? x + (cameraX - x) * weight : x;
-    const desiredZ = hasCameraFocus ? z + (cameraZ - z) * weight : z;
+    const hasCameraFocus = Number.isFinite(cameraX) && Number.isFinite(cameraZ);
+    const desiredX = hasCameraFocus ? cameraX : x;
+    const desiredZ = hasCameraFocus ? cameraZ : z;
     if (!Number.isFinite(desiredX) || !Number.isFinite(desiredZ)) {
       throw new TypeError('Lighting.follow requires finite X/Z focus coordinates.');
     }
@@ -707,6 +747,8 @@ export class Lighting {
   }
 
   dispose() {
+    this.cloudShadowTexture.dispose();
+    this.cameraShadows?.dispose();
     this._environmentUnsubscribe?.();
     this._shadowUpdateListeners.clear();
     this._shadowRenderListeners.clear();

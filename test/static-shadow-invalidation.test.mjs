@@ -81,8 +81,8 @@ test('lighting key direction, color, and intensity consume shared daylight state
   assert.equal(lighting.sun.intensity, 1.675);
   assert.ok(Math.abs(lighting.sun.color.r - 1) < 1e-6);
   assert.ok(Math.abs(lighting.sun.color.g - 0.8) < 1e-6);
-  assert.ok(lighting.hemi.intensity > 0.28 && lighting.hemi.intensity < 0.29);
-  assert.ok(lighting.sun.intensity / lighting.hemi.intensity > 5.5,
+  assert.equal(lighting.hemi.intensity, 0.4 * environment.daylightSkyEnvelope.value.x);
+  assert.ok(lighting.sun.intensity / lighting.hemi.intensity > 5,
     'the shared directional key must remain legible over hemispherical sky return');
   assert.equal(lighting.scene.children.filter((child) => child.isDirectionalLight).length, 1,
     'daylight rig must not add a counter-fill direction');

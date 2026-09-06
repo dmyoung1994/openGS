@@ -4,27 +4,34 @@
   "description": "A physically accurate, procedurally generated golf simulation in Three.js (WebGPU/TSL, Vite)",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/patch-three-render-cache.mjs",
     "dev": "vite",
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "benchmark:env": "node scripts/benchmark-environment.mjs",
     "benchmark:visual-quality": "node scripts/benchmark-visual-quality.mjs",
+    "benchmark:course-poses": "node scripts/benchmark-course-pose-sweep.mjs",
     "benchmark:robustness": "node scripts/benchmark-environment-robustness.mjs",
     "validate:flight": "node scripts/validate-ball-flight.mjs",
     "capture:sizzle": "node scripts/capture-sizzle-reel.mjs",
-    "capture:foliage": "node scripts/capture-generated-foliage-matrix.mjs",
-    "promote:foliage": "node tools/foliage-pipeline/promote-pack.mjs",
+    "tree:build": "node scripts/tree-builder.mjs",
+    "tree:mcp": "node scripts/tree-builder-mcp.mjs",
+    "marker:build": "node scripts/build-rangeform-tee-marker.mjs",
     "migrate:course": "node scripts/migrate-course-v3-to-v4.mjs",
+    "migrate:course:v5": "node scripts/migrate-course-v4-to-v5.mjs",
+    "compile:course": "node scripts/compile-course-project.mjs",
     "verify:no-fallback-browser": "node scripts/verify-no-fallback-browser.mjs",
     "verify:visual-assets": "node scripts/verify-visual-assets.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@openai/codex-sdk": "^0.150.1",
-    "three": "^0.185.1"
+    "three": "0.185.1"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.2.1",
+    "@gltf-transform/extensions": "^4.2.1",
     "ktx2-encoder": "^0.6.0",
     "puppeteer-core": "^25.5.0",
     "vite": "^8.1.5"

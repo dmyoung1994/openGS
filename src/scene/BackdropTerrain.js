@@ -18,8 +18,11 @@ import {
   sampleCoastSand,
 } from './CoastSandDetail.js';
 import { getBiomeDefinition } from '../course/BiomeRegistry.js';
+import { turfBase, NATIVE_GRASS_PIGMENT } from '../terrain/turfColor.js';
+import { yieldToRendering } from '../util/yieldToRendering.js';
 
 const _backdropTextureLoader = new TextureLoader();
+const _alpineEdgeTurf = turfBase('deepRough');
 
 // The maritime course is a coastal site. A short authored apron carries the
 // playable boundary down to the waterline, then one continuous ocean owns the
@@ -37,7 +40,7 @@ const MARITIME_OCEAN_SPACING = 96;
 // A shared height sampler owns every patch and distance band, so seams cannot form.
 // The playable heightfield remains the only collision/surface source.
 export class BackdropTerrain {
-  constructor({ terrain, bounds, seed, biome = 'temperate-maritime', biomeField = null, environment = null, renderer = null }) {
+  constructor({ terrain, bounds, seed, biome = 'temperate-maritime', biomeField = null, environment = null, renderer = null, deferBuild = false }) {
     this.group = new Group();
     this.group.name = `${biome}-procedural-world`;
     this.biome = biome;
@@ -49,11 +52,63 @@ export class BackdropTerrain {
 
     const definition = getBiomeDefinition(biome);
     if (!definition) throw new Error(`BackdropTerrain requires a registered biome: ${biome}`);
-    if (definition.backdrop === 'alpine') this._buildAlpine(terrain, bounds);
-    else this._buildMaritime(terrain, bounds);
+    this._pendingBuild = terrain.groundCover === 'native-grasslands'
+      ? this._buildGrasslands(terrain, bounds)
+      : definition.backdrop === 'alpine'
+        ? this._buildAlpine(terrain, bounds) : this._buildMaritime(terrain, bounds);
+    if (!deferBuild) {
+      while (!this._pendingBuild.next().done) { /* Synchronous geometry/unit callers. */ }
+      delete this._pendingBuild;
+    }
   }
 
-  _buildAlpine(terrain, bounds) {
+  static async create(options) {
+    const result = new BackdropTerrain({ ...options, deferBuild: true });
+    try {
+      while (!result._pendingBuild.next().done) await yieldToRendering();
+      return result;
+    } catch (error) {
+      result.dispose();
+      throw error;
+    } finally { delete result._pendingBuild; }
+  }
+
+  *_buildGrasslands(terrain, bounds) {
+    const noise = new Noise(this.seed ^ 0x34ab108f);
+    const heightAt = (x,z) => {
+      const bx = Math.max(bounds.minX, Math.min(bounds.maxX,x));
+      const bz = Math.max(bounds.minZ, Math.min(bounds.maxZ,z));
+      const distance = Math.hypot(x-bx,z-bz);
+      const edge = terrain.heightAt(bx,bz);
+      const rolling = noise.fbm(x*.0018,z*.0018,{octaves:3})*32+22;
+      const blend = smootherstep(0,240,distance);
+      return edge*(1-blend)+rolling*blend;
+    };
+    const sample = (x,z) => ({height:heightAt(x,z)});
+    sample.heightAt = heightAt;
+    sample.bakesVertexColor = false;
+    sample.normalStep = 4;
+    this.group.userData.backdropSource = 'inland-native-grasslands';
+    this.group.userData.authoringSampler = sample;
+    this.assetsReady = Promise.resolve();
+    const material = new AtmosphericTerrainMaterial({roughness:.94,metalness:0});
+    material.terrainEnvironment = this.environment;
+    material.fog = !this.environment;
+    const patch = mx_noise_float(vec3(positionWorld.x.mul(.013),positionWorld.z.mul(.011),39)).mul(.5).add(.5);
+    material.colorNode = mix(vec3(...NATIVE_GRASS_PIGMENT.living),vec3(...NATIVE_GRASS_PIGMENT.straw),patch);
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = material.polygonOffsetUnits = 1;
+    for (const [inner,outer,spacing] of [[0,240,8],[240,1800,40],[1800,4000,100]]) {
+      for (const rectangle of ringPatches(bounds,inner,outer)) {
+        const mesh = new Mesh(yield* buildPatch(...rectangle,spacing,sample),material);
+        mesh.name = 'native-grassland-continuation';
+        this._addShellMesh(mesh);
+      }
+    }
+  }
+
+  *_buildAlpine(terrain, bounds) {
+    if (terrain.uBackdropJoin) terrain.uBackdropJoin.value = 1;
     const composition = alpineComposition(this.seed);
     this.composition = composition;
     // The horizon used to be delegated to the Poly Haven photographic HDR. That
@@ -114,30 +169,43 @@ export class BackdropTerrain {
     const material = worldMaterial('distant-temperate-alpine-ground', 'temperate-alpine',
       {
         environment: this.environment, snowline: composition.snowline, bounds,
-        rockTexture, rockNormalTexture,
+        rockTexture, rockNormalTexture, edgeSurface: terrain.backdropSurfaceNodes?.(),
+        edgeNormal: terrain._normalNode?.(positionWorld.x, positionWorld.z),
       });
+    // The real course overlaps this exact join by one coarse clipmap cell. Bias
+    // the shell away so turf owns the shared samples and the overlap stays invisible.
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = 1;
+    material.polygonOffsetUnits = 1;
     const ring = alpineRingGrid(bounds, ALPINE_BAND_A_OUTER, ALPINE_BAND_A_SPACING);
-    const mesh = new Mesh(buildPatch(
+    // Cover the independently tessellated clipmap boundary, as the coastal apron
+    // does. The sampler still uses authoritative terrain heights inside bounds.
+    const innerX = ring.skipCell.ix, innerZ = ring.skipCell.iz;
+    ring.xCoords[innerX] += 12;
+    ring.xCoords[ring.skipCell.endX] -= 12;
+    ring.zCoords[innerZ] += 12;
+    ring.zCoords[ring.skipCell.endZ] -= 12;
+    const mesh = new Mesh(yield* buildPatch(
       bounds.minX - ALPINE_BAND_A_OUTER, bounds.maxX + ALPINE_BAND_A_OUTER,
       bounds.minZ - ALPINE_BAND_A_OUTER, bounds.maxZ + ALPINE_BAND_A_OUTER,
       ALPINE_BAND_A_SPACING, sampler, ring,
     ), material);
     mesh.name = 'alpine-foothill-band';
     this._addShellMesh(mesh);
-    for (const geometry of alpineMassifRibbon(bounds, sampler)) {
+    for (const geometry of (yield* alpineMassifRibbon(bounds, sampler))) {
       const mesh = new Mesh(geometry, material);
       mesh.name = 'alpine-far-massif';
       // Band A owns the near side of the join.  Draw the ribbon after it so the
       // bounded overlap resolves deterministically (rather than asking depth
       // precision to choose between two independently tessellated interpolants).
-      // The order remains before the playable terrain in _addShellMesh.
-      this._addShellMesh(mesh, -1);
+      // Both bands follow foreground depth, preserving this relative order.
+      this._addShellMesh(mesh, 3);
     }
   }
 
-  // Render-only scenery: never a shadow caster or receiver, never collidable,
-  // and drawn before the playable terrain so it can never overdraw the hero turf.
-  _addShellMesh(mesh, renderOrder = -2) {
+  // Render-only scenery: foreground opaque depth rejects hidden shell fragments
+  // before their expensive shading. Polygon offset retains course-edge ownership.
+  _addShellMesh(mesh, renderOrder = 2) {
     mesh.receiveShadow = false;
     mesh.castShadow = false;
     mesh.matrixAutoUpdate = false;
@@ -146,7 +214,7 @@ export class BackdropTerrain {
     this.group.add(mesh);
   }
 
-  _buildMaritime(terrain, bounds) {
+  *_buildMaritime(terrain, bounds) {
     const noise = new Noise(this.seed ^ 0x7a31c4e9);
     const seaLevel = maritimeSeaLevel(terrain, bounds);
     const sample = maritimeCoastSampler(terrain, bounds, noise, seaLevel, this.biomeField);
@@ -185,7 +253,7 @@ export class BackdropTerrain {
     // the sky. The apron reaches below sea level before it ends, so the ocean can
     // overlap it without a missing vertical cliff face or a coplanar z-fight.
     for (const patch of ringPatches(bounds, -MARITIME_JOIN_OVERLAP, MARITIME_COAST_OUTER)) {
-      const mesh = new Mesh(buildPatch(...patch, MARITIME_COAST_SPACING, sample), coastMaterial);
+      const mesh = new Mesh(yield* buildPatch(...patch, MARITIME_COAST_SPACING, sample), coastMaterial);
       mesh.name = 'maritime-coastal-apron';
       mesh.receiveShadow = false;
       mesh.castShadow = false;
@@ -206,7 +274,7 @@ export class BackdropTerrain {
     const nearOceanPatches = ringPatches(bounds, 0, MARITIME_OCEAN_NEAR_OUTER)
       .filter(hasVisibleOcean);
     for (const patch of nearOceanPatches) {
-      const mesh = new Mesh(buildPatch(
+      const mesh = new Mesh(yield* buildPatch(
         ...patch, MARITIME_OCEAN_NEAR_SPACING, oceanSample,
       ), oceanMaterial);
       mesh.name = 'maritime-ocean-near-shore';
@@ -218,7 +286,7 @@ export class BackdropTerrain {
     const oceanPatches = ringPatches(bounds, MARITIME_OCEAN_INNER, MARITIME_OCEAN_OUTER)
       .filter(hasVisibleOcean);
     for (const patch of oceanPatches) {
-      const mesh = new Mesh(buildPatch(...patch, MARITIME_OCEAN_SPACING, oceanSample), oceanMaterial);
+      const mesh = new Mesh(yield* buildPatch(...patch, MARITIME_OCEAN_SPACING, oceanSample), oceanMaterial);
       mesh.name = 'maritime-ocean-horizon';
       mesh.receiveShadow = false;
       mesh.castShadow = false;
@@ -860,7 +928,6 @@ function alpineSampler(terrain, bounds, seed, composition) {
       - Math.abs(drainage) * mountain * 20
       - gullyMask * (mountain * 10 + highMass * 7) * enclosure
       - crossWash * (mountain * 17 + highMass * 12) * enclosure
-      - chuteField * (mountain * 14 + highMass * 10) * enclosure
       - cliffField * (mountain * 16 + highMass * 12) * enclosure
       + faceRibs * (mountain * 12 + highMass * 8) * enclosure
       - talusFan * (mountain * 13 + highMass * 8) * enclosure
@@ -984,7 +1051,11 @@ function alpineSampler(terrain, bounds, seed, composition) {
     // second tier at any saddle amplitude.
     const asymmetry = dominant * (mountain * 28 + highMass * 15) * composition.peakScale
       + secondary * (mountain * 18 + highMass * 10);
-    const worldHeight = basinLift + relief + asymmetry - 15;
+    // Keep the near continuation connected to the site instead of cutting a
+    // fixed-depth ditch around its rectangular boundary. The distant valley
+    // retains its authored elevation once the foothills take over.
+    const worldHeight = basinLift + relief + asymmetry
+      - 15 * smootherstep(180, 500, edgeDistance);
     const height = edgeHeight * (1 - blend) + worldHeight * blend;
 
     if (heightOnly) return height;
@@ -1380,7 +1451,7 @@ function bandBoundaryRadius(rect, centerX, centerZ, azimuth) {
   return Math.min(tx, tz);
 }
 
-function alpineMassifRibbon(bounds, sample) {
+function* alpineMassifRibbon(bounds, sample) {
   const centerX = (bounds.minX + bounds.maxX) * 0.5;
   const centerZ = (bounds.minZ + bounds.maxZ) * 0.5;
   const rect = {
@@ -1397,12 +1468,13 @@ function alpineMassifRibbon(bounds, sample) {
     // by one column and the ribbon stays watertight when only some are drawn.
     const azimuths = [];
     for (let column = start; column <= end; column++) azimuths.push(azimuthAt(column));
-    geometries.push(buildMassifSegment(azimuths, rect, centerX, centerZ, sample));
+    geometries.push(yield* buildMassifSegment(azimuths, rect, centerX, centerZ, sample));
+    yield;
   }
   return geometries;
 }
 
-function buildMassifSegment(azimuths, rect, centerX, centerZ, sample) {
+function* buildMassifSegment(azimuths, rect, centerX, centerZ, sample) {
   const nc = azimuths.length;
   // All rows are surface rows. The first row deliberately overlaps Band A by a
   // bounded 72 m belt; no degenerate/vertical skirt is needed to hide a gap.
@@ -1420,6 +1492,7 @@ function buildMassifSegment(azimuths, rect, centerX, centerZ, sample) {
   // bands. A fixed 64 m world span averages those local ribs while preserving
   // the authored massif slope; it changes no mesh vertices or topology.
   const normalStep = 64;
+  let deadline = performance.now() + 4;
 
   for (let column = 0; column < nc; column++) {
     const azimuth = azimuths[column];
@@ -1458,6 +1531,10 @@ function buildMassifSegment(azimuths, rect, centerX, centerZ, sample) {
       normals[vertex * 3] = nxWorld * inverseLength;
       normals[vertex * 3 + 1] = nyWorld * inverseLength;
       normals[vertex * 3 + 2] = nzWorld * inverseLength;
+    }
+    if (performance.now() >= deadline) {
+      yield;
+      deadline = performance.now() + 4;
     }
   }
 
@@ -1499,11 +1576,10 @@ function ringPatches(bounds, inner, outer) {
   ].filter(([minX, maxX, minZ, maxZ]) => maxX - minX > 0.1 && maxZ - minZ > 0.1);
 }
 
-// Alpine Band A is one continuous rectangular-ring topology, not four
-// independently tessellated sides.  The coordinate arrays include the exact
-// playable rectangle edges and leave the interior as one skipped cell.  Every
-// visible side/corner therefore shares literal vertices while the course itself
-// receives no backdrop fragments or depth writes.
+// Band A begins directly at the authored course edge. The playable clipmap now
+// covers the full site, so this shell needs no visible filler surface inside it.
+// Subdivide across the interior span too: side strips need bounded cells even
+// though the central rectangle itself is omitted.
 function alpineRingGrid(bounds, outer, spacing) {
   const minX = bounds.minX - outer;
   const maxX = bounds.maxX + outer;
@@ -1513,23 +1589,24 @@ function alpineRingGrid(bounds, outer, spacing) {
   const xRightSegments = Math.max(1, Math.ceil((maxX - bounds.maxX) / spacing));
   const zBottomSegments = Math.max(1, Math.ceil((bounds.minZ - minZ) / spacing));
   const zTopSegments = Math.max(1, Math.ceil((maxZ - bounds.maxZ) / spacing));
-  const axis = (outerMin, innerMin, innerMax, outerMax, leftSegments, rightSegments) => [
+  const xInnerSegments = Math.max(1, Math.ceil((bounds.maxX - bounds.minX) / spacing));
+  const zInnerSegments = Math.max(1, Math.ceil((bounds.maxZ - bounds.minZ) / spacing));
+  const axis = (outerMin, innerMin, innerMax, outerMax, leftSegments, rightSegments, innerSegments) => [
     ...Array.from({ length: leftSegments + 1 }, (_, index) => (
       outerMin + (innerMin - outerMin) * index / leftSegments
+    )),
+    ...Array.from({ length: innerSegments - 1 }, (_, index) => (
+      innerMin + (innerMax - innerMin) * (index + 1) / innerSegments
     )),
     ...Array.from({ length: rightSegments + 1 }, (_, index) => (
       innerMax + (outerMax - innerMax) * index / rightSegments
     )),
   ];
-  const xCoords = axis(minX, bounds.minX, bounds.maxX, maxX, xLeftSegments, xRightSegments);
-  const zCoords = axis(minZ, bounds.minZ, bounds.maxZ, maxZ, zBottomSegments, zTopSegments);
   return {
-    xCoords,
-    zCoords,
-    skipCell: {
-      ix: xLeftSegments,
-      iz: zBottomSegments,
-    },
+    xCoords: axis(minX, bounds.minX, bounds.maxX, maxX, xLeftSegments, xRightSegments, xInnerSegments),
+    zCoords: axis(minZ, bounds.minZ, bounds.maxZ, maxZ, zBottomSegments, zTopSegments, zInnerSegments),
+    skipCell: { ix: xLeftSegments, iz: zBottomSegments,
+      endX: xLeftSegments + xInnerSegments, endZ: zBottomSegments + zInnerSegments },
   };
 }
 
@@ -1814,12 +1891,12 @@ function maritimeOceanMaterial({ environment, detailTexture, bounds }) {
 function worldMaterial(name, biome, {
   environment = null, snowline = 400, bounds = null,
   rockTexture = null, rockNormalTexture = null, coastalTransitions = false,
-  sandAlbedoRoughness = null, sandNormal = null,
+  sandAlbedoRoughness = null, sandNormal = null, edgeSurface = null, edgeNormal = null,
 } = {}) {
   const alpine = getBiomeDefinition(biome)?.backdrop === 'alpine';
   // The maritime continuation still bakes a cheap per-vertex albedo; only the
   // alpine shell classifies per pixel, because only it is a mountain.
-  const MaterialClass = !alpine && coastalTransitions
+  const MaterialClass = (alpine && edgeSurface) || (!alpine && coastalTransitions)
     ? AtmosphericCoastMaterial
     : AtmosphericTerrainMaterial;
   const material = new MaterialClass({
@@ -2034,9 +2111,14 @@ function worldMaterial(name, biome, {
   // interpolated ten-row face into real GPU geometry.
   const vertexDisplacement = vertexMacro.sub(0.5).mul(26.0)
     .add(vertexMeso.sub(0.5).mul(12.0))
-    .add(vertexStructuralRelief);
+    .add(vertexStructuralRelief)
+    // Face-scale relief may roughen a ridge, but one coarse ribbon vertex must
+    // never cut a large bite out of the sky silhouette. Deep cavities remain in
+    // the coupled PBR response; the authored CPU ridge still owns the skyline.
+    .clamp(0.0, 48.0);
   const shellEdgeDistance = bounds
-    ? positionGeometry.x.abs().sub((bounds.maxX - bounds.minX) * 0.5)
+    ? positionGeometry.x.sub((bounds.minX + bounds.maxX) * 0.5).abs()
+      .sub((bounds.maxX - bounds.minX) * 0.5)
       .max(positionGeometry.z.sub((bounds.minZ + bounds.maxZ) * 0.5).abs()
         .sub((bounds.maxZ - bounds.minZ) * 0.5)).max(0.0)
     : float(0.0);
@@ -2138,6 +2220,18 @@ function worldMaterial(name, biome, {
   const mesoValue = mix(float(0.5), broadValuesVarying.y, mesoVisibility);
   const fineValue = mix(float(0.5), fine.value, fineVisibility);
   const grainValue = mix(float(0.5), grain.value, grainVisibility);
+  const worldEdgeDistance = bounds
+    ? world.x.sub((bounds.minX + bounds.maxX) * 0.5).abs()
+      .sub((bounds.maxX - bounds.minX) * 0.5)
+      .max(world.z.sub((bounds.minZ + bounds.maxZ) * 0.5).abs()
+        .sub((bounds.maxZ - bounds.minZ) * 0.5)).max(0.0)
+    : float(0.0);
+  // Continue the actual course substrate into the foothills on every side.
+  // Geology emerges over a broad irregular front rather than immediately outside
+  // the rectangular course. Both endpoints use the same world-space material.
+  const alpineEcotone = bounds
+    ? smoothstep(55.0, 320.0, worldEdgeDistance.add(macroValue.sub(0.5).mul(90.0)))
+    : float(1.0);
 
   // Bedding: a warped, non-height-periodic stratification. Anchored to a rotated
   // world axis so it cuts ACROSS the faces like real strata instead of drawing
@@ -2155,13 +2249,13 @@ function worldMaterial(name, biome, {
   const directRockSignal = rockGate.mul(0.48).add(cliffGate.mul(0.42))
     .add(directSlopeExposure.mul(0.45)).add(directAltitudeExposure.mul(0.20))
     .add(benchGate.mul(0.12)).sub(treeGate.mul(0.18));
-  const directRock = smoothstep(0.24, 0.62, directRockSignal);
+  const directRock = smoothstep(0.24, 0.62, directRockSignal).mul(alpineEcotone);
   const depositionalSlope = smoothstep(0.12, 0.30, slope)
     .mul(float(1.0).sub(smoothstep(0.48, 0.72, slope)));
   const directScreeSource = screeGate.mul(0.62).add(washGate.mul(0.34))
     .add(cliffGate.mul(0.18)).add(structuralCavity.mul(0.16));
   const directScree = smoothstep(0.20, 0.62, directScreeSource.mul(depositionalSlope))
-    .mul(float(1.0).sub(directRock.mul(0.72)));
+    .mul(float(1.0).sub(directRock.mul(0.72))).mul(alpineEcotone);
   const directMineral = directRock.mul(float(1.0).sub(directScree));
 
   // Poly Haven Rocky Terrain is a 90 m aerial scan, so one tile remains
@@ -2253,11 +2347,15 @@ function worldMaterial(name, biome, {
   const directSnowAccumulation = directSnowEligibility.mul(0.72)
     .add(directSnowRetention.mul(directSnowBand).mul(0.34))
     .sub(structuralFace.mul(0.20)).sub(directJoint.mul(0.12)).add(snowGate.mul(0.08));
-  const directSnow = smoothstep(0.54, 0.76, directSnowAccumulation);
+  const directSnow = smoothstep(0.54, 0.76, directSnowAccumulation).mul(alpineEcotone);
   const directSnowTone = upness.mul(0.58).add(float(1.0).sub(directCavity).mul(0.26))
     .add(macroValue.mul(0.16)).clamp(0.0, 1.0);
   directAlbedo = mix(directAlbedo,
     mix(directSnowShade, directSnowLit, directSnowTone), directSnow);
+  const alpineEdgeSubstrate = edgeSurface?.color ?? vec3(
+    _alpineEdgeTurf.r, _alpineEdgeTurf.g, _alpineEdgeTurf.b,
+  );
+  directAlbedo = mix(alpineEdgeSubstrate, directAlbedo, alpineEcotone);
 
   // Decode the matching OpenGL normal scan and express only its tangent delta
   // in the two world projection bases. Adding that delta to the analytic terrain
@@ -2281,11 +2379,6 @@ function worldMaterial(name, biome, {
   const vertexReliefVisibility = float(0.38).max(
     float(1.0).sub(smoothstep(6.0, 24.0, worldFootprint)),
   );
-  const worldEdgeDistance = bounds
-    ? world.x.abs().sub((bounds.maxX - bounds.minX) * 0.5)
-      .max(world.z.sub((bounds.minZ + bounds.maxZ) * 0.5).abs()
-        .sub((bounds.maxZ - bounds.minZ) * 0.5)).max(0.0)
-    : float(0.0);
   const worldJoinFade = bounds
     ? smoothstep(72.0, 162.0, worldEdgeDistance.sub(ALPINE_BAND_A_OUTER).abs())
     : float(1.0);
@@ -2312,6 +2405,7 @@ function worldMaterial(name, biome, {
       .add(broadGradientsVarying.y.mul(14.0))
       .add(fine.gradZ.mul(5.0).mul(fineVisibility)),
   ).mul(rockDetail.mul(0.85).add(directScree.mul(0.25)).add(0.06))
+    .mul(alpineEcotone)
     // Intensify the same gradients only at the narrow crack shoulders; the
     // albedo seam and surface break therefore remain spatially coupled.
     .mul(mesoJoint.mul(fineJoint).mul(0.30).add(1.0));
@@ -2321,8 +2415,9 @@ function worldMaterial(name, biome, {
   // Fine biplanar breakup remains coverage-gated in `bump` below; the structural
   // normal uses one calibrated broad-face strength everywhere.
   material.normalNode = transformNormalToView(
-    normalWorld.add(bump)
-      .add(vertexReliefBump.mul(0.78)).add(rockScanNormalDelta).normalize(),
+    (edgeNormal ? mix(edgeNormal, normalWorld, smoothstep(0, 24, worldEdgeDistance)) : normalWorld).add(bump)
+      .add(vertexReliefBump.mul(0.78).mul(alpineEcotone))
+      .add(rockScanNormalDelta).normalize(),
   );
 
   // Matte dielectric throughout. Snow is slightly glossier than weathered rock,
@@ -2331,14 +2426,17 @@ function worldMaterial(name, biome, {
     .add(directWeathering.mul(0.07)).add(directJoint.mul(0.08))
     .add(structuralCavity.mul(0.075)).sub(structuralFace.mul(0.025))
     .add(grainValue.sub(0.5).mul(0.035)).clamp(0.72, 0.99);
-  material.roughnessNode = mix(mineralRough, float(0.88), directSnow);
+  const alpineRoughness = mix(mineralRough, float(0.88), directSnow);
+  material.roughnessNode = mix(edgeSurface?.roughness ?? float(0.88), alpineRoughness, alpineEcotone);
+  if (edgeSurface) material.specularIntensityNode = mix(edgeSurface.specular, float(1), alpineEcotone);
+  if (edgeSurface?.ao) material.aoNode = mix(edgeSurface.ao, float(1), alpineEcotone);
   material.colorNode = directAlbedo;
 
   material.name = name;
   return material;
 }
 
-function buildPatch(minX, maxX, minZ, maxZ, spacing, sample, grid = null) {
+function* buildPatch(minX, maxX, minZ, maxZ, spacing, sample, grid = null) {
   const nx = grid?.xCoords?.length || Math.max(2, Math.ceil((maxX - minX) / spacing) + 1);
   const nz = grid?.zCoords?.length || Math.max(2, Math.ceil((maxZ - minZ) / spacing) + 1);
   const xCoords = grid?.xCoords || Array.from({ length: nx }, (_, index) => (
@@ -2356,6 +2454,7 @@ function buildPatch(minX, maxX, minZ, maxZ, spacing, sample, grid = null) {
   const normals = new Float32Array(nx * nz * 3);
   const indices = new Uint32Array((nx - 1) * (nz - 1) * 6);
   let vertex = 0;
+  let deadline = performance.now() + 4;
   for (let iz = 0; iz < nz; iz++) {
     const z = zCoords[iz];
     for (let ix = 0; ix < nx; ix++) {
@@ -2408,10 +2507,15 @@ function buildPatch(minX, maxX, minZ, maxZ, spacing, sample, grid = null) {
       }
       vertex += 1;
     }
+    if (performance.now() >= deadline) {
+      yield;
+      deadline = performance.now() + 4;
+    }
   }
   let index = 0;
   for (let iz = 0; iz < nz - 1; iz += 1) for (let ix = 0; ix < nx - 1; ix += 1) {
-    if (grid?.skipCell && ix === grid.skipCell.ix && iz === grid.skipCell.iz) continue;
+    if (grid?.skipCell && ix >= grid.skipCell.ix && ix < grid.skipCell.endX
+      && iz >= grid.skipCell.iz && iz < grid.skipCell.endZ) continue;
     const a = iz * nx + ix; const b = a + 1; const c = a + nx; const d = c + 1;
     // Alternate the diagonal so a distant patch cannot acquire a single repeated
     // triangulation direction under grazing light. The height samples stay exactly

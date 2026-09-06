@@ -34,9 +34,10 @@ test('normalizes SDK units into one immutable canonical shot contract', () => {
     spinRate: 281.277,
     spinAxis: -0.04,
     timestamp: 1_724_000_000,
-    optional: { clubLabel: ' Driver ', deviceShotId: ' sdk-42 ' },
+    optional: { clubSpeed: 50.515, clubLabel: ' Driver ', deviceShotId: ' sdk-42 ' },
   }, { units: {
     ballSpeed: 'm/s',
+    clubSpeed: 'm/s',
     launchAngle: 'rad',
     launchDirection: 'rad',
     spinRate: 'rad/s',
@@ -45,33 +46,38 @@ test('normalizes SDK units into one immutable canonical shot contract', () => {
   } });
 
   assert.ok(Math.abs(shot.ballSpeed - 166.999) < 0.01);
+  assert.ok(Math.abs(shot.optional.clubSpeed - 112.999) < 0.01);
   assert.ok(Math.abs(shot.launchAngle - 11.459) < 0.01);
   assert.ok(Math.abs(shot.launchDirection + 1.719) < 0.01);
   assert.ok(Math.abs(shot.spinRate - 2685.999) < 0.01);
   assert.ok(Math.abs(shot.spinAxis + 2.292) < 0.01);
   assert.equal(shot.timestamp, 1_724_000_000_000);
-  assert.deepEqual(shot.optional, { clubLabel: 'Driver', deviceShotId: 'sdk-42' });
+  assert.deepEqual(shot.optional, { clubSpeed: shot.optional.clubSpeed, clubLabel: 'Driver', deviceShotId: 'sdk-42' });
   assert.ok(Object.isFrozen(shot));
   assert.ok(Object.isFrozen(shot.optional));
 });
 
 test('fails closed on missing, non-finite, out-of-range, and unknown optional data', () => {
+  assert.equal(normalizeLaunchShot(canonical({ ballSpeed: 0.2, launchAngle: 0, spinRate: 0 })).ballSpeed, 0.2);
+  assert.throws(() => normalizeLaunchShot(canonical({ ballSpeed: 0 })), /greater than zero/);
   assert.throws(() => normalizeLaunchShot(canonical({ ballSpeed: undefined })), /ballSpeed must be a finite number/);
   assert.throws(() => normalizeLaunchShot(canonical({ spinRate: NaN })), /spinRate must be a finite number/);
   assert.throws(() => normalizeLaunchShot(canonical({ ballSpeed: 251 })), /ballSpeed must be between/);
   assert.throws(() => normalizeLaunchShot(canonical({ spinAxis: 181 })), /spinAxis must be between/);
+  assert.throws(() => normalizeLaunchShot(canonical({ optional: { clubSpeed: 181 } })), /clubSpeed must be between/);
   assert.throws(() => normalizeLaunchShot(canonical({ optional: { smashFactor: 1.48 } })), /unsupported optional/);
   assert.throws(() => normalizeLaunchShot(canonical(), { units: { ballSpeed: 'knots' } }), /unsupported ballSpeed unit/);
 });
 
-test('maps canonical direction and optional internal club metadata to Ball.launch exactly once', () => {
-  const params = launchShotToBallParams(canonical({ optional: { clubLabel: '7-iron' } }));
+test('maps canonical direction and optional measured club speed to Ball.launch exactly once', () => {
+  const params = launchShotToBallParams(canonical({ optional: { clubSpeed: 91, clubLabel: '7-iron' } }));
   assert.deepEqual(params, {
     ballSpeed: 167,
     launchAngle: 10.9,
     azimuth: -1.5,
     spinRate: 2686,
     spinAxis: -2,
+    clubSpeed: 91,
     club: '7-iron',
   });
   assert.ok(Object.isFrozen(params));
@@ -142,6 +148,7 @@ test('development adapter emits the existing presets through the same shot path'
   assert.equal(second.accepted, true);
   assert.equal(received.length, 2);
   assert.equal(received[0].ballSpeed, DEVELOPMENT_LAUNCH_PRESETS['7-iron'].ballSpeed);
+  assert.equal(received[0].optional.clubSpeed, DEVELOPMENT_LAUNCH_PRESETS['7-iron'].clubSpeed);
   assert.equal(received[0].launchDirection, DEVELOPMENT_LAUNCH_PRESETS['7-iron'].launchDirection);
   assert.notEqual(received[0].optional.deviceShotId, received[1].optional.deviceShotId);
   assert.deepEqual(adapter.listPresets(), Object.keys(DEVELOPMENT_LAUNCH_PRESETS));
@@ -156,7 +163,8 @@ test('production runtime routes Lab, keyboard, and SDK input through the canonic
   assert.match(main, /subscribeShots\(\(shot\) => hit\(launchShotToBallParams\(shot\)\)\)/);
   assert.match(main, /launchMonitor\.emitShot\(panel\.getLaunchInput\(\)\)/);
   assert.match(main, /launchMonitor: launchMonitorApi/);
-  assert.match(main, /ingest: \(shot, options\) => launchMonitor\.ingest\(shot, options\)/);
+  assert.match(main, /ingest: submitLaunchShot/);
+  assert.match(main, /submit: submitLaunchShot/);
   assert.match(panel, /DEVELOPMENT_LAUNCH_PRESETS/);
   assert.match(panel, /getLaunchInput\(\)/);
   assert.doesNotMatch(panel, /const PRESETS =/,

@@ -1,3 +1,4 @@
+import { loadCourseLibrary } from '../course/CourseLibrary.js';
 // The app shell + premium landing menu — "The Links". A light, airy, warm design
 // (frosted glass over a soft hazy backdrop, high-contrast Didone serif, champagne
 // gold accents) rebuilt to match the generated UI concepts in docs/ui-concepts/.
@@ -18,7 +19,8 @@ export class Menu {
     // just useful when you are iterating on the range and reloading all day.
     const wanted = new URL(window.location).searchParams.get('view');
     const routeView = ({ '/range.html': 'practice', '/creator.html': 'creator', '/play.html': 'play' })[window.location.pathname];
-    this.setView(routeView ?? (['practice', 'creator', 'play'].includes(wanted) ? wanted : 'menu'));
+    const startPlay = routeView === 'play' && new URL(window.location).searchParams.get('start') === '1';
+    this.setView(startPlay ? 'practice' : routeView ?? (['practice', 'creator', 'play'].includes(wanted) ? wanted : 'menu'));
     // Refresh the creator stats HUD a couple times a second while it's visible.
     setInterval(() => { if (this.view === 'creator') this._renderStats(); }, 500);
   }
@@ -42,8 +44,8 @@ export class Menu {
         </header>
         <nav class="gm-cards">
           ${this._card('practice', '01', 'Practice', 'Hit the range')}
-          ${this._card('creator', '02', 'Course Creator', 'Design by prompt')}
-          ${this._card('play', '03', 'Play', 'Choose a course')}
+          ${this._card('play', '02', 'Play', 'Choose a course')}
+          ${this._card('creator', '03', 'Create', 'Design a course')}
         </nav>
         <footer class="gm-foot">Select an experience</footer>
       </div>`;
@@ -58,33 +60,12 @@ export class Menu {
       <div class="gp-inner">
         <div class="gp-kicker">Play</div>
         <h2 class="gp-title">Select a Course</h2>
-        <div class="gp-grid">
-          <button class="gp-card gp-selected" data-play>
-            <div class="gp-thumb" style="--img:url('/assets/menu/practice.jpg')"></div>
-            <div class="gp-body">
-              <div class="gp-cname">The Practice Range</div>
-              <div class="gp-hr"></div>
-              <div class="gp-row"><span class="gp-cmeta">6 target greens · links bunkering · par 3s</span><span class="gp-play">Play ▸</span></div>
-            </div>
-          </button>
-          <div class="gp-card gp-locked">
-            <div class="gp-thumb" style="--img:url('/assets/menu/northcoast.jpg')"></div>
-            <div class="gp-body">
-              <div class="gp-cname">The North Coast</div>
-              <div class="gp-hr"></div>
-              <div class="gp-row"><span class="gp-cmeta">18 holes · ocean cliffs · championship tees</span><span class="gp-soon">Coming soon</span></div>
-            </div>
-          </div>
-        </div>
-        <div class="gp-wide">
-          <div class="gp-cname">Your designed courses</div>
-          <div class="gp-hr"></div>
-          <div class="gp-row"><span class="gp-cmeta">AI-built layouts · saved locally</span><span class="gp-soon">Coming soon</span></div>
-        </div>
+        <div class="gp-grid" aria-live="polite">Loading saved courses…</div>
       </div>`;
     document.body.appendChild(play);
-    play.querySelector('[data-play]').addEventListener('click', () => this._navigate('practice'));
-    this.thumbEl = play.querySelector('.gp-selected .gp-thumb');
+    // /play.html already owns the isolated PlayScene and loaded routed course. Enter
+    // that live scene in place instead of navigating to the Range composition.
+    this._loadCourses(play.querySelector('.gp-grid'));
 
     // Top-right utility stack. A flex column so in-scene chrome (Menu button, LIVE
     // PREVIEW tag, FPS meter) always stacks with even gaps and pushes down instead of
@@ -117,8 +98,37 @@ export class Menu {
   }
 
   _navigate(view) {
+    if (view === 'play') { this.setView('play'); return; }
     const path = { menu: '/', practice: '/range.html', creator: '/creator.html', play: '/play.html' }[view] ?? '/';
     window.location.assign(path);
+  }
+
+  async _loadCourses(grid) {
+    try {
+      const courses = await loadCourseLibrary();
+      grid.replaceChildren();
+      for (const course of courses) {
+        const card = document.createElement('button');
+        card.className = 'gp-card';
+        card.dataset.course = course.id;
+        card.innerHTML = '<div class="gp-body"><div class="gp-cname"></div><div class="gp-hr"></div><div class="gp-row"><span class="gp-cmeta"></span><span class="gp-play">Play ▸</span></div></div>';
+        card.querySelector('.gp-cname').textContent = course.name;
+        card.querySelector('.gp-cmeta').textContent = `${course.holes} ${course.holes === 1 ? 'hole' : 'holes'}`;
+        card.addEventListener('click', () => {
+          const current = new URL(window.location).searchParams.get('course') || 'current';
+          if (window.location.pathname === '/play.html' && current === course.id) this.setView('practice');
+          else window.location.assign(`/play.html?course=${encodeURIComponent(course.id)}&start=1`);
+        });
+        grid.appendChild(card);
+      }
+      if (!courses.length) grid.textContent = 'No saved courses yet. Create a course to get started.';
+    } catch (error) {
+      grid.textContent = error.message;
+      const retry = document.createElement('button');
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => this._loadCourses(grid));
+      grid.appendChild(retry);
+    }
   }
 
   _card(go, num, title, sub) {
@@ -131,7 +141,7 @@ export class Menu {
       </button>`;
   }
 
-  // Set the Practice Range card thumbnail to a live render of the actual course.
+  // Set the selected course card thumbnail to a live render of the actual course.
   setCourseThumb(url) {
     if (this.thumbEl && url) this.thumbEl.style.setProperty('--img', `url(${url})`);
   }
@@ -268,13 +278,8 @@ export class Menu {
       .gp-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
       .gp-cmeta { font-size: 13.5px; color: rgba(244,241,234,.74); }
       .gp-play { font-size: 16px; color: var(--champ); white-space: nowrap; }
-      .gp-soon { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: rgba(244,241,234,.5); white-space: nowrap; }
       .gp-card.gp-selected { border-color: rgba(184,162,122,.85); box-shadow: 0 20px 56px rgba(0,0,0,.36), 0 0 0 1px rgba(184,162,122,.5), 0 0 40px rgba(184,162,122,.25); }
-      .gp-card.gp-selected:hover, .gp-card:not(.gp-locked):hover { transform: translateY(-6px); border-color: rgba(200,178,138,.95); }
-      .gp-card.gp-locked { cursor: default; opacity: .78; }
-      .gp-card.gp-locked .gp-thumb { filter: grayscale(.35) brightness(.82); }
-      .gp-wide { width: min(72vw, 760px); margin-top: 20px; padding: 18px 24px; border-radius: 14px;
-        background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.24); backdrop-filter: blur(10px); }
+      .gp-card:hover { transform: translateY(-6px); border-color: rgba(200,178,138,.95); }
 
       @media (max-width: 760px) { .gm-cards { gap: 14px; } .gm-card { width: 80vw; height: 190px; } .gp-card { width: 88vw; } }
     `;

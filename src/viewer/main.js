@@ -202,7 +202,7 @@ let freeCam = null;
 const evaluatorCamera = new EvaluatorCamera({ camera: sm.camera, sceneManager: sm });
 const foliageDistances = [5, 20, 50, 100, 200];
 const foliageAzimuths = [0, 120, 240];
-const foliageDebugModes = ['beauty', 'alpha', 'material', 'normal', 'lod', 'hull', 'overdraw'];
+const foliageDebugModes = ['beauty', 'structure', 'foliage', 'silhouette', 'lod'];
 let frameDurations = [];
 
 function percentile(values, fraction) {
@@ -229,17 +229,13 @@ function setFoliageLabCamera(distance, azimuthDegrees) {
 
 function updateFoliageLabPressedState() {
   const query = new URL(window.location).searchParams;
-  const queryDefaults = { alphaTest: '0.20', roughness: '1', normalShape: '0', transmission: '1', mip: '4' };
   for (const button of foliageLabEl.querySelectorAll('button')) {
     const selected = (button.dataset.distance && button.dataset.distance === query.get('dist'))
       || (button.dataset.azimuth && button.dataset.azimuth === query.get('az'))
-      || (button.dataset.texture && button.dataset.texture === (query.get('texture') ?? 'ktx2'))
-      || (button.dataset.subject && button.dataset.subject === (query.get('subject') ?? 'tree'))
+      || (button.dataset.variant && button.dataset.variant === (query.get('variant') ?? '0'))
       || (button.dataset.debug && button.dataset.debug === (query.get('debug') ?? 'beauty'))
       || (button.dataset.background && button.dataset.background === (query.get('bg') ?? 'sky'))
-      || (button.dataset.sun && button.dataset.sun === (query.get('sun') ?? 'fixed'))
-      || (button.dataset.query && Number(button.dataset.value)
-        === Number(query.get(button.dataset.query) ?? queryDefaults[button.dataset.query]));
+      || (button.dataset.sun && button.dataset.sun === (query.get('sun') ?? 'fixed'));
     button.setAttribute('aria-pressed', String(Boolean(selected)));
   }
 }
@@ -258,14 +254,9 @@ for (const azimuth of foliageAzimuths) {
     Number(new URL(window.location).searchParams.get('dist') ?? 20), azimuth));
   document.getElementById('foliageAzimuths').append(button);
 }
-for (const button of foliageLabEl.querySelectorAll('[data-texture]')) {
+for (const button of foliageLabEl.querySelectorAll('[data-variant]')) {
   button.addEventListener('click', () => {
-    const url = new URL(window.location); url.searchParams.set('texture', button.dataset.texture); window.location.assign(url);
-  });
-}
-for (const button of foliageLabEl.querySelectorAll('[data-subject]')) {
-  button.addEventListener('click', () => {
-    const url = new URL(window.location); url.searchParams.set('subject', button.dataset.subject); window.location.assign(url);
+    const url = new URL(window.location); url.searchParams.set('variant', button.dataset.variant); window.location.assign(url);
   });
 }
 for (const debugMode of foliageDebugModes) {
@@ -279,11 +270,6 @@ for (const debugMode of foliageDebugModes) {
 for (const button of foliageLabEl.querySelectorAll('[data-background]')) {
   button.addEventListener('click', () => {
     const url = new URL(window.location); url.searchParams.set('bg', button.dataset.background); window.location.assign(url);
-  });
-}
-for (const button of foliageLabEl.querySelectorAll('[data-query]')) {
-  button.addEventListener('click', () => {
-    const url = new URL(window.location); url.searchParams.set(button.dataset.query, button.dataset.value); window.location.assign(url);
   });
 }
 for (const button of foliageLabEl.querySelectorAll('[data-sun]')) {
@@ -534,16 +520,13 @@ sm.onUpdate((dt, t) => {
   if (foliageLabEl.style.display !== 'none' && frames % 15 === 0) {
     const diagnostics = current?.treeBeauty?.residencyEstimate(sm.camera);
     if (diagnostics) foliageDiagnosticsEl.textContent = JSON.stringify({
-      distance: diagnostics.distance, texture: diagnostics.textureMode,
-      debug: diagnostics.debugMode,
-      subject: diagnostics.labSubject ?? 'tree', mipLevel: diagnostics.mipLevel,
-      clusterCount: diagnostics.clusterCount, clusterNames: diagnostics.clusterNames,
-      branches: diagnostics.branches, selectedBranches: diagnostics.selectedBranches,
-      selectedCards: diagnostics.selectedCards, selectedCardTotal: diagnostics.selectedCardTotal,
-      trianglesAllLods: diagnostics.foliageTrianglesAllLods,
-      drawCalls: diagnostics.drawCalls, atlasCoverage: diagnostics.atlasMetrics?.alphaCoverage,
-      atlasUtilization: diagnostics.atlasMetrics?.atlasUtilization,
-      labControls: diagnostics.labControls,
+      generator: current?.treeDefinition?.generator,
+      definitionId: current?.treeDefinition?.id,
+      variant: Number(new URL(window.location).searchParams.get('variant') ?? 0),
+      debug: new URL(window.location).searchParams.get('debug') ?? 'beauty',
+      branches: diagnostics.branches, leaves: diagnostics.leaves,
+      triangles: diagnostics.triangles, drawCalls: diagnostics.drawCalls,
+      near: diagnostics.near, far: diagnostics.far,
       sunMode: movingSun ? 'moving-direct/reference-pmrem' : 'fixed',
       alphaToCoverageSupported: false,
       frameMsP50: Number(percentile(frameDurations, 0.50).toFixed(2)),
@@ -552,9 +535,11 @@ sm.onUpdate((dt, t) => {
   }
   evaluatorCamera.notifyFrame(sm.renderer.info.frame);
 });
+let viewerReady = false;
 try {
   await load(initial);
   sm.start();
+  viewerReady = true;
 } catch (error) {
   showError(`Required viewer environment failed: ${error.message}`);
 }
@@ -571,3 +556,11 @@ window.viewer = {
   treeDiagnosticsGpu: () => current?.treeBeauty?.readDiagnostics() ?? null,
   get frames() { return frames; },
 };
+// Keep the isolated production-path viewer on the same readiness/diagnostic
+// contract as range, creator, and play so Puppeteer never substitutes DOM state
+// for a completed strict-WebGPU render.
+window.golf = window.viewer;
+window.golfBootstrap = Object.freeze({
+  get ready() { return viewerReady && sm._ready && sm.renderer.backend?.isWebGPUBackend === true; },
+  get stage() { return viewerReady ? 'ready' : 'failed'; },
+});

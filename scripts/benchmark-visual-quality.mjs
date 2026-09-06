@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { atomicJsonCheckpoint } from './lib/atomic-json.mjs';
 import { decodePNG } from './lib/png.mjs';
+import { fitBrowserViewport } from './lib/browser-viewport.mjs';
 
 const MODES = Object.freeze(['auto', 'battery', 'balanced', 'quality', 'ultra']);
 const SCENARIOS = Object.freeze([
@@ -69,7 +70,6 @@ camera scenario, writing PNGs plus report.json under --out.
 
 Options:
   --url URL             Local Vite base URL (default: http://127.0.0.1:5173)
-  --course ID           Course route: default or premium-range (default: default)
   --out DIR             Capture/report directory (default: benchmarks/visual-quality)
   --size WxH            CSS viewport size (default: 1280x720)
   --modes LIST          auto,battery,balanced,quality,ultra (default: all)
@@ -523,16 +523,10 @@ const main = async () => {
   if (!Number.isFinite(fov) || fov <= 0 || fov >= 180) throw new Error('--fov must be between 0 and 180 degrees.');
   const timeoutMs = parsePositiveInteger(arg('timeout-ms', 90_000), 'timeout-ms', { minimum: 1_000 });
   const base = String(arg('url', process.env.BENCHMARK_URL || 'http://127.0.0.1:5173'));
-  const course = String(arg('course', 'default')).trim();
-  if (!['default', 'premium-range'].includes(course)) {
-    throw new Error(`--course must be default or premium-range; received ${course}.`);
-  }
-  const route = new URL('/index.html', base);
+  const route = new URL('/range.html', base);
   if (!['http:', 'https:'].includes(route.protocol)) {
     throw new Error(`--url must be an HTTP(S) local route; received ${route.protocol}`);
   }
-  route.searchParams.set('view', 'practice');
-  if (course === 'premium-range') route.searchParams.set('course', course);
   const outDir = resolve(String(arg('out', 'benchmarks/visual-quality')));
   const reportPath = join(outDir, 'report.json');
   const chrome = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -626,8 +620,8 @@ const main = async () => {
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
-        '--window-position=-4000,-4000',
-        `--window-size=${width},${height + 90}`,
+        '--window-position=8,40',
+        '--window-size=960,640',
         '--enable-unsafe-webgpu',
         '--hide-scrollbars',
         '--mute-audio',
@@ -640,6 +634,7 @@ const main = async () => {
     });
 
     page = await browser.newPage();
+    await fitBrowserViewport(page, width, height, { benchmark: true });
     page.setDefaultTimeout(timeoutMs);
     page.setDefaultNavigationTimeout(timeoutMs);
     page.on('console', (message) => {

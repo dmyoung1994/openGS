@@ -17,6 +17,25 @@ test('terrain keeps contact shading physically lit without emissive compensation
     'sand microaggregate must reuse an existing filtered material sample');
   assert.match(source, /const sandSurface\s*=\s*sandHeight\.mul\(0\.74\)\.add\(sandRake\)[\s\S]*?sandMicro\.sub\(1\.0\)\.mul\(0\.055\)/,
     'sand needs registered microaggregate, aggregate, and rake relief at declared world scales');
+  assert.match(source, /fresh_pine_straw_color_roughness_v2\.png/,
+    'pine-straw ground must load its registered albedo/roughness pack');
+  assert.match(source, /fresh_pine_straw_normal_height_ao_v2\.png/,
+    'pine-straw ground must load its registered normal/height/AO pack');
+  assert.match(source, /const forestFloorDepthM = this\.uForestFloorDepth\.mul\(forestFloorRayWeight\)/,
+    'pine-straw relief must remain a bounded physical height');
+  assert.match(source, /forestFloorParallaxUV\([\s\S]*?forestFloorRayWeight,[\s\S]*?3,/,
+    'the native forest floor must use bounded layered parallax rather than a flat colour sample');
+  assert.match(source, /const forestFloorNormalXY = forestFloorNormalHeightAo\.rg/,
+    'forest-floor relief and normal must remain registered in one UV set');
+  assert.match(source, /const forestFloorUv = worldXZ\.div\(2\.0\);/,
+    'every forest-floor PBR channel must retain the source two-metre projection');
+  assert.match(source, /const forestFloorSourceMean = vec3\(0\.162029, 0\.056128, 0\.024158\)/);
+  assert.match(source, /oneMinus\(smoothstep\(4\.5, 10\.5, forestFloorLod\)\)/,
+    'distant albedo motifs must retire by footprint without another texture read');
+  assert.doesNotMatch(source, /forestFloorUvB|forestFloorColorRoughnessB/,
+    'colour may not rotate away from the registered normal, height, AO, and roughness');
+  assert.match(source, /const forestTangentX = vec3/,
+    'forest-floor tangent normal must be composed in the terrain basis');
   assert.match(source, /sandGrain\s*=\s*zones\.sandSignal/,
     'sand pigment must reuse its registered relief signal');
   assert.doesNotMatch(source, /mat\.emissiveNode\s*=/, 'terrain must not fake bunker bounce with emissive light');
@@ -30,7 +49,7 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'mown/rough bake transition must follow a world-space shoulder, not a camera radius');
   assert.match(source, /const visualGreen = smoothstep\(-0\.04, 0\.04, sd\.g\)/,
     'green/collar construction must use the exact hard mowing cut');
-  assert.match(source, /const visualFringe = smoothstep\(-0\.04, 0\.04, sd\.g\.add\(zones\.fringeW\)\)/,
+  assert.match(source, /const visualFringe = smoothstep\(-0\.04, 0\.04, aux\.g\)/,
     'the collar outer cut must remain exact rather than inheriting a biome warp');
   assert.doesNotMatch(source, /targetWarp/,
     'green and fringe boundaries must not reuse the ecological fairway warp');
@@ -66,7 +85,7 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'the fringe needs registered sub-metre density contrast instead of a flat dark ring');
   assert.match(source, /const stripLay\s*=\s*smoothstep\(0\.28, 0\.72, stripWave\)/,
     'mower runs must form equal-width passes instead of one long cosine gradient');
-  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(0\.006\)/,
+  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(MOW_STRIPE_ALBEDO_CONTRAST\)/,
     'fairway pigment must support rather than paint the reel-pass response');
   assert.match(source, /const mowResolution\s*=\s*oneMinus\(smoothstep\(0\.28, 1\.10, duvM\)\)/,
     'mowing must recede by surface footprint without a camera or ball-centred cutoff');
@@ -89,7 +108,7 @@ test('turf transitions and grazing response stay world-stable', async () => {
   assert.doesNotMatch(source, /uNear0|uNear1|const camDist\s*=/,
     'detail handoff must not be camera-distance/radial');
   assert.match(source, /turfSelfShadow\(\s*turfNrhArrayNode, int\(set\.layer\), uvP, dNrh\.b, sunUVFull, lod, rayActive, 2/,
-    'terrain contact must use a bounded sun-directed canopy test');
+    'terrain contact must use the same bounded, registered NRH level as its sun-directed canopy test');
   assert.doesNotMatch(source, /screenSpace|screen-space.*ao|cameraPosition[^\n]*ao/i,
     'terrain contact must not depend on unstable screen-space AO');
 });
@@ -113,9 +132,9 @@ test('pond bank material follows the authored filtered water SDF', async () => {
   const source = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
   assert.match(source, /waterZoneTexture/, 'Terrain must expose the pond SDF as a borrowed GPU texture');
   assert.match(source, /waterTexture\?\.dispose\(\)/, 'Terrain must own and release the pond SDF texture');
-  assert.match(source, /turfZoneMasks\(zoneSample, waterZoneSample, this\.zones\)/,
+  assert.match(source, /turfZoneMasks\(zoneSample, zoneAuxSample, waterZoneSample, this\.zones\)/,
     'terrain shading must consume the authored pond SDF rather than a circular fallback');
-  assert.match(source, /const waterZoneSample = texture\(this\._zoneMap\.waterTexture, macroUv\)\.toVar/,
+  assert.match(source, /const waterZoneSample = zoneArray\.sample\(macroUv\)\.depth\(int\(2\)\)\.toVar/,
     'bank transition must hoist one filtered water SDF and baked-signal lookup');
   assert.match(source, /const waterSD = waterSample\.x/);
   assert.match(source, /const bankWidthNoise = waterSample\.y[\s\S]*?const bankWidth = float\(0\.15\)\.add\(bankWidthNoise\.mul\(0\.15\)\)[\s\S]*?const bankEnvelope = oneMinus\(smoothstep\(0\.0, bankWidth, bankDistance\)\)\.mul\(outsideWater\)/,

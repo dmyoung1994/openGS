@@ -25,7 +25,7 @@ const memoryStorage = (initial = {}) => {
   };
 };
 
-test('profiles expose bounded render scales and the two frame budgets', () => {
+test('profiles preserve native scene resolution and expose the two frame budgets', () => {
   assert.deepEqual(Object.keys(VISUAL_QUALITY_MODE_PROFILES), ['battery', 'balanced', 'quality', 'ultra']);
   assert.equal(VISUAL_QUALITY_MODE_PROFILES.battery.targetMs, 33.3);
   assert.equal(VISUAL_QUALITY_MODE_PROFILES.balanced.targetMs, 33.3);
@@ -33,9 +33,7 @@ test('profiles expose bounded render scales and the two frame budgets', () => {
   assert.equal(VISUAL_QUALITY_MODE_PROFILES.ultra.targetMs, 16.7);
 
   for (const profile of Object.values(VISUAL_QUALITY_MODE_PROFILES)) {
-    assert.ok(profile.renderScale.min > 0);
-    assert.ok(profile.renderScale.min < profile.renderScale.initial);
-    assert.ok(profile.renderScale.initial < profile.renderScale.max);
+    assert.deepEqual(profile.renderScale, { min: 1, max: 1, initial: 1 });
     assert.ok(Object.isFrozen(profile));
     assert.ok(Object.isFrozen(profile.renderScale));
   }
@@ -50,7 +48,7 @@ test('auto mode uses the capability-derived start and explicit modes remain sele
   });
   assert.equal(ultra.mode, 'auto');
   assert.equal(ultra.activeMode, 'ultra');
-  assert.equal(ultra.snapshot().targetMs, 16.7);
+  assert.equal(ultra.snapshot().targetMs, 33.3);
 
   const conservative = new VisualQualityController({
     tier: 'conservative',
@@ -105,10 +103,10 @@ test('manual mode selection starts a fresh pressure observation window', () => {
   assert.equal(fresh.sampleCount, 2);
 });
 
-test('overload changes resolution first, then respects the slow cooldown', () => {
+test('fixed quality mode stays native under overload', () => {
   const controller = new VisualQualityController({
     mode: 'quality',
-    renderScale: 0.82,
+    renderScale: 1,
     ewmaAlpha: 1,
     degradeAfterSamples: 3,
     cooldownMs: 1000,
@@ -119,21 +117,21 @@ test('overload changes resolution first, then respects the slow cooldown', () =>
   controller.ingestSample({ frameMs: 40 }, 10);
   const firstChange = controller.ingestSample({ frameMs: 40 }, 20);
   assert.equal(firstChange.activeMode, 'quality');
-  assert.equal(firstChange.renderScale, 0.74);
-  assert.equal(firstChange.lastAdaptation.kind, 'resolution');
+  assert.equal(firstChange.renderScale, 1);
+  assert.equal(firstChange.lastAdaptation.kind, 'bounded');
 
   const duringCooldown = controller.ingestSample({ frameMs: 40 }, 500);
-  assert.equal(duringCooldown.renderScale, 0.74);
+  assert.equal(duringCooldown.renderScale, 1);
   controller.ingestSample({ frameMs: 40 }, 1020);
   const afterCooldown = controller.ingestSample({ frameMs: 40 }, 1030);
-  assert.equal(afterCooldown.renderScale, 0.66);
+  assert.equal(afterCooldown.renderScale, 1);
   assert.equal(afterCooldown.lastAdaptation.direction, 'down');
 });
 
-test('recovery also changes resolution first and requires sustained headroom', () => {
+test('fixed balanced mode stays native under sustained headroom', () => {
   const controller = new VisualQualityController({
     mode: 'balanced',
-    renderScale: 0.70,
+    renderScale: 1,
     ewmaAlpha: 1,
     upgradeAfterSamples: 3,
     cooldownMs: 1000,
@@ -143,85 +141,57 @@ test('recovery also changes resolution first and requires sustained headroom', (
   controller.ingestSample({ gpuMs: 10 }, 0);
   controller.ingestSample({ gpuMs: 10 }, 10);
   const firstChange = controller.ingestSample({ gpuMs: 10 }, 20);
-  assert.equal(firstChange.renderScale, 0.74);
-  assert.equal(firstChange.lastAdaptation.kind, 'resolution');
+  assert.equal(firstChange.renderScale, 1);
+  assert.equal(firstChange.lastAdaptation.kind, 'bounded');
 
   controller.ingestSample({ gpuMs: 10 }, 30);
   controller.ingestSample({ gpuMs: 10 }, 40);
   const afterCooldown = controller.ingestSample({ gpuMs: 10 }, 1020);
-  assert.equal(afterCooldown.renderScale, 0.78);
+  assert.equal(afterCooldown.renderScale, 1);
 });
 
-test('auto changes workload only after reaching a render-scale bound', () => {
-  const controller = new VisualQualityController({
-    limits: highLimits(),
-    hardwareConcurrency: 12,
-    deviceMemoryGiB: 32,
-    renderScale: 0.67,
-    ewmaAlpha: 1,
-    degradeAfterSamples: 1,
-    cooldownMs: 0,
-    persist: false,
-  });
+function observe(controller, from, to, metrics) {
+  for (let atMs = from; atMs <= to; atMs += 20) controller.ingestSample(metrics, atMs);
+  return controller.snapshot();
+}
 
-  const snapshot = controller.ingestSample({ frameMs: 30 }, 0);
-  assert.equal(snapshot.activeMode, 'quality');
-  assert.equal(snapshot.renderScale, 0.67);
-  assert.equal(snapshot.lastAdaptation.kind, 'workload');
-  assert.equal(snapshot.lastAdaptation.fromMode, 'ultra');
-  assert.equal(snapshot.lastAdaptation.toMode, 'quality');
+test('Auto keeps 30 fps across tiers and demotes after two complete overloaded windows', () => {
+  const controller = new VisualQualityController({ limits: highLimits(), hardwareConcurrency: 12, deviceMemoryGiB: 32, persist: false });
+  assert.equal(observe(controller, 0, 2000, { frameMs: 40 }).activeMode, 'ultra');
+  const changed = observe(controller, 2020, 4000, { frameMs: 40 });
+  assert.equal(changed.activeMode, 'quality'); assert.equal(changed.targetMs, 33.3);
+  assert.equal(changed.renderScale, 1); assert.equal(changed.lastAdaptation.reason, 'performance');
+  assert.equal(controller.setMode('ultra').targetMs, 16.7, 'manual Ultra retains its explicit target');
 });
 
-test('auto demotes a bounded workload after sustained exact-target misses', () => {
-  const controller = new VisualQualityController({
-    tier: 'high', hardwareConcurrency: 6, deviceMemoryGiB: 8,
-    renderScale: 0.60, ewmaAlpha: 1, degradeAfterSamples: 3,
-    cooldownMs: 0, persist: false,
-  });
-  assert.equal(controller.activeMode, 'quality');
-
-  controller.ingestSample({ frameMs: 33.45 }, 0);
-  controller.ingestSample({ frameMs: 33.45 }, 1);
-  const snapshot = controller.ingestSample({ frameMs: 33.45 }, 2);
-
-  assert.equal(snapshot.activeMode, 'balanced');
-  assert.equal(snapshot.lastAdaptation.kind, 'workload');
-  assert.equal(snapshot.lastAdaptation.reason, 'performance');
+test('Auto catches sustained small target misses and ignores loading windows', () => {
+  const controller = new VisualQualityController({ tier: 'high', hardwareConcurrency: 6, persist: false });
+  observe(controller, 0, 2000, { frameMs: 33.45 });
+  controller.ingestSample({ eligible: false });
+  assert.equal(observe(controller, 4000, 6000, { frameMs: 33.45 }).activeMode, 'quality');
+  assert.equal(observe(controller, 6020, 8000, { frameMs: 33.45 }).activeMode, 'balanced');
 });
 
-test('auto recovery never exceeds the capability-derived starting ceiling', () => {
-  const controller = new VisualQualityController({
-    tier: 'high', hardwareConcurrency: 6, deviceMemoryGiB: 8,
-    renderScale: 0.90, ewmaAlpha: 1, upgradeAfterSamples: 1,
-    cooldownMs: 0, persist: false,
-  });
-  assert.equal(controller.activeMode, 'quality');
-  const snapshot = controller.ingestSample({ frameMs: 8 }, 0);
-  assert.equal(snapshot.activeMode, 'quality');
-  assert.equal(snapshot.lastAdaptation.kind, 'bounded');
+test('Auto requires ten seconds of headroom, trials promotion, and delays failed retries', () => {
+  const controller = new VisualQualityController({ limits: highLimits(), hardwareConcurrency: 12, deviceMemoryGiB: 32, persist: false });
+  observe(controller, 0, 4000, { frameMs: 40, gpuMs: 38, cpuMs: 8 });
+  assert.equal(observe(controller, 4020, 13980, { frameMs: 20, gpuMs: 20, cpuMs: 8 }).activeMode, 'quality');
+  const trial = observe(controller, 14000, 14000, { frameMs: 20, gpuMs: 20, cpuMs: 8 });
+  assert.equal(trial.activeMode, 'ultra'); assert.ok(trial.promotionTrial);
+  const failed = observe(controller, 14020, 16000, { frameMs: 40, gpuMs: 38, cpuMs: 8 });
+  assert.equal(failed.activeMode, 'quality'); assert.equal(failed.lastAdaptation.reason, 'promotion-trial-failed');
+  assert.equal(failed.promotionRetryAfter, 46000);
+  assert.equal(observe(controller, 16020, 44000, { frameMs: 20, gpuMs: 20, cpuMs: 8 }).activeMode, 'quality');
+  assert.equal(observe(controller, 44020, 46000, { frameMs: 20, gpuMs: 20, cpuMs: 8 }).activeMode, 'ultra');
+  const accepted = observe(controller, 46020, 52000, { frameMs: 20, gpuMs: 20, cpuMs: 8 });
+  assert.equal(accepted.activeMode, 'ultra'); assert.equal(accepted.promotionTrial, null);
 });
 
-test('auto promotion requires headroom against the destination frame budget', () => {
-  const controller = new VisualQualityController({
-    limits: highLimits(), hardwareConcurrency: 12, deviceMemoryGiB: 32,
-    ewmaAlpha: 1, degradeAfterSamples: 1, upgradeAfterSamples: 1,
-    cooldownMs: 0, persist: false,
-  });
-
-  // Begin in Ultra, force one workload demotion at the lower resolution bound,
-  // then place Quality at its upper bound. Twenty milliseconds is strong Quality
-  // performance but is not enough headroom for a 16.7 ms Ultra destination.
-  controller.setRenderScale(VISUAL_QUALITY_MODE_PROFILES.ultra.renderScale.min);
-  controller.ingestSample({ frameMs: 30 }, 0);
-  assert.equal(controller.activeMode, 'quality');
-  controller.setRenderScale(VISUAL_QUALITY_MODE_PROFILES.quality.renderScale.max);
-  const held = controller.ingestSample({ frameMs: 20 }, 1);
-  assert.equal(held.activeMode, 'quality');
-  assert.equal(held.lastAdaptation.kind, 'bounded');
-
-  const promoted = controller.ingestSample({ frameMs: 10 }, 2);
-  assert.equal(promoted.activeMode, 'ultra');
-  assert.equal(promoted.lastAdaptation.kind, 'workload');
+test('Auto respects hardware ceiling and CPU bottlenecks', () => {
+  const controller = new VisualQualityController({ tier: 'high', hardwareConcurrency: 6, persist: false });
+  assert.equal(observe(controller, 0, 12000, { frameMs: 8, gpuMs: 6, cpuMs: 4 }).activeMode, 'quality');
+  const limited = observe(controller, 12020, 16000, { frameMs: 40, gpuMs: 8, cpuMs: 38 });
+  assert.equal(limited.activeMode, 'balanced'); assert.equal(limited.observation.limitingWork, 'cpu');
 });
 
 test('mode persistence is versioned and browser storage is optional', () => {
@@ -243,8 +213,8 @@ test('mode persistence is versioned and browser storage is optional', () => {
 test('invalid inputs are rejected without allowing an unbounded scale', () => {
   assert.throws(() => new VisualQualityController({ mode: 'cinematic' }), /Unknown visual quality mode/);
   const controller = new VisualQualityController({ mode: 'battery', persist: false });
-  assert.equal(controller.setRenderScale(99).renderScale, 0.70);
-  assert.equal(controller.setRenderScale(-1).renderScale, 0.50);
+  assert.equal(controller.setRenderScale(99).renderScale, 1);
+  assert.equal(controller.setRenderScale(-1).renderScale, 1);
   assert.throws(() => controller.setRenderScale(Number.NaN), /finite/);
 });
 
@@ -264,17 +234,17 @@ test('presentation lock freezes one fixed mode and scale under frame pressure', 
     active: true,
     id: 'presentation-1',
     mode: 'quality',
-    renderScale: 0.9,
+    renderScale: 1,
   });
   assert.equal(locked.mode, 'quality');
   assert.equal(locked.activeMode, 'quality');
-  assert.equal(locked.renderScale, 0.9);
+  assert.equal(locked.renderScale, 1);
 
   for (let sample = 0; sample < 100; sample += 1) {
     controller.ingestSample({ frameMs: 200 }, sample * 200);
   }
   const pressured = controller.snapshot();
-  assert.equal(pressured.renderScale, 0.9);
+  assert.equal(pressured.renderScale, 1);
   assert.equal(pressured.activeMode, 'quality');
   assert.equal(pressured.sampleCount, before.sampleCount,
     'capture samples must not perturb the live estimator that will be restored');

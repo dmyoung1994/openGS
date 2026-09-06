@@ -23,7 +23,40 @@ import { replayGcquadCorpus, summarize } from '../scripts/validate-ball-flight.m
 import { formatDirectionalDegrees } from '../src/ui/MetricsPanel.js';
 
 const stillAir = makeEnv({ sampleWind: (_position, _time, out) => out.set(0, 0, 0) });
+
+test('a rolling shot entering water requires recovery before its rest event', () => {
+  const ball = new Ball({ heightAt: () => 0, normalAt: () => new Vector3(0, 1, 0),
+    surfaceAt: (_x, z) => z < -0.2 ? 'water' : 'green' }, stillAir);
+  const events = [];
+  ball.on('hazard', () => events.push('hazard')).on('rest', () => events.push('rest'));
+  ball.placeAt(0, 0);
+  ball.launch({ ballSpeed: 5, launchAngle: 0, spinRate: 0, azimuth: 0 });
+  for (let i = 0; i < 600 && ball.state !== 'rest'; i++) ball.update(1 / 60);
+  assert.deepEqual(events, ['hazard', 'rest']);
+  assert.ok(ball.position.z < -0.2 && ball.position.z > -0.23);
+  assert.equal(ball.velocity.length(), 0);
+  assert.equal(ball.angularVelocity.length(), 0);
+});
 const almost = (actual, expected, epsilon = 1e-8) => assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} != ${expected} ±${epsilon}`);
+
+test('metric-driven putts preserve surface, firmness, slope and frame-rate ordering', () => {
+  const run = ({ name = 'green', firmness = 'medium', slope = 0, speed = 5, dt = 1 / 60 } = {}) => {
+    const ball = new Ball({ heightAt: (_x, z) => slope * z,
+      normalAt: () => new Vector3(0, 1, -slope).normalize(), surfaceAt: () => name },
+    makeEnv({ groundFirmness: firmness, sampleWind: (_p, _t, out) => out.set(0, 0, 0) }));
+    ball.placeAt(0, 0);
+    ball.launch({ ballSpeed: speed, launchAngle: 0, spinRate: 0, azimuth: 0 });
+    for (let elapsed = 0; elapsed < 30 && ball.state !== 'rest'; elapsed += dt) ball.update(dt);
+    assert.equal(ball.state, 'rest', JSON.stringify({ name, firmness, slope, speed, dt }));
+    assert.ok(ball.position.toArray().every(Number.isFinite));
+    return -ball.position.z;
+  };
+  const green = run(), fairway = run({ name: 'fairway' }), rough = run({ name: 'rough' }), sand = run({ name: 'sand' });
+  assert.ok(green > fairway && fairway > rough && rough > sand);
+  assert.ok(run({ firmness: 'firm' }) > green && green > run({ firmness: 'soft' }));
+  assert.ok(run({ slope: .02 }) > green && green > run({ slope: -.02 }));
+  for (const speed of [.2, 1, 5, 10]) almost(run({ speed, dt: 1 / 30 }), run({ speed, dt: 1 / 120 }), 1e-8);
+});
 
 test('source coefficient fixtures are exact table samples and interpolation is continuous', () => {
   assert.deepEqual(AERO_SOURCE.reynolds, [20_000, 40_000, 70_000, 100_000, 150_000, 200_000]);
@@ -317,6 +350,9 @@ test('Ball penetration terminates at the water plane while missing calibration f
   const ball = waterEntryBall({ velocity: new Vector3(5, -7, 0) });
   const impacts = [];
   const hazards = [];
+  const lifecycle = [];
+  ball.on('hazard', () => lifecycle.push('hazard'));
+  ball.on('rest', () => lifecycle.push('rest'));
   ball.on('waterImpact', (event) => impacts.push(event));
   ball.on('hazard', (event) => hazards.push(event));
   ball.update(0.002);
@@ -324,7 +360,10 @@ test('Ball penetration terminates at the water plane while missing calibration f
   assert.equal(impacts.length, 1);
   assert.equal(impacts[0].kind, 'penetration');
   assert.equal(hazards.length, 1);
+  assert.deepEqual(lifecycle, ['hazard', 'rest'], 'terminal UI must know the recovery requirement before presenting rest');
   assert.strictEqual(hazards[0], impacts[0]);
+  almost(ball.landingSpeedMph, impacts[0].impactSpeed / 0.44704);
+  almost(ball.descentDeg, impacts[0].incidentAngleDegrees);
   almost(ball.position.y, BALL.radius, 1e-12);
   assert.deepEqual(ball.velocity.toArray(), [0, 0, 0]);
   assert.throws(

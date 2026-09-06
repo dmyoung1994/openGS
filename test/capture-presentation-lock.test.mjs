@@ -17,6 +17,10 @@ test('continuous production captures hold and restore the existing quality polic
     'canonical footage should render at native internal resolution');
   assert.match(source, /frame >= 4/,
     'capture must wait for the intentional quality resize before sampling signatures');
+  assert.match(source, /window\.golf\.visualAssets\.ready\(window\.golf\.quality\.snapshot\(\)\.activeMode\)/,
+    'benchmark sentinels must begin only after the locked visual profile is resident');
+  assert.match(source, /if \(!assetReadiness\?\.ready \|\| !assetReadiness\?\.requiredReady\)/,
+    'an incomplete visual profile must fail the capture instead of changing mid-sample');
 });
 
 test('continuous captures continue to enforce a single production viewport signature', () => {

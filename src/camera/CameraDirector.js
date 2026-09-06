@@ -59,6 +59,12 @@ export class CameraDirector {
     this.pos.y += 1.45;
     this.look.copy(ballPos).addScaledVector(this.aim, 30);
     this.look.y = ballPos.y - 2.5;
+    if (this.addressViewport) {
+      const { height, bottom } = this.addressViewport;
+      const down = Math.max(0, 1 - 2 * (bottom + 28) / height);
+      const pitch = Math.atan2(1.45, 4.5) - Math.atan(down * Math.tan(this.camera.getEffectiveFOV() * Math.PI / 360));
+      this.look.y = Math.min(this.look.y, this.pos.y - Math.tan(pitch) * 34.5);
+    }
   }
 
   onLaunch(ball) {

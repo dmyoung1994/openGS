@@ -1,8 +1,20 @@
 import { Vector3 } from 'three';
+import { loadCourseLibrary, savedCoursePath } from './course/CourseLibrary.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { SceneManager } from './scene/SceneManager.js';
+import { LoadingGreen } from './scene/LoadingGreen.js';
+import { prepareSceneTextures } from './scene/prepareSceneTextures.js';
+import { TURF_PACK_SOURCE_URLS } from './terrain/TurfSources.js';
+import './ui/loading.css';
+import './ui/tree-builder.css';
 import { Lighting } from './scene/Lighting.js';
 import { Range } from './scene/Range.js';
+import { CourseScene } from './scene/CourseScene.js';
+import { CreatorScene } from './scene/CreatorScene.js';
+import { PlayScene } from './scene/PlayScene.js';
+import { createCreatorCup, GOLF_HOLE_RADIUS_M, CREATOR_CUP_DEPTH_M } from './scene/CreatorCup.js';
 import { Tracer } from './scene/Tracer.js';
+import { AimGuide } from './scene/AimGuide.js';
 import { CameraDirector } from './camera/CameraDirector.js';
 import { FreeCamera } from './camera/FreeCamera.js';
 import { EvaluatorCamera } from './camera/EvaluatorCamera.js';
@@ -10,7 +22,7 @@ import { MetricsPanel } from './ui/MetricsPanel.js';
 import { BuilderPanel } from './ui/BuilderPanel.js';
 import { Menu } from './ui/Menu.js';
 import { TurfPanel } from './ui/TurfPanel.js';
-import { Minimap } from './ui/Minimap.js';
+import { createHoleShotPlan, Minimap, resolveAimTarget } from './ui/Minimap.js';
 import { Ball } from './physics/Ball.js';
 import { makeEnv } from './physics/ballistics.js';
 import { GOLF_BALL_WATER_ENTRY_MODEL } from './physics/waterInteraction.js';
@@ -18,7 +30,9 @@ import { sitDepth } from './physics/groundInteraction.js';
 import { BallLie } from './scene/BallLie.js';
 import { renderedBallSitDepth } from './scene/NearTurfPolicy.js';
 import { airDensity, airViscosity } from './physics/constants.js';
-import { loadCourse, normalizeCourse } from './course/course.js';
+import {
+  classifyCourseRuntimeChange, loadCourse, normalizeCourse, normalizeSurfaceMaterials,
+} from './course/course.js';
 import { createCreatorCanvasCourse, creatorCanvasCameraPose } from './course/CreatorCanvas.js';
 import { MPH_TO_MS, DEG_TO_RAD, M_TO_YARD } from './util/units.js';
 import {
@@ -40,6 +54,11 @@ import {
 import { createVisualAssetResidency } from './assets/VisualAssetResidency.js';
 import { launchShotToBallParams } from './input/LaunchMonitorInput.js';
 import { DevelopmentLaunchMonitorAdapter } from './input/DevelopmentLaunchMonitorAdapter.js';
+import { GolfAudio, prepareGolfAudioContext } from './audio/GolfAudio.js';
+import { AudioSettings } from './ui/AudioSettings.js';
+import {
+  dampNearBallTurfDetail, nearBallTurfDetailTarget, nearBallTurfFocusFollowAlpha,
+} from './terrain/NearBallTurfDetail.js';
 
 // Clear alpine late-morning key from the left/downrange: a 37° elevation keeps
 // the source plausible while its lateral component gives terrain relief and
@@ -47,8 +66,11 @@ import { DevelopmentLaunchMonitorAdapter } from './input/DevelopmentLaunchMonito
 // consumer receives this same authored direction through EnvironmentGpuBindings.
 const SUN = new Vector3(-0.72, 0.60, -0.32).normalize();
 const QUALITY_OUTPUT_PIXEL_CAPS = Object.freeze({
-  battery: 2_300_000,
-  balanced: 3_700_000,
+  // Auto workload adaptation must never soften the whole scene. Battery and
+  // Balanced reduce bounded scene workloads, while retaining Quality's output
+  // cap so a mode change cannot silently lower high-DPI presentation resolution.
+  battery: 5_760_000,
+  balanced: 5_760_000,
   quality: 5_760_000,
   ultra: 8_300_000,
 });
@@ -64,9 +86,13 @@ const VISUAL_ASSET_VARIANT_FOR_MODE = Object.freeze({
 // the same material/compute graph and only reduce the bounded rough/deep-rough
 // population on lower modes. Maintained fairway and green turf are unaffected.
 const QUALITY_GRASS_WORKLOADS = Object.freeze({
-  battery: Object.freeze({ densityScale: 0.58, radiusScale: 0.68, farTierScale: 0.28 }),
-  balanced: Object.freeze({ densityScale: 0.74, radiusScale: 0.82, farTierScale: 0.55 }),
-  quality: Object.freeze({ densityScale: 0.90, radiusScale: 0.94, farTierScale: 0.82 }),
+  // The authored rough atlas owns distant coverage in live modes. Launching the
+  // 192² candidate field through the former 4R continuation cost ~19 ms even when
+  // almost every far candidate was rejected. Keep real crossed blades in the full
+  // near field; reserve the long continuation for explicit Ultra presentation.
+  battery: Object.freeze({ densityScale: 0.58, radiusScale: 0.68, farTierScale: 0.00 }),
+  balanced: Object.freeze({ densityScale: 0.74, radiusScale: 0.82, farTierScale: 0.00 }),
+  quality: Object.freeze({ densityScale: 0.90, radiusScale: 0.94, farTierScale: 0.00 }),
   ultra: Object.freeze({ densityScale: 1.00, radiusScale: 1.00, farTierScale: 1.00 }),
 });
 const QUALITY_TREE_WORKLOADS = Object.freeze({
@@ -101,11 +127,24 @@ const DEFAULT_TIMELINE_CLOCK = Object.freeze({
   playback: Object.freeze({ paused: false, rate: 1 }),
 });
 const startupQuery = new URL(window.location.href).searchParams;
-const coursePath = startupQuery.get('course') === 'premium-range' ? '/premium-range.json' : '/course.json';
-const isCreatorPage = window.location.pathname === '/creator.html'
-  || startupQuery.get('view') === 'creator';
-let creatorCanvasActive = isCreatorPage;
+const startupView = startupQuery.get('view');
+const directPage = window.location.pathname;
+const hasDirectScenePage = ['/range.html', '/creator.html', '/play.html'].includes(directPage);
+// An explicit page owns its scene even when a generic harness appends a stale
+// `?view=` value. Query routing is used only by the shared landing entry.
+const isRangePage = directPage === '/range.html'
+  || (!hasDirectScenePage && startupView === 'practice');
+const isCreatorPage = directPage === '/creator.html'
+  || (!hasDirectScenePage && startupView === 'creator');
+const isPlayPage = directPage === '/play.html'
+  || (!hasDirectScenePage && startupView === 'play');
+const referenceCourseSelected = startupQuery.get('course') === 'grasslands-reference';
+let coursePath = referenceCourseSelected ? '/courses/grasslands-reference.json'
+  : isRangePage ? '/beach-range.json' : '/course.json';
+let creatorCanvasActive = isCreatorPage && !referenceCourseSelected && startupQuery.get('authored') !== '1';
 let creatorCanvasVariant = 0;
+let loadingGreen = null;
+let bootstrapAudioContext = null;
 
 const app = document.getElementById('app');
 const sm = new SceneManager(app);
@@ -148,6 +187,7 @@ window.golfBootstrap = Object.freeze({
   get stage() { return bootstrapDiagnostics.stage; },
   get ready() { return bootstrapDiagnostics.stage === 'ready'; },
   get elapsedMs() { return Math.round(performance.now() - bootstrapStartedAt); },
+  get loadingGreen() { return loadingGreen?.diagnostics ?? null; },
 });
 let lighting;
 // Declared before the initial quality application: WebGPU is ready before the
@@ -372,8 +412,14 @@ function applyVisualQuality(snapshot = qualityController?.snapshot()) {
       || previous.weatherPolicy !== weatherPolicy),
   );
   if (weatherChanged) sm.setWeatherSkyWorkload(weatherPolicy);
+  const shadows = lighting?.cameraShadows;
+  const shadowsChanged = shadows && (modeChanged || previous?.shadowTarget !== shadows);
+  if (shadowsChanged) {
+    shadows.setWorkloadPolicy(snapshot.activeMode);
+    sm.invalidateTemporalHistory('shadow workload policy');
+  }
 
-  if (resolutionChanged || grassChanged || treeChanged || weatherChanged || !previous) {
+  if (resolutionChanged || grassChanged || treeChanged || weatherChanged || shadowsChanged || !previous) {
     appliedQualityState = {
       activeMode: snapshot.activeMode,
       renderScale: snapshot.renderScale,
@@ -384,6 +430,7 @@ function applyVisualQuality(snapshot = qualityController?.snapshot()) {
       treePolicy: treeChanged ? treePolicy : previous?.treePolicy ?? null,
       weatherTarget: weatherChanged ? sm.weatherSky : previous?.weatherTarget ?? null,
       weatherPolicy: weatherChanged ? weatherPolicy : previous?.weatherPolicy ?? null,
+      shadowTarget: shadows,
     };
   }
   if (modeChanged && visualAssetCriticalReady) requestActiveVisualAssets();
@@ -434,6 +481,8 @@ const qualityApi = Object.freeze({
 });
 
 function showFatalEnvironmentError(error) {
+  bootstrapAudioContext?.dispose();
+  loadingGreen?.stop();
   console.error('Required environment initialization failed.', error);
   bootstrapDiagnostics.error = String(error?.message || error);
   setBootstrapStage('failed', { detail: 'Required environment or visual assets could not be verified. Reload after fixing the asset or course.' });
@@ -454,6 +503,14 @@ function showFatalEnvironmentError(error) {
 try {
   setBootstrapStage('webgpu-initializing', { detail: 'Acquiring the strict WebGPU device…' });
   await sm.initialize();
+  setBootstrapStage('audio-device-initializing', { detail: 'Preparing the audio device before the putting scene…' });
+  const audioDeviceStarted = performance.now();
+  bootstrapAudioContext = prepareGolfAudioContext();
+  bootstrapDiagnostics.audioDevice = { supported: bootstrapAudioContext.supported,
+    durationMs: performance.now() - audioDeviceStarted };
+  // Installed decoder supports transferable worker jobs; an async GLTF API alone
+  // otherwise executes its WASM buffer decoding on the animation thread.
+  MeshoptDecoder.useWorkers(2);
   const navigatorHints = globalThis.navigator ?? {};
   qualityController = new VisualQualityController({
     environmentTier: sm.environmentTier,
@@ -463,6 +520,16 @@ try {
   applyVisualQuality();
   setBootstrapStage('webgpu-ready', { detail: 'WebGPU ready. Loading the visual asset manifest…' });
   lighting = new Lighting(sm.scene, SUN, sm.environmentTier);
+  loadingGreen = new LoadingGreen({
+    renderer: sm.renderer, environmentTier: sm.environmentTier,
+    course: normalizeCourse(createCreatorCanvasCourse({ seed: crypto.getRandomValues(new Uint32Array(1))[0] })),
+    environmentState: makeEnvironmentState(246813579, {
+      timelineSnapshot: null, tickCount: 0, windSpeedMph: 3, cloudCoverage: 0,
+    }),
+    onError: error => showFatalEnvironmentError(error),
+  });
+  await loadingGreen.prepare();
+  if (loadingGreen.error) throw loadingGreen.error;
 
   // Load and validate the renderer-independent visual manifest only after the
   // strict WebGPU device exists. This path verifies bytes; it never creates a
@@ -548,6 +615,7 @@ let environmentCatalog = null;
 let environmentAssetIntegrityReady = Promise.resolve();
 
 const tracer = new Tracer(sm.scene, { renderer: sm.renderer });
+const aimGuide = new AimGuide(sm.scene);
 const director = new CameraDirector(sm.camera);
 
 // One deterministic environment clock is authoritative for physics and rendering.
@@ -654,8 +722,13 @@ let freeCam = null;
 let evaluatorCamera = null;
 let ballLie = [];
 let flying = false;
+let aimTarget = null;
+let defaultAimTarget = null;
 let _resetTimer = null;
 let _rangeRetentionProbe = null;
+let audio = null;
+let holeStrokes = 0;
+let pendingHazard = null;
 
 // The Lab is a provider adapter, not a privileged simulation path. Future SDK
 // integrations map their packets into LaunchMonitorAdapter and subscribe this same
@@ -663,19 +736,67 @@ let _rangeRetentionProbe = null;
 const launchMonitor = new DevelopmentLaunchMonitorAdapter();
 launchMonitor.subscribeShots((shot) => hit(launchShotToBallParams(shot)));
 await launchMonitor.connect();
-const panel = new MetricsPanel({ onHit: hit, onEnvironmentChange: previewEnvironment });
-const turfPanel = new TurfPanel();
-const minimap = new Minimap();   // M to toggle; drawn from the same baked zone field as the turf
+const panel = new MetricsPanel({ onHit: hit, onEnvironmentChange: previewEnvironment, onContinue: continuePlay });
+let surfaceMaterialsPreviewBaseline = null;
+const turfPanel = new TurfPanel({
+  onApply: previewSurfaceMaterials,
+  onRevert: revertSurfaceMaterialsPreview,
+});
+const minimap = new Minimap({
+  enabled: isPlayPage || isCreatorPage,
+  onAimTarget: setAimTarget,
+});
 
 const launchMonitorApi = Object.freeze({
   snapshot: () => launchMonitor.snapshot(),
   connect: () => launchMonitor.connect(),
   disconnect: () => launchMonitor.disconnect(),
-  ingest: (shot, options) => launchMonitor.ingest(shot, options),
-  submit: (shot, options) => launchMonitor.ingest(shot, options),
+  ingest: submitLaunchShot,
+  submit: submitLaunchShot,
   get state() { return launchMonitor.state; },
   get capabilities() { return launchMonitor.capabilities; },
 });
+
+function submitLaunchShot(shot, options) {
+  if (!sm._ready || loadingGreen.diagnostics.active || shell.view !== 'practice') return { accepted: false, reason: 'not-ready' };
+  if (flying) return { accepted: false, reason: 'shot-in-progress' };
+  if (ball?.holed) return { accepted: false, reason: 'hole-complete' };
+  if (pendingHazard) return { accepted: false, reason: 'relief-required' };
+  return launchMonitor.ingest(shot, options);
+}
+
+function configurePlayHole() {
+  holeStrokes = 0;
+  pendingHazard = null;
+  if (range.sceneKind !== 'play') { ball.setCup(null); return; }
+  const green = range.targets[range.activeHole().greenStart];
+  const pin = green.pin ?? green;
+  ball.setCup({ x: pin.x, z: pin.z, y: range.terrain.heightAt(pin.x, pin.z),
+    radius: GOLF_HOLE_RADIUS_M, depth: CREATOR_CUP_DEPTH_M });
+  range.terrain.activeCup.value.set(pin.x, GOLF_HOLE_RADIUS_M, pin.z);
+  if (!range.playCup) {
+    range.playCup = createCreatorCup();
+    range.playCup.name = 'active-play-cup';
+    range.group.add(range.playCup);
+  }
+  range.playCup.position.set(pin.x, ball.cup.y, pin.z);
+}
+
+function continuePlay() {
+  if (flying || range.sceneKind !== 'play') return;
+  if (ball.holed) {
+    const holes = range.routingHoles;
+    const index = holes.findIndex(hole => hole.holeId === range.activeHoleId);
+    selectHole(holes[(index + 1) % holes.length].holeId);
+  } else if (pendingHazard) {
+    // Stroke-and-distance recovery: replay the previous lie with one penalty.
+    holeStrokes++;
+    pendingHazard = null;
+    ball.placeAt(ball.start.x, ball.start.z);
+    toAddress({ smooth: true });
+    panel.setLive(`Shot ${holeStrokes + 1} · One penalty stroke added`);
+  }
+}
 
 const SEASON_TIMELINE_DATES = Object.freeze({
   spring: '2026-04-15', summer: '2026-07-15', autumn: '2026-10-15', winter: '2026-01-15',
@@ -825,29 +946,52 @@ const timelineApi = Object.freeze({
 
 // Attach the physics event handlers to a (freshly built) ball.
 function wireBall(b) {
+  b.on('launch', (event) => {
+    audio?.handleLaunch(event);
+    if (range.sceneKind === 'play') {
+      holeStrokes++;
+      panel.setLive(`Hole ${range.activeHole().number} · Shot ${holeStrokes}`);
+    }
+  });
+  b.on('bounce', (event) => audio?.handleBounce(event));
+  b.on('groundContact', (event) => audio?.handleGroundContact(event));
   b.on('rest', (r) => {
     // Capture the terminal sample before the shot leaves the active stream. The
     // update loop checks `flying` again after Ball.update(), so this point is not
     // submitted twice when the rest event fires during the frame.
     if (tracer.count < tracer.max) tracer.push(b.position);
     flying = false;
+    audio?.handleRest(r);
     setBallShadowCasting(true, 'ball-rest');
     director.onRest(b);
     panel.showResult(r);
-    // Driving range: hold the rotating result view, then glide back to the tee for
-    // the next shot (so you hit from the mat every time). Skipped if a new shot is
-    // already in the air, the free-fly cam is active, or we've left the range view.
+    if (range.sceneKind === 'play') {
+      aimTarget = null;
+      const hole = range.activeHole();
+      const green = range.targets[hole.greenStart];
+      const pin = green?.pin ?? green;
+      defaultAimTarget = pin ? { x: pin.x, z: pin.z, role: 'green' } : null;
+    }
+    // Hold the result, then address the resting lie in Play or the tee in Practice.
     clearTimeout(_resetTimer);
+    if (range.sceneKind === 'play' && (r.holed || pendingHazard)) {
+      panel.setLive(r.holed ? `Hole complete · ${holeStrokes} ${holeStrokes === 1 ? 'stroke' : 'strokes'}` : 'Ball in water · Relief required');
+      panel.setContinuation(r.holed ? 'Next hole' : 'Replay shot · +1 penalty');
+      return;
+    }
     _resetTimer = setTimeout(() => {
       if (!flying && !freeCam?.active && shell.view === 'practice') toAddress({ smooth: true });
     }, RESULT_HOLD_MS);
   });
   b.on('hazard', (event) => {
+    if (range.sceneKind === 'play') pendingHazard = event;
     panel.setLive('— in the water —');
   });
   b.on('waterImpact', (event) => {
     range.addWaterImpact(event.position, event.impactSpeed);
+    audio?.handleWaterImpact(event);
   });
+  b.on('holed', (event) => audio?.handleHoled(event));
 }
 
 // Put the ball mesh where the ball IS, then apply a render-only contact offset. Long
@@ -857,12 +1001,12 @@ function wireBall(b) {
 function syncBallMesh() {
   range.ballMesh.position.copy(ball.position);
   const surf = range.terrain.surfaceAt(ball.position.x, ball.position.z);
-  if (ball.state !== 'airborne') {
+  if (ball.state !== 'airborne' && ball.state !== 'holing' && !ball.holed) {
     range.ballMesh.position.y -= renderedBallSitDepth(surf, sitDepth(surf));
   }
   // The ball collar is additionally surface-gated by BallLie.update(); this flag only
   // suppresses the otherwise-valid rough collar while the ball is airborne.
-  if (ballLie[0]) ballLie[0].visible = ball.state !== 'airborne';
+  if (ballLie[0]) ballLie[0].visible = ball.state !== 'airborne' && ball.state !== 'holing' && !ball.holed;
   // The regulation ball rejoins the cached map at address/rest. During a shot it
   // is intentionally excluded: redrawing a course-scale map for a 42.7 mm moving
   // caster is wasteful, while retaining its old depth sample creates a stuck,
@@ -905,6 +1049,10 @@ function containShotFailure(error) {
 // genuinely dense long grass. Mown surfaces never enable either patch and rely on the
 // scale-correct ground texture at every camera height.
 const _fwd = new Vector3();
+const _nearTurfCameraXZ = { x: 0, y: 0 };
+const _nearTurfForwardXZ = { x: 0, y: -1 };
+let _nearTurfDetailActivation = 0;
+let _nearTurfFocusReady = false;
 function updateNearTurf(t) {
   if (!ballLie.length) return;
   const cam = sm.camera;
@@ -924,17 +1072,139 @@ function updateNearTurf(t) {
   near.update(t, fx, fz, range.terrain.surfaceAt(fx, fz), { radius, fade });
 }
 
-// Address framing looking down the target line (-Z).
-function toAddress({ smooth = false } = {}) {
-  ball.placeAt(0, 2);
+function updateNearBallTurfDetail(dt) {
+  if (!range?.terrain || !ball) return;
+  const cam = sm.camera;
+  const cameraHeightMeters = Math.max(
+    0,
+    cam.position.y - range.terrain.heightAt(cam.position.x, cam.position.z),
+  );
+  const cameraBallDistanceMeters = Math.hypot(
+    cam.position.x - ball.position.x,
+    cam.position.z - ball.position.z,
+  );
+  const target = nearBallTurfDetailTarget({
+    enabled: (range.sceneKind === 'range' || range.sceneKind === 'play')
+      && shell.view !== 'menu',
+    ballState: ball.state,
+    cameraHeightMeters,
+    cameraBallDistanceMeters,
+  });
+  _nearTurfDetailActivation = dampNearBallTurfDetail(
+    _nearTurfDetailActivation,
+    target,
+    dt,
+  );
+  cam.getWorldDirection(_fwd);
+  const forwardLength = Math.hypot(_fwd.x, _fwd.z);
+  const targetForwardX = forwardLength > 1e-6 ? _fwd.x / forwardLength : _nearTurfForwardXZ.x;
+  const targetForwardY = forwardLength > 1e-6 ? _fwd.z / forwardLength : _nearTurfForwardXZ.y;
+  if (!_nearTurfFocusReady || _nearTurfDetailActivation < 0.01) {
+    _nearTurfCameraXZ.x = cam.position.x;
+    _nearTurfCameraXZ.y = cam.position.z;
+    _nearTurfForwardXZ.x = targetForwardX;
+    _nearTurfForwardXZ.y = targetForwardY;
+    _nearTurfFocusReady = true;
+  } else {
+    const follow = nearBallTurfFocusFollowAlpha(dt);
+    _nearTurfCameraXZ.x += (cam.position.x - _nearTurfCameraXZ.x) * follow;
+    _nearTurfCameraXZ.y += (cam.position.z - _nearTurfCameraXZ.y) * follow;
+    _nearTurfForwardXZ.x += (targetForwardX - _nearTurfForwardXZ.x) * follow;
+    _nearTurfForwardXZ.y += (targetForwardY - _nearTurfForwardXZ.y) * follow;
+    const smoothedLength = Math.hypot(_nearTurfForwardXZ.x, _nearTurfForwardXZ.y);
+    if (smoothedLength > 1e-6) {
+      _nearTurfForwardXZ.x /= smoothedLength;
+      _nearTurfForwardXZ.y /= smoothedLength;
+    }
+  }
+  range.terrain.setNearBallTurfDetail({
+    activation: _nearTurfDetailActivation,
+    cameraXZ: _nearTurfCameraXZ,
+    forwardXZ: _nearTurfForwardXZ,
+  });
+}
+
+function currentShotOrigin() {
+  return range?.sceneKind === 'play' ? ball.position : range?.tee ?? { x: 0, z: 2 };
+}
+
+function currentAim() {
+  const target = aimTarget ?? defaultAimTarget;
+  const origin = currentShotOrigin();
+  if (!target || Math.hypot(target.x - origin.x, target.z - origin.z) < 0.01) return range?.activeAim?.() ?? { x: 0, z: -1 };
+  return resolveAimTarget(origin, target, range.course.bounds).direction;
+}
+
+function syncDefaultAimTarget() {
+  const hole = range?.activeHole?.();
+  const green = range?.targets?.[hole?.greenStart];
+  defaultAimTarget = createHoleShotPlan(hole, green)[1] ?? null;
+  return defaultAimTarget;
+}
+
+function canAimNow() {
+  return minimap.available && !flying && !ball?.holed && !pendingHazard && ['practice', 'creator'].includes(document.body.dataset.view);
+}
+
+function getAimState() {
+  const source = currentShotOrigin();
+  const origin = source ? { x: source.x, z: source.z } : null;
+  const target = aimTarget ?? defaultAimTarget;
+  const direction = range ? currentAim() : { x: 0, z: -1 };
+  return Object.freeze({
+    origin: origin ? Object.freeze(origin) : null,
+    target: target ? Object.freeze({ ...target }) : null,
+    direction: Object.freeze({ x: direction.x, z: direction.z }),
+    source: aimTarget ? 'map' : 'shot-plan',
+    canAim: canAimNow(),
+  });
+}
+
+function setAimTarget(target) {
+  if (flying) throw new Error('Aim is locked while the ball is in flight.');
+  if (!canAimNow() || !range?.routing) throw new Error('Map aiming requires an active routed course.');
+  const resolved = resolveAimTarget(currentShotOrigin(), target, range.course.bounds).target;
+  aimTarget = Object.freeze({ ...resolved, ...(target.role ? { role: target.role } : {}), ...(target.label ? { label: target.label } : {}) });
+  if (evaluatorCamera?.active) evaluatorCamera.exit();
+  if (freeCam?.active) freeCam.exit();
+  toAddress({ smooth: true });
+  return getAimState();
+}
+
+function resetAim({ reframe = true } = {}) {
+  if (flying) throw new Error('Aim is locked while the ball is in flight.');
+  aimTarget = null;
+  if (reframe && ball && !flying) {
+    if (evaluatorCamera?.active) evaluatorCamera.exit();
+    if (freeCam?.active) freeCam.exit();
+    toAddress({ smooth: true });
+  }
+  return getAimState();
+}
+
+// Address framing follows the active routed hole or the player's transient map
+// target. Legacy ranges retain the canonical origin and -Z target line.
+function toAddress({ smooth = false, fromTee = false } = {}) {
+  if (!fromTee && (ball.holed || pendingHazard)) return;
+  const tee = range?.tee ?? { x: 0, z: 2 };
+  if (fromTee || range?.sceneKind !== 'play') ball.placeAt(tee.x, tee.z);
+  const aim = currentAim();
   syncBallMesh();
   // A completed shot leaves the shadow frustum centered down-range. Move the
   // unchanged-direction sun rig back with the teleported ball before caching the
   // next address map.
-  lighting.follow(ball.position.x, ball.position.z);
-  if (smooth) director.returnToAddress(ball.position, new Vector3(0, 0, -1));
-  else director.setAddress(ball.position, new Vector3(0, 0, -1));
+  const targetLine = new Vector3(aim.x, 0, aim.z).normalize();
+  if (!evaluatorCamera?.active) {
+    if (smooth) director.returnToAddress(ball.position, targetLine);
+    else director.setAddress(ball.position, targetLine);
+  }
+  lighting.follow(ball.position.x, ball.position.z, { camera: sm.camera });
   panel.showAddress();
+  if (range.sceneKind === 'play') {
+    const distance = Math.hypot(ball.cup.x - ball.position.x, ball.cup.z - ball.position.z);
+    const remaining = distance < 20 ? `${(distance * 3.28084).toFixed(1)} ft` : `${Math.round(distance * M_TO_YARD)} yd`;
+    panel.setLive(`Hole ${range.activeHole().number} · Shot ${holeStrokes + 1} · ${remaining} to pin`);
+  }
   // Only explicit/initial address changes are cuts. The automatic result return keeps
   // temporal history because CameraDirector continuously damps the whole move.
   if (!smooth) sm.invalidateTemporalHistory('address camera cut');
@@ -944,8 +1214,10 @@ function toAddress({ smooth = false } = {}) {
 // course first so repeated agent rebuilds don't leak GPU resources. The terrain is
 // baked from the spec's FEATURES — this is the only path course data takes into the
 // scene, so there is no terrain-editing surface to expose.
-function buildCourse(course, { creatorCanvas = false } = {}) {
+async function buildCourse(course, { creatorCanvas = false } = {}) {
+  clearTimeout(_resetTimer);
   tracer.clearHistory();
+  aimTarget = null;
   if (range) {
     if (_rangeRetentionProbe) {
       Object.defineProperty(range, '__rangeRetentionProbeMarker', { value: true });
@@ -994,16 +1266,28 @@ function buildCourse(course, { creatorCanvas = false } = {}) {
     sm.configureWeather(environmentBindings, sm.skyManifest);
     environmentTimelineIso = environmentTimeline.snapshot().iso;
   }
-  range = new Range(sm.scene, sm.camera, course, {
+  const SceneComposition = isCreatorPage
+    ? CreatorScene
+    : isPlayPage
+      ? PlayScene
+      : isRangePage
+        ? Range
+        : course.routing && !creatorCanvas
+          ? CourseScene
+          : Range;
+  range = await SceneComposition.create(sm.scene, sm.camera, course, {
     renderer: sm.renderer, motionHistory: sm.motionHistory, lighting,
     environmentTier: sm.environmentTier, environment: environmentBindings,
     environmentCatalog, creatorCanvas,
   });
-  lighting.setCourseShadowCoverage(course.bounds);
+  _nearTurfDetailActivation = 0;
+  _nearTurfFocusReady = false;
+  range.terrain.setNearBallTurfDetail({ activation: 0 });
   // Initial quality selection happens before Range construction. Apply the pending
   // mode once the grass workload hook exists, and repeat this after every rebuild.
   applyVisualQuality();
   ball = new Ball(range.terrain, env);
+  configurePlayHole();
   wireBall(ball);
   // Free-fly cam persists across rebuilds (keeps its listeners); just re-point its
   // terrain reference at the new course. Created lazily on the first build.
@@ -1012,7 +1296,8 @@ function buildCourse(course, { creatorCanvas = false } = {}) {
   });
   else freeCam.terrain = range.terrain;
   turfPanel.attach(range.terrain);   // live turf sliders (G) follow the rebuilt terrain
-  minimap.attach(range.terrain);     // re-rasterise the hole for the new course
+  await minimap.attach(range);       // prepare the authoritative hole map without blocking loading animation
+  syncDefaultAimTarget();
   range.terrain.uSunDir.value.copy(SUN); // compatibility baseline before shared daylight is installed
   updateTerrainSun();   // canopy self-shadow marches toward the shared daylight key
   // Dense supplemental blades improve long-grass macro views. Mown surfaces never
@@ -1028,7 +1313,76 @@ function buildCourse(course, { creatorCanvas = false } = {}) {
     new BallLie({ terrain: range.terrain, camera: sm.camera, motionHistory: sm.motionHistory, environment: environmentBindings, count: 7000, radius: 0.5, inner: 0.0, follow: 'camera' }),
   ];
   for (const l of ballLie) sm.scene.add(l.mesh);
-  toAddress();
+  audio?.setCourse({
+    course: range.course,
+    range,
+    environment: environmentState,
+    weather: range.course.atmosphere?.weather,
+  });
+  toAddress({ fromTee: true });
+}
+
+function courseForCurrentScene(authoredCourse) {
+  if (!creatorCanvasActive) return authoredCourse;
+  return normalizeCourse({
+    ...createCreatorCanvasCourse({
+      atmosphere: authoredCourse.atmosphere,
+      seed: authoredCourse.environmentSeed,
+      variant: creatorCanvasVariant,
+    }),
+    surfaceMaterials: authoredCourse.surfaceMaterials,
+  }, { catalogAssetIds: environmentCatalog.byId });
+}
+
+const PINE_FLOOR_VISUAL_ASSET_IDS = Object.freeze([
+  'forest-floor-03-color-roughness',
+  'forest-floor-03-normal-height-ao',
+]);
+
+async function verifyCourseVisualAssets(course) {
+  if (course?.groundCover !== 'pine-needle-litter') return Object.freeze([]);
+  if (!visualAssetResidency) throw new Error('Visual asset residency is not initialized.');
+  setBootstrapStage('visual-course-assets', {
+    detail: 'Verifying the course-required fresh pine-straw material…',
+    completed: 0,
+    total: PINE_FLOOR_VISUAL_ASSET_IDS.length,
+  });
+  let completed = 0;
+  const verified = await Promise.all(PINE_FLOOR_VISUAL_ASSET_IDS.map(async (assetId) => {
+    const asset = visualAssetResidency.manifest.assetById.get(assetId);
+    const variant = asset?.variants?.critical;
+    if (!variant) throw new Error(`Required course visual asset is missing its critical binding: ${assetId}`);
+    const result = await visualAssetResidency.verifyFile(variant.fileId);
+    completed += 1;
+    setBootstrapStage('visual-course-assets', {
+      detail: 'Verifying the course-required Poly Haven pine-floor material…',
+      completed,
+      total: PINE_FLOOR_VISUAL_ASSET_IDS.length,
+    });
+    return result;
+  }));
+  return Object.freeze(verified);
+}
+
+function applyLiveSurfaceMaterials(surfaceMaterials, { resetPreview = false } = {}) {
+  if (!range?.applySurfaceMaterials) throw new Error('The live course does not expose surface-material application.');
+  const snapshot = range.applySurfaceMaterials(normalizeSurfaceMaterials(surfaceMaterials));
+  if (resetPreview) surfaceMaterialsPreviewBaseline = null;
+  turfPanel.sync(snapshot);
+  sm.invalidateTemporalHistory('live surface material update');
+  return snapshot;
+}
+
+function previewSurfaceMaterials(surfaceMaterials) {
+  if (!surfaceMaterialsPreviewBaseline) surfaceMaterialsPreviewBaseline = range?.snapshotSurfaceMaterials?.() ?? null;
+  return applyLiveSurfaceMaterials(surfaceMaterials);
+}
+
+function revertSurfaceMaterialsPreview() {
+  if (!surfaceMaterialsPreviewBaseline) return range?.snapshotSurfaceMaterials?.() ?? null;
+  const baseline = surfaceMaterialsPreviewBaseline;
+  surfaceMaterialsPreviewBaseline = null;
+  return applyLiveSurfaceMaterials(baseline);
 }
 
 try {
@@ -1040,16 +1394,12 @@ try {
   // shipped as the rollback A/B baseline (docs/BACKDROP_PLAN.md).
   sm.configureSkyManifest(null);
   setBootstrapStage('course-loading', { detail: 'Loading and validating the authored course…' });
-  const authoredInitialCourse = coursePath === '/course.json'
-    ? await loadCourse('/course.json', { catalogAssetIds: environmentCatalog.byId })
-    : await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
-  const initialCourse = creatorCanvasActive
-    ? normalizeCourse(createCreatorCanvasCourse({
-      atmosphere: authoredInitialCourse.atmosphere,
-      seed: authoredInitialCourse.environmentSeed,
-      variant: creatorCanvasVariant,
-    }), { catalogAssetIds: environmentCatalog.byId })
-    : authoredInitialCourse;
+  if (isPlayPage && startupQuery.has('course')) {
+    coursePath = savedCoursePath(await loadCourseLibrary(), startupQuery.get('course'));
+  }
+  const authoredInitialCourse = await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
+  const initialCourse = courseForCurrentScene(authoredInitialCourse);
+  await verifyCourseVisualAssets(initialCourse);
   const initialAssetIds = collectEnvironmentAssetIds(initialCourse);
   setBootstrapStage('asset-integrity', {
     detail: `Verifying ${initialAssetIds.size} course-referenced asset${initialAssetIds.size === 1 ? '' : 's'}…`,
@@ -1064,15 +1414,20 @@ try {
   });
   await environmentAssetIntegrityReady;
   setBootstrapStage('course-building', { detail: 'Building the verified course environment…' });
-  buildCourse(initialCourse, { creatorCanvas: creatorCanvasActive });
+  await buildCourse(initialCourse, { creatorCanvas: creatorCanvasActive });
   // The renderer is deliberately gated on the complete environment. The synchronous
   // material objects may exist while images decode, but no placeholder/partial course
   // is ever presented as a valid frame.
   setBootstrapStage('asset-decoding', { detail: 'Decoding verified geometry, foliage, terrain, and lighting…' });
   await range.assetsReady;
+  await prepareSceneTextures(sm.renderer, sm.scene);
+  if (loadingGreen.error) throw loadingGreen.error;
+  lighting.invalidateShadow({ force: true, reason: 'course-assets-ready' });
   setBootstrapStage('atmosphere-ready', { detail: 'Finalizing shared daylight and water reflections…' });
   await sm.weatherSky.ready;
   sm.rebuildDaylightPmrem();
+  await range.waterReflection?.prepare();
+  await sm.prepareScenePass();
   setBootstrapStage('ready', { detail: 'Range ready.' });
   // Richer authored variants are deliberately requested only after the first
   // complete production frame is eligible to present. Detaching the promise is
@@ -1084,20 +1439,17 @@ try {
   throw error;
 }
 
-async function rebuildCourseFromDisk() {
+async function rebuildCourseFromDisk({ authoredCourse: providedCourse = null } = {}) {
   const wasRunning = sm._ready && !sm._renderingPaused;
   const recoverFatalPause = sm._ready && sm._renderingPaused && !!document.getElementById('environment-fatal');
   if (wasRunning) sm.pauseRendering();
   try {
+    loadingGreen.show();
     setBootstrapStage('course-loading', { detail: 'Loading and validating the edited course…' });
-    const authoredCourse = await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
-    const nextCourse = creatorCanvasActive
-      ? normalizeCourse(createCreatorCanvasCourse({
-        atmosphere: authoredCourse.atmosphere,
-        seed: authoredCourse.environmentSeed,
-        variant: creatorCanvasVariant,
-      }), { catalogAssetIds: environmentCatalog.byId })
-      : authoredCourse;
+    const authoredCourse = providedCourse
+      ?? await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
+    const nextCourse = courseForCurrentScene(authoredCourse);
+    await verifyCourseVisualAssets(nextCourse);
     const nextAssetIds = collectEnvironmentAssetIds(nextCourse);
     setBootstrapStage('asset-integrity', {
       detail: `Re-verifying ${nextAssetIds.size} course-referenced asset${nextAssetIds.size === 1 ? '' : 's'}…`,
@@ -1112,15 +1464,21 @@ async function rebuildCourseFromDisk() {
     });
     await environmentAssetIntegrityReady;
     setBootstrapStage('course-building', { detail: 'Rebuilding from verified course assets…' });
-    buildCourse(nextCourse, { creatorCanvas: creatorCanvasActive });
+    await buildCourse(nextCourse, { creatorCanvas: creatorCanvasActive });
     setBootstrapStage('asset-decoding', { detail: 'Decoding the rebuilt environment…' });
     await range.assetsReady;
+    await prepareSceneTextures(sm.renderer, sm.scene);
+    lighting.invalidateShadow({ force: true, reason: 'course-assets-ready' });
     setBootstrapStage('atmosphere-ready', { detail: 'Finalizing rebuilt daylight and water reflections…' });
     await sm.weatherSky.ready;
     sm.rebuildDaylightPmrem();
+    await range.waterReflection?.prepare();
+    await sm.prepareScenePass();
     setBootstrapStage('ready', { detail: 'Range ready.' });
     requestActiveVisualAssets();
     document.getElementById('environment-fatal')?.remove();
+    loadingGreen.stop();
+    document.getElementById('loading')?.classList.add('hidden');
     if (wasRunning || recoverFatalPause) sm.resumeRendering();
   } catch (error) {
     showFatalEnvironmentError(error);
@@ -1130,15 +1488,52 @@ async function rebuildCourseFromDisk() {
   }
 }
 
+async function applyWatchedCourseChange({ isCurrent = () => true } = {}) {
+  const authoredCourse = await loadCourse(coursePath, { catalogAssetIds: environmentCatalog.byId });
+  if (!isCurrent()) return { mode: 'superseded' };
+  const nextCourse = courseForCurrentScene(authoredCourse);
+  const mode = classifyCourseRuntimeChange(range?.course, nextCourse);
+  if (mode === 'unchanged') return { mode, course: range.course };
+  if (mode === 'surface-materials-only') {
+    const sceneIdentity = range;
+    const terrainIdentity = range.terrain;
+    const grassIdentity = range.grass;
+    applyLiveSurfaceMaterials(nextCourse.surfaceMaterials, { resetPreview: true });
+    turfPanel.attach(range.terrain, { resetBaseline: true });
+    if (range !== sceneIdentity || range.terrain !== terrainIdentity || range.grass !== grassIdentity) {
+      throw new Error('Surface-material hot apply replaced a live scene identity.');
+    }
+    return { mode, course: range.course };
+  }
+  await rebuildCourseFromDisk({ authoredCourse });
+  return { mode: 'rebuild', course: range.course };
+}
+
 async function previewCourse(rawCourse) {
   const preview = normalizeCourse(rawCourse, { catalogAssetIds: environmentCatalog.byId });
-  const assetIds = collectEnvironmentAssetIds(preview);
-  await verifyEnvironmentCatalogAssets(environmentCatalog, { assetIds, memoize: true });
-  creatorCanvasActive = false;
-  buildCourse(preview);
-  await Promise.all([range.assetsReady, sm.weatherSky.ready]);
-  sm.rebuildDaylightPmrem();
-  return { name: preview.meta.name, assets: assetIds.size };
+  const wasRunning = sm._ready && !sm._renderingPaused;
+  if (wasRunning) sm.pauseRendering();
+  loadingGreen.show();
+  try {
+    await verifyCourseVisualAssets(preview);
+    const assetIds = collectEnvironmentAssetIds(preview);
+    await verifyEnvironmentCatalogAssets(environmentCatalog, { assetIds, memoize: true });
+    creatorCanvasActive = false;
+    await buildCourse(preview);
+    await Promise.all([range.assetsReady, sm.weatherSky.ready]);
+    await prepareSceneTextures(sm.renderer, sm.scene);
+    sm.rebuildDaylightPmrem();
+    await range.waterReflection?.prepare();
+    await sm.prepareScenePass();
+    setBootstrapStage('ready', { detail: 'Course preview ready.' });
+    loadingGreen.stop();
+    document.getElementById('loading')?.classList.add('hidden');
+    if (wasRunning) sm.resumeRendering();
+    return { name: preview.meta.name, assets: assetIds.size };
+  } catch (error) {
+    showFatalEnvironmentError(error);
+    throw error;
+  }
 }
 
 async function clearCoursePreview() {
@@ -1151,6 +1546,7 @@ async function clearCoursePreview() {
 async function showAuthoredCreatorCourse() {
   creatorCanvasActive = false;
   await rebuildCourseFromDisk();
+  builder?.onActiveHoleChanged?.(range.activeHole());
   return range.course.meta.name;
 }
 
@@ -1213,7 +1609,7 @@ function previewEnvironment(conditions) {
 }
 
 function hit(params = null) {
-  if (flying || !ball) return;
+  if (flying || !ball || ball.holed || pendingHazard) return;
   if (!params) {
     try {
       launchMonitor.emitShot(panel.getLaunchInput());
@@ -1223,9 +1619,8 @@ function hit(params = null) {
     return;
   }
   clearTimeout(_resetTimer);            // a new shot cancels any pending auto-reset
-  // A launch-monitor shot arriving during the result hold is the user's request
-  // for the next ball. Return its physical origin to the tee before launch; the
-  // previous implementation could otherwise hit again from the landing position.
+  // A packet during the result hold starts the next shot: from the resting lie
+  // in Play, or a fresh tee ball in Practice.
   if (director.phase === 'result' || director.phase === 'return') {
     toAddress();
   }
@@ -1240,8 +1635,11 @@ function hit(params = null) {
 
   tracer.promoteActiveToWhite();
   tracer.reset();
+  const aim = currentAim();
+  const holeBearingDegrees = Math.atan2(aim.x, -aim.z) * 180 / Math.PI;
+  const worldParams = { ...params, azimuth: (params.azimuth ?? 0) + holeBearingDegrees, aimAzimuth: holeBearingDegrees };
   panel.beginShot(params);
-  ball.launch(params);
+  ball.launch(worldParams);
   tracer.push(ball.start);
   director.onLaunch(ball);
   flying = true;
@@ -1259,9 +1657,24 @@ function hit(params = null) {
     const random = createRng(divotEvent.id);
     const jx = (random() - 0.5) * 0.7;
     const jz = (random() - 0.5) * 0.7;
-    range.terrain.stampDivot(sm.renderer, ball.start.x + jx, ball.start.z - 0.3 + jz,
+    range.terrain.stampDivot(sm.renderer, ball.start.x + aim.x * 0.3 + jx, ball.start.z + aim.z * 0.3 + jz,
       0.022, a, 0.08 + random() * 0.14, 4.0 + random() * 1.5, random() * 20);
   }
+}
+
+function selectHole(holeId) {
+  if (flying) throw new Error('Wait for the current shot to finish before changing holes.');
+  if (!range?.course?.routing || typeof range.setActiveHole !== 'function') {
+    throw new Error('Hole selection requires a routed course scene.');
+  }
+  range.setActiveHole(holeId);
+  configurePlayHole();
+  aimTarget = null;
+  minimap.setActiveHole(range.activeHole());
+  syncDefaultAimTarget();
+  toAddress({ fromTee: true });
+  builder?.onActiveHoleChanged?.(range.activeHole());
+  return range.activeHole();
 }
 
 // The course builder: a prompt box that hands natural language to the local agent
@@ -1269,6 +1682,9 @@ function hit(params = null) {
 // skills. The ONLY authoring control is the prompt — no terrain editing.
 const builder = new BuilderPanel({
   getCourse: () => (range ? range.course : null),
+  readOnlyReason: referenceCourseSelected
+    ? 'Photo study preview. Edit courses/grasslands-reference.project.json and recompile; workspace authoring is disabled here.'
+    : null,
   // The sidecar pushes a live 'course:changed' event on success, which triggers the
   // rebuild below; this callback just surfaces the request result to the panel.
 });
@@ -1278,6 +1694,8 @@ const builder = new BuilderPanel({
 // is a valid cold entry rather than depending on a prior range/menu transition.
 let _fps = 0;
 let _thumbCountdown = 0;
+let thumbRequest = 0;
+let thumbObjectUrl = null;
 
 // App shell: the premium landing menu routes between Practice (range), Course
 // Creator (builder), and Play (course select). On entering an in-scene view we drop
@@ -1301,6 +1719,33 @@ const shell = new Menu({
     return { objects, fps: _fps || '—', status: builder?.busy ? 'Building' : 'Ready' };
   },
 });
+// An explicit catalog study URL has already selected and loaded its course.
+if (referenceCourseSelected) {
+  document.title = `${range.course.meta.name} — Rangeform`;
+  if (isPlayPage) shell.setView('practice');
+}
+
+// Audio is progressive and deliberately outside the first-valid-frame barrier.
+// Native device initialization already ran before putting began. Recordings still
+// decode only now in the background, and the first
+// trusted pointer/key interaction unlocks the graph under the browser autoplay policy.
+audio = new GolfAudio({ camera: sm.camera, contextFactory: bootstrapAudioContext.contextFactory });
+bootstrapAudioContext = null;
+const audioSettings = new AudioSettings(audio);
+audio.setCourse({
+  course: range.course,
+  range,
+  environment: environmentState,
+  weather: range.course.atmosphere?.weather,
+});
+const audioApi = Object.freeze({
+  ready: audio.ready,
+  unlock: () => audio.unlock(),
+  setMuted: (muted) => audio.setMuted(muted),
+  setVolume: (category, value) => audio.setVolume(category, value),
+  snapshot: () => audio.snapshot(),
+  diagnostics: () => audio.diagnostics(),
+});
 
 // The evaluator is installed after the initial course build so it can retain the
 // live FreeCamera instance for ownership handoff/restore across course rebuilds.
@@ -1313,6 +1758,20 @@ evaluatorCamera = new EvaluatorCamera({
 if (creatorCanvasActive) {
   frameCreatorCanvas();
 }
+
+// Keep the address ball above the actual composer, including after window resize.
+const composer = document.querySelector('.gb-compose-wrap');
+function resizeAddressComposition() {
+  if (shell.view !== 'creator' || !composer) return;
+  director.addressViewport = { height: innerHeight, bottom: innerHeight - composer.getBoundingClientRect().top };
+  if (director.phase === 'address' && !freeCam.active && !evaluatorCamera.active) {
+    director.setAddress(ball.position, director.aim);
+    sm.invalidateTemporalHistory('address viewport resized');
+  }
+}
+if (composer) new ResizeObserver(resizeAddressComposition).observe(composer);
+window.addEventListener('resize', resizeAddressComposition);
+resizeAddressComposition();
 
 // Slow cinematic orbit used as the menu's living backdrop (the real course renders
 // behind the overlay). Reframed to the tee by toAddress() when a view is entered.
@@ -1331,26 +1790,139 @@ function menuCinematic(dt) {
 // AA/half-resolution AO history and produced horizontal bands across the grass just
 // before the menu camera resumed its pan. Capturing the settled menu render keeps the
 // thumbnail live without ever presenting a transient camera state to the player.
-function requestThumb() { if (_thumbCountdown === 0) _thumbCountdown = 4; }
+function requestThumb() {
+  thumbRequest++;
+  if (_thumbCountdown === 0) _thumbCountdown = 4;
+}
 function thumbCapture() {
-  // Direct toDataURL on the WebGPU canvas (drawImage from it returns blank). It holds
-  // the overview frame after a few frames of posing above.
-  try { shell.setCourseThumb(sm.renderer.domElement.toDataURL('image/jpeg', 0.75)); }
+  const request = thumbRequest, course = range;
+  // Encode the actual WebGPU canvas asynchronously; copying it to another canvas
+  // is blank on this path, and synchronous JPEG encoding stalls the first frames.
+  try {
+    sm.renderer.domElement.toBlob(blob => {
+      if (!blob || request !== thumbRequest || course !== range) return;
+      const previous = thumbObjectUrl;
+      thumbObjectUrl = URL.createObjectURL(blob);
+      shell.setCourseThumb(thumbObjectUrl);
+      if (previous) URL.revokeObjectURL(previous);
+    }, 'image/jpeg', 0.75);
+  }
   catch (e) { /* canvas capture unavailable */ }
 }
+window.addEventListener('pagehide', () => {
+  thumbRequest++;
+  if (thumbObjectUrl) URL.revokeObjectURL(thumbObjectUrl);
+  thumbObjectUrl = null;
+});
 
 // Live rebuild: the Vite sidecar plugin fires this custom HMR event whenever
 // course.json changes (an agent edit, or a manual edit). Re-fetch + rebuild.
-if (import.meta.hot) {
-  import.meta.hot.on('course:changed', async () => {
+const catalogCategorySignature = (catalog, category) => JSON.stringify(
+  catalog.assets.filter((asset) => asset.category === category),
+);
+const catalogNonTreeSignature = (catalog) => JSON.stringify(
+  catalog.assets.filter((asset) => asset.category !== 'tree'),
+);
+const normalizedPublicAssetPath = (path) => `/${String(path || '')
+  .replace(/^public\//, '').replace(/^\/+/, '')}`;
+const catalogTreeOwnsPath = (catalog, path) => {
+  const normalized = normalizedPublicAssetPath(path);
+  return catalog.assets.some((asset) => asset.category === 'tree' && [
+    ...asset.lods.map((lod) => lod.url),
+    ...(asset.alphaMaps || []).map((map) => map.url),
+    ...(asset.impostor?.url ? [asset.impostor.url] : []),
+  ].includes(normalized));
+};
+let liveAssetReloadTimer = null;
+let liveAssetReloadSerial = 0;
+let liveTurfPackReloadPending = false;
+let liveCourseReloadSerial = 0;
+let liveSceneMutationQueue = Promise.resolve();
+
+function queueLiveSceneMutation(task) {
+  const operation = liveSceneMutationQueue.catch(() => {}).then(task);
+  liveSceneMutationQueue = operation.catch(() => {});
+  return operation;
+}
+
+function queueLiveAssetReload(event = {}) {
+  if (TURF_PACK_SOURCE_URLS.includes(normalizedPublicAssetPath(event.path))) {
+    liveTurfPackReloadPending = true;
+  }
+  const serial = ++liveAssetReloadSerial;
+  clearTimeout(liveAssetReloadTimer);
+  builder.onAgentStatus({ message: `Preparing live asset update: ${event.path || 'environment catalog'}.` });
+  liveAssetReloadTimer = setTimeout(() => queueLiveSceneMutation(async () => {
+    if (serial !== liveAssetReloadSerial) return;
     try {
+      // Developer edits to this immutable shared pack must refresh the retained
+      // putting terrain as well as the course, CPU pixels and verified manifest.
+      // Keep this flag across debounced catalog/other-asset events. Normal course
+      // rebuilds and authored tree swaps continue to use their resident resources.
+      if (liveTurfPackReloadPending) {
+        liveTurfPackReloadPending = false;
+        window.location.reload();
+        return;
+      }
+      const nextCatalog = await loadEnvironmentCatalog(
+        `/assets/environment/catalog.json?live=${Date.now()}`, { assetIds: [] },
+      );
+      if (serial !== liveAssetReloadSerial) return;
+      const treeCatalogChanged = catalogCategorySignature(environmentCatalog, 'tree')
+        !== catalogCategorySignature(nextCatalog, 'tree');
+      const nonTreeCatalogChanged = catalogNonTreeSignature(environmentCatalog)
+        !== catalogNonTreeSignature(nextCatalog);
+      const treeAssetChanged = catalogTreeOwnsPath(nextCatalog, event.path);
+      if ((treeAssetChanged || treeCatalogChanged) && !nonTreeCatalogChanged && range?.reloadTreeAssets) {
+        const activeTreeIds = new Set([...collectEnvironmentAssetIds(range.course)].filter(
+          (assetId) => nextCatalog.byId.get(assetId)?.category === 'tree',
+        ));
+        await verifyEnvironmentCatalogAssets(nextCatalog, { assetIds: activeTreeIds, memoize: false });
+        if (serial !== liveAssetReloadSerial) return;
+        const diagnostics = await range.reloadTreeAssets(nextCatalog, { cacheBust: Date.now() });
+        if (serial !== liveAssetReloadSerial) return;
+        environmentCatalog = nextCatalog;
+        sm.invalidateTemporalHistory('atomic live tree asset swap');
+        builder.onAgentStatus({
+          message: `${diagnostics.sourceCount} authored trees swapped live; camera and course state preserved.`,
+        });
+        await builder.onSceneCheckpoint?.({
+          kind: 'asset', path: event.path,
+          summary: `${diagnostics.sourceCount} verified authored trees are live; camera and course state stayed in place.`,
+        });
+        return;
+      }
+      environmentCatalog = nextCatalog;
       await rebuildCourseFromDisk();
-      builder.onCourseReloaded(range.course);
+      if (serial !== liveAssetReloadSerial) return;
+      builder.onAgentStatus({ message: 'Changed non-tree assets are live in the rebuilt WebGPU scene.' });
+      await builder.onSceneCheckpoint?.({ kind: 'asset', path: event.path });
+    } catch (error) {
+      if (serial === liveAssetReloadSerial) builder.onCourseReloadFailed(error, { kind: 'asset', path: event.path });
+    }
+  }), 240);
+}
+
+if (import.meta.hot) {
+  import.meta.hot.on('course:agent-status', (event) => builder.onAgentStatus(event));
+  import.meta.hot.on('course:changed', (event = {}) => {
+    const serial = ++liveCourseReloadSerial;
+    queueLiveSceneMutation(async () => {
+      if (serial !== liveCourseReloadSerial) return;
+    try {
+      const result = await applyWatchedCourseChange({ isCurrent: () => serial === liveCourseReloadSerial });
+      if (serial !== liveCourseReloadSerial) return;
+      builder.onCourseReloaded(range.course, event);
+      if (result.mode === 'surface-materials-only') {
+        builder.onAgentStatus({ message: 'Surface materials updated live; course, camera, and vegetation identities were preserved.' });
+      }
       setTimeout(requestThumb, 400);   // refresh the Play thumbnail to the new course
     } catch (error) {
-      builder.onCourseReloadFailed(error);
+      if (serial === liveCourseReloadSerial) builder.onCourseReloadFailed(error, event);
     }
+    });
   });
+  import.meta.hot.on('course:assets-changed', (event) => queueLiveAssetReload(event));
 }
 
 // On-screen FPS / frame-time meter (toggle with `). Uses real wall-clock time —
@@ -1365,6 +1937,7 @@ fpsEl.style.cssText = 'font:700 13px/1.3 ui-monospace,SFMono-Regular,monospace;c
 fpsEl.style.display = 'none';
 let _fpsLast = performance.now(), _fpsN = 0, _fpsAcc = 0;
 let _qualityLastFrameAt = null;
+let _qualityGpuPending = false, _qualityNextGpuAt = 0;
 function updateFpsMeter() {
   const now = performance.now();
   _fpsAcc += (now - _fpsLast) / 1000; _fpsLast = now; _fpsN++;
@@ -1381,12 +1954,10 @@ function updateFpsMeter() {
 
 function ingestQualityFrame() {
   const now = performance.now();
-  if (!qualityController || !Number.isFinite(now) || sm.renderingPaused) {
-    // Native timestamp capture steps production frames synchronously while the
-    // animation loop is paused. Those diagnostic submissions are not presentation
-    // cadence, so reset the wall clock instead of teaching Auto that they are very
-    // fast live frames.
-    _qualityLastFrameAt = Number.isFinite(now) ? now : null;
+  if (!qualityController || !Number.isFinite(now) || sm.renderingPaused
+    || loadingGreen?.diagnostics.active || !window.golfBootstrap?.ready) {
+    _qualityLastFrameAt = null;
+    qualityController?.ingestSample({ eligible: false });
     return;
   }
   // Measure presentation cadence independently of simulation time. In particular,
@@ -1399,10 +1970,25 @@ function ingestQualityFrame() {
   _qualityLastFrameAt = now;
   if (!(frameMs > 0)) return;
   const snapshot = qualityController.ingestSample({
-    frameMs,
+    frameMs, cpuMs: sm.cpuFrameMs,
     atMs: Number.isFinite(now) ? now : undefined,
   });
   applyVisualQuality(snapshot);
+  if (snapshot.mode === 'auto' && !snapshot.presentationLock && !_qualityGpuPending
+    && now >= _qualityNextGpuAt) {
+    _qualityGpuPending = true; _qualityNextGpuAt = now + 2000;
+    const mode = snapshot.activeMode;
+    sm.gpuProfiler.capture(8).then(result => {
+      const current = qualityController.snapshot();
+      if (!result.available || !result.complete || current.mode !== 'auto'
+        || current.activeMode !== mode || current.presentationLock || loadingGreen?.diagnostics.active) return;
+      for (const frame of result.frames ?? []) {
+        qualityController.ingestSample({ gpuMs: frame.gpuUnionMs, atMs: performance.now() });
+      }
+      applyVisualQuality();
+    }).catch(error => console.error('Automatic quality GPU measurement failed', error))
+      .finally(() => { _qualityGpuPending = false; });
+  }
 }
 
 function updateEnvironment(dt) {
@@ -1482,7 +2068,6 @@ sm.onUpdate((dt, t) => {
       });
     }
 
-    lighting.follow(ball.position.x, ball.position.z);
   }
 
   // Menu view: slow cinematic orbit behind the overlay. The thumbnail countdown does
@@ -1493,16 +2078,41 @@ sm.onUpdate((dt, t) => {
   else if (freeCam.active) freeCam.update(dt);
   else director.update(dt, ball);
 
+  if (lighting.cameraShadows) {
+    const camera = sm.camera.position;
+    lighting.cameraShadows.cameraClearance = Math.max(0, camera.y - range.terrain.heightAt(camera.x, camera.z));
+  }
+  // Keep the compatibility light aligned with the active camera too.
+  lighting.follow(ball.position.x, ball.position.z, { camera: sm.camera });
+
+  // Listener pose must follow the final owner of the camera for this frame.
+  audio.update(dt, { camera: sm.camera, ball, range, environment: environmentState });
+
   // Procedural blade positions are camera-dependent (LOD, lens fade, facing width).
   // Update them after the final camera pose for this frame, then retain those inputs
   // as the next frame's true previous geometry state.
   range.update(t);
+  updateNearBallTurfDetail(dt);
   updateNearTurf(t);
-  minimap.update(ball.position, sm.camera);
+  minimap.update({
+    ball: ball.position,
+    camera: sm.camera,
+    aimOrigin: currentShotOrigin(),
+    aimTarget: aimTarget ?? defaultAimTarget,
+    canAim: canAimNow(),
+  });
+  const guideOrigin = currentShotOrigin();
+  aimGuide.update({
+    terrain: range.terrain,
+    origin: guideOrigin,
+    target: aimTarget ?? defaultAimTarget,
+    visible: canAimNow() && (director.phase === 'address' || director.phase === 'return'),
+  });
   // Startup turf remains pristine. Only the shot-completion path stamps divots.
   evaluatorCamera.notifyFrame(sm.renderer.info.frame);
 });
 
+loadingGreen?.stop();
 sm.start();
 
 // Prime the Play card with a real render once the scene (incl. trees) has settled.
@@ -1542,10 +2152,29 @@ window.golf = {
   visualAssets: visualAssetsApi,
   timeline: timelineApi,
   launchMonitor: launchMonitorApi,
-  tracer,
+  play: Object.freeze({
+    snapshot: () => ({ active: range.sceneKind === 'play', holeId: range.activeHoleId,
+      strokes: holeStrokes, complete: ball.holed, reliefRequired: Boolean(pendingHazard) }),
+    continue: continuePlay,
+  }),
+  audio: audioApi,
+  surfaceMaterials: Object.freeze({
+    get: () => range?.snapshotSurfaceMaterials?.() ?? null,
+    preview: (surfaceMaterials) => previewSurfaceMaterials(surfaceMaterials),
+    revert: () => revertSurfaceMaterialsPreview(),
+    commit: async () => {
+      throw new Error('Surface-material persistence requires the course-agent commit adapter; write project.site.surfaceMaterials and compile the course.');
+    },
+  }),
+  tracer, aimGuide,
   get freeCam() { return freeCam; },
   evaluatorCamera,
-  director, panel, turfPanel, minimap, sm, lighting, builder, shell,
+  director, panel, turfPanel, minimap, sm, lighting, builder, shell, audioSettings,
+  aim: Object.freeze({
+    getState: getAimState,
+    setTarget: setAimTarget,
+    reset: resetAim,
+  }),
   // Narrow benchmark hook: this resolves only after the atmosphere, authoritative
   // terrain/turf material, and tree prototype are present. The harness then warms the actual camera/post
   // path before timing; it never measures loading placeholders as a scene baseline.
@@ -1556,15 +2185,18 @@ window.golf = {
   get environmentLoadError() { return environmentLoadError; },
   refreshThumb: requestThumb,
   toAddress,
-  rebuild: rebuildCourseFromDisk,
-  previewCourse,
-  clearCoursePreview,
-  showAuthoredCreatorCourse,
-  showCreatorCanvas,
+  // Public requests share the watcher queue. Internal rebuild calls remain raw
+  // so a queued preview/reset cannot await another operation behind itself.
+  rebuild: (options) => queueLiveSceneMutation(() => rebuildCourseFromDisk(options)),
+  previewCourse: (course) => queueLiveSceneMutation(() => previewCourse(course)),
+  clearCoursePreview: () => queueLiveSceneMutation(() => clearCoursePreview()),
+  showAuthoredCreatorCourse: () => queueLiveSceneMutation(() => showAuthoredCreatorCourse()),
+  showCreatorCanvas: (options) => queueLiveSceneMutation(() => showCreatorCanvas(options)),
   creatorCanvasPose: currentCreatorCanvasPose,
   beginCreatorApply() { creatorCanvasActive = false; },
   get creatorCanvasActive() { return creatorCanvasActive; },
   get creatorCanvasVariant() { return creatorCanvasVariant; },
+  selectHole,
   // The robustness harness enables this before repeated real rebuilds. Creating the
   // WeakRef inside the application avoids DevTools retaining the Range merely because
   // an evaluation expression touched it.

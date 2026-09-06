@@ -52,8 +52,10 @@ test('rough geometry is materially refined without entering maintained turf', as
     'coastal strand grass must become sparse before the dune substrate');
   assert.doesNotMatch(source, /biomeLand\.b\.mul\( 0\.55 \)/,
     'dune weight must not keep the old dense green blade carpet alive');
-  assert.match(source, /const densityTarget = keepProb\.mul\( tuftDensity \)\.mul\( roughCoverage \)\s*\.mul\( vegetationWeight \)/,
+  assert.match(source, /const baseDensityTarget = keepProb\.mul\( tuftDensity \)\.mul\( roughCoverage \)\s*\.mul\( vegetationWeight \)/,
     'the shared habitat weight must taper both blade height and population');
+  assert.match(source, /const densityTarget = \( canopyKeep\s*\?\s*baseDensityTarget\.mul\( canopyKeep \)\s*:\s*baseDensityTarget \)\.toVar\(\)/,
+    'canopy thinning must scale the final population only, leaving the habitat taper intact');
 
   assert.match(source, /this\.uSpecular = uniform\( 0\.06 \)/);
   assert.match(source, /mix\( 0\.68, 0\.78, bladeLift \)/);
@@ -67,8 +69,8 @@ test('rough geometry is materially refined without entering maintained turf', as
   assert.match(source, /farKeepUpper[\s\S]*?\.mul\( farTierScale \)\.mul\( farSamplingScale \)[\s\S]*?baseKeepUpper\.max\( farKeepUpper \)[\s\S]*?\.mul\( densityScale \)/,
     'policy density must scale the conservative tile maximum exactly once');
   assert.match(source, /tile\.mul\( uint\( CANDIDATES_PER_TILE \) \)\.add\( localCandidate \)/);
-  assert.match(source, /const GRASS_TRIANGLE_BUDGET = 9_961_472/);
-  assert.match(source, /const MAX_VISIBLE_BLADE_RECORDS = 1_441_792/);
+  assert.match(source, /const GRASS_TRIANGLE_BUDGET = 11_534_336/);
+  assert.match(source, /const MAX_VISIBLE_BLADE_RECORDS = 2_097_152/);
   assert.match(source, /geo\.instanceCount = MAX_VISIBLE_BLADE_RECORDS/);
   assert.match(source, /geo\.setIndirect\( this\._drawArgsAttr, \[ 0, 20, 40 \] \)/,
     'one grass renderer must issue its three triangle LOD commands');

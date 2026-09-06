@@ -33,6 +33,9 @@ const IDENTITY_MATRIX = Object.freeze([
 // describe the contract that an external pass must satisfy before it hands its
 // textures to the water material. The values are deliberately serializable so
 // the renderer quality controller can use the same policy on desktop and mobile.
+// Normal-incidence reflectance of a water dielectric (n ~1.333).
+const WATER_F0 = 0.02;
+
 export const WATER_REFLECTION_PROFILES = Object.freeze({
   ultra: Object.freeze({
     mode: 'ultra', source: 'planar', resolutionScale: 0.50,
@@ -41,7 +44,9 @@ export const WATER_REFLECTION_PROFILES = Object.freeze({
   }),
   quality: Object.freeze({
     mode: 'quality', source: 'planar', resolutionScale: 0.25,
-    updateIntervalFrames: 2, temporalWeight: 0.78, maxHistoryFrames: 4,
+    // Three-frame cadence keeps the quarter-resolution history stable in motion
+    // while avoiding a redundant mirrored scene submission every other frame.
+    updateIntervalFrames: 3, temporalWeight: 0.78, maxHistoryFrames: 4,
     localProbeWeight: 0, maxLuminance: 6,
   }),
   mobile: Object.freeze({
@@ -630,12 +635,16 @@ export class WaterSurface {
       .clamp(0, this._reflectionMaxLuminance);
     const analyticReflection = mix(sharedSky, localProbeColor, this._reflectionLocalProbeWeight);
     const reflectionSource = mix(analyticReflection, planarColor, planarWeight);
-    // Schlick Fresnel keeps overhead water body-dominant and gives grazing
-    // cameras a restrained, physically coherent HDR reflection.
-    const fresnel = float(0.018)
-      .add(oneMinus(viewDotNormal).pow(5).mul(0.28))
+    // Real Schlick Fresnel for a water dielectric: F0 ~0.02 looking straight down,
+    // rising toward a near-perfect mirror at grazing incidence. The previous form
+    // scaled the grazing term by 0.28 and clamped the whole thing to 0.30, so water
+    // could never reflect more than a third of the sky no matter the view angle. That
+    // is what kept the authored body colour dominant from every camera and made a pond
+    // read as a fixed turquoise patch rather than as a mirror of the sky above it.
+    const fresnel = float(WATER_F0)
+      .add(oneMinus(viewDotNormal).pow(5).mul(1 - WATER_F0))
       .add(shoreWetness.mul(0.012))
-      .clamp(0, 0.30);
+      .clamp(0, 1);
     const skyReflection = reflectionSource.mul(fresnel);
     // A very narrow, low-energy glint preserves the authored sun direction in
     // the basic-material path. It is a shared source term, not a fill or baked
@@ -658,8 +667,19 @@ export class WaterSurface {
     const shorelineFoam = insideContact.mul(capillaryResidue).mul(bankFade).mul(0.055);
     const impact = impactFoam.clamp(0, 0.42)
       .mul(crestBreakup.mul(0.65).add(0.35)).mul(0.58);
-    material.colorNode = surfaceColor.add(skyReflection).add(sunGlint)
-      .add(vec3(0.22, 0.30, 0.20).mul(shorelineFoam.add(impact)));
+    // The body and foam terms above are authored ABSOLUTE radiances, not albedos, so
+    // without this they hold their daylight value while the rest of the scene falls
+    // and the pond glows turquoise against a sunset. Scale them by the same scene
+    // illumination the ground receives. `skyReflection` and `sunGlint` are excluded
+    // deliberately: both already derive from the live environment, so scaling them
+    // here would attenuate the sky's own light twice.
+    const surfaceLight = this.environment.surfaceLight;
+    // Energy conserving: what the surface reflects, it does not also transmit. The
+    // body was previously ADDED alongside the reflection, so it contributed in full at
+    // every angle regardless of how much light the surface was mirroring.
+    material.colorNode = surfaceColor.mul(surfaceLight).mul(oneMinus(fresnel))
+      .add(skyReflection).add(sunGlint)
+      .add(vec3(0.22, 0.30, 0.20).mul(shorelineFoam.add(impact)).mul(surfaceLight));
     material.needsUpdate = true;
     return material;
   }

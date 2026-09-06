@@ -16,10 +16,22 @@ Use 3–9 pieces for a landmark assembly. Give the group one stable seed, then d
 ## Tree communities
 
 - Combine tall, medium, and small age classes rather than scaling copies uniformly.
+- Use `forest-cluster` for catalog assets that are genuinely mature overstory and
+  `forest-understory` for saplings/regeneration kept near native scale. Share one
+  `habitatMassId` across layers that form the same stand.
 - Place crowns with controlled overlap but keep trunks and primary stems legible.
 - Use middle-story shrubs at the sheltered edge and sparse groundcover beneath open canopy.
 - Form asymmetric masses with one view window. Avoid rows, rings, identical pairs, and evenly filled disks.
 - Keep canopy anchors far enough apart to preserve mature crown form and golf sightlines.
+- Rasterize pine-litter/grass exclusion from the resolved crown-disc union. Join
+  each declared habitat mass with the minimum set of broad crown-to-crown corridors.
+  Pine-litter sites join those stands course-wide but retain maintained-surface and
+  hazard cutouts; region rectangles remain placement envelopes, not material masks.
+  Give maintained litter beds a narrow organic turf cut; use plants, roots, and
+  deadwood to naturalize selected forest shoulders rather than blurring every edge.
+- A sparse mature source can be a deliberate emergent, not the sole wall-forming
+  species. Use a denser compatible authored middle layer and deliberate tee/green
+  anchors before increasing counts; verify the resulting layer from golfer height.
 
 ## Rock outcrops
 

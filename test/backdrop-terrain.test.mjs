@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { float, vec3 } from 'three/tsl';
 import {
   alpineComposition, BackdropTerrain, maritimeSeaLevel, sampleAlpineWorld, sampleMaritimeWorld,
 } from '../src/scene/BackdropTerrain.js';
@@ -10,6 +11,46 @@ import { NORTH_CASCADES_DEM } from '../src/terrain/northCascadesDem.js';
 
 const bounds = { minX: -110, maxX: 110, minZ: -340, maxZ: 30 };
 const terrain = { heightAt: (x, z) => x * 0.002 + z * 0.001 };
+
+test('alpine continuation borrows the terrain substrate and uses its physical lighting model', () => {
+  let samples = 0;
+  const backdrop = new BackdropTerrain({
+    bounds, seed: 42, biome: 'temperate-alpine',
+    terrain: { ...terrain, backdropSurfaceNodes() {
+      samples++;
+      return { color: vec3(0.16, 0.056, 0.024), roughness: float(0.94), specular: float(0.4) };
+    } },
+  });
+  try {
+    assert.equal(samples, 1);
+    const meshes = backdrop.group.children.filter(child => child.isMesh);
+    assert.ok(meshes.length > 0);
+    const foothill = meshes.find(mesh => mesh.name === 'alpine-foothill-band');
+    const positions = foothill.geometry.attributes.position;
+    const indices = foothill.geometry.index;
+    for (let i = 0; i < indices.count; i += 3) {
+      const triangle = [0, 1, 2].map(j => indices.getX(i + j));
+      const xs = triangle.map(j => positions.getX(j));
+      const zs = triangle.map(j => positions.getZ(j));
+      assert.ok(Math.max(...xs) - Math.min(...xs) <= 36.01
+        && Math.max(...zs) - Math.min(...zs) <= 36.01,
+      'foothill cells must remain bounded across the full course width and length');
+      const x = xs.reduce((a, b) => a + b) / 3;
+      const z = zs.reduce((a, b) => a + b) / 3;
+      assert.ok(x <= bounds.minX + 12 || x >= bounds.maxX - 12
+        || z <= bounds.minZ + 12 || z >= bounds.maxZ - 12,
+      'the central playable rectangle must remain unmeshed');
+    }
+    assert.ok(meshes.every(mesh => mesh.renderOrder > 0), 'foreground depth must precede expensive shell shading');
+    assert.ok(meshes.filter(mesh => mesh.name === 'alpine-far-massif')
+      .every(mesh => mesh.renderOrder > foothill.renderOrder), 'foothills still own the shell overlap');
+    for (const mesh of meshes) {
+      assert.equal(mesh.material.isMeshPhysicalNodeMaterial, true);
+      assert.equal(mesh.material.coastBounds, bounds);
+      assert.ok(mesh.material.specularIntensityNode);
+    }
+  } finally { backdrop.dispose(); }
+});
 
 function coastalBiomeField(profile = 'natural-resort-beach') {
   const course = {
@@ -200,7 +241,7 @@ test('alpine geology uses licensed 90 m scan maps through the GPU material path'
     'the 90 m scan must retain its physical world scale in the shader');
   assert.match(source, /texture\(rockTexture, rockSideUv\)/);
   assert.match(source, /texture\(rockNormalTexture, rockTopUv\)/);
-  const material = source.slice(source.indexOf('function biplanarField'), source.indexOf('function buildPatch'));
+  const material = source.slice(source.indexOf('function biplanarField'), source.indexOf('function* buildPatch'));
   assert.match(material, /function biplanarField\(/,
     'procedural mineral fields need a surface-safe biplanar domain');
   assert.match(material, /const top = mx_noise_float/);
@@ -228,7 +269,7 @@ test('alpine backdrop keeps the rejected far-conifer derivative out of runtime',
 
 test('alpine runtime owns the horizon with a bounded two-band procedural shell', async () => {
   const source = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
-  const alpineBuild = source.slice(source.indexOf('  _buildAlpine('), source.indexOf('  _buildMaritime('));
+  const alpineBuild = source.slice(source.indexOf('  *_buildAlpine('), source.indexOf('  *_buildMaritime('));
   assert.match(alpineBuild, /backdropSource = 'procedural-alpine-shell'/);
   assert.match(alpineBuild, /proceduralShell = true/);
   assert.doesNotMatch(alpineBuild, /weather-sky-hdr/,
@@ -321,6 +362,23 @@ test('alpine bands use a bounded depth-safe overlap rather than cracking', async
     }
   }
   backdrop.dispose();
+});
+
+test('alpine shell starts at the course edge without a filler band', async () => {
+  const source = await readFile(new URL('../src/scene/BackdropTerrain.js', import.meta.url), 'utf8');
+  assert.match(source, /const ring = alpineRingGrid\(bounds, ALPINE_BAND_A_OUTER, ALPINE_BAND_A_SPACING\)/);
+  assert.match(source, /skipCell: \{ ix: xLeftSegments, iz: zBottomSegments,/,
+    'the mountain shell must leave course material ownership to the expanded real terrain');
+  assert.match(source, /positionGeometry\.x\.sub\(\(bounds\.minX \+ bounds\.maxX\) \* 0\.5\)\.abs\(\)/,
+    'shader-only backdrop relief must measure from the real non-origin site centre');
+  assert.match(source, /world\.x\.sub\(\(bounds\.minX \+ bounds\.maxX\) \* 0\.5\)\.abs\(\)/,
+    'fragment material ownership must use the same non-origin site centre');
+  assert.match(source, /const alpineEcotone = bounds[\s\S]*?smoothstep\(55\.0, 320\.0, worldEdgeDistance/,
+    'alpine geology must be zero at the join and emerge irregularly on the shell');
+  assert.match(source, /directAlbedo = mix\(alpineEdgeSubstrate, directAlbedo, alpineEcotone\)/,
+    'the exact shell edge must share the canonical course substrate');
+  assert.match(source, /material\.polygonOffset = true/,
+    'the mountain shell must sit behind the real terrain at their hidden overlap');
 });
 
 test('alpine world composition is deterministic, seed-variable, and continuous at the playable edge', () => {
@@ -749,7 +807,9 @@ test('alpine surface response is classified per pixel, not baked per vertex', as
   assert.match(source, /const directSnow = smoothstep\(0\.54, 0\.76, directSnowAccumulation\)/);
   assert.match(source, /const directBandJitter = macroValue\.sub\(0\.5\)\.mul\(150\.0\)/,
     'altitude bands must wander in world space or they read as contour stripes');
-  assert.match(source, /material\.roughnessNode = mix\(mineralRough, float\(0\.88\), directSnow\)/);
+  assert.match(source, /const alpineRoughness = mix\(mineralRough, float\(0\.88\), directSnow\)/);
+  assert.match(source, /material\.roughnessNode = mix\(edgeSurface\?\.roughness \?\? float\(0\.88\), alpineRoughness, alpineEcotone\)/,
+    'the exact edge must share the low-alpine turf roughness before geology emerges');
 });
 
 test('alpine first wall uses depth-separated signed-distance buttresses', async () => {
@@ -816,6 +876,10 @@ test('alpine high faces carry oriented fault blocks, chutes, and coupled PBR str
   assert.equal((source.match(/geometry\.boundingSphere\.radius \+= 72/g) || []).length, 2,
     'both Band A and Band B bounds must include shader displacement');
   assert.match(source, /const vertexDisplacement[\s\S]*vertexStructuralRelief/);
+  assert.match(source, /\.add\(vertexStructuralRelief\)[\s\S]*\.clamp\(0\.0, 48\.0\)/,
+    'face detail must not carve a coarse one-vertex notch into the skyline');
+  assert.doesNotMatch(source, /- chuteField \* \(mountain \* 14/,
+    'far-face chute classification must not subtract coarse skyline geometry');
   assert.match(source, /const structuralFace = structuralFaceVarying/);
   assert.match(source, /const structuralCavity = structuralCavityVarying/);
   assert.match(source, /const directSlab = structuralFace\.mul\(0\.62\)/);

@@ -51,8 +51,8 @@
       "version": 1,
       "url": "/assets/textures/blendkit_fairway_alb.png",
       "format": "png",
-      "bytes": 11094425,
-      "sha256": "ecfa186e0296084e044f4143465e36c6836d81c22f9475901d5c1c347f7ec4c2",
+      "bytes": 12286652,
+      "sha256": "129d315bbc22e6ff05a6fb5a3c54474ec9845b86afbdf615a4e8a21f996cdc76",
       "memoryBytes": 22369622,
       "dimensions": { "width": 2048, "height": 2048 },
       "memoryBasis": "rgba8-mip-chain"
@@ -62,8 +62,8 @@
       "version": 1,
       "url": "/assets/textures/blendkit_fairway_nrh.png",
       "format": "png",
-      "bytes": 12704080,
-      "sha256": "6a5a70cb1c15e2cc3477928f42897cbdcb64e7c1c1d0d2c2f152a4dd6fca4db5",
+      "bytes": 14852131,
+      "sha256": "300200a8f864dd383ba05dc8688e97196081419d06005362dd45b7a334932970",
       "memoryBytes": 22369622,
       "dimensions": { "width": 2048, "height": 2048 },
       "memoryBasis": "rgba8-mip-chain"
@@ -328,6 +328,26 @@
       "memoryBasis": "decoded-glb-estimate"
     },
     {
+      "id": "tree-island-01-lod1",
+      "version": 1,
+      "url": "/assets/trees/island_tree_01_lod1.glb",
+      "format": "glb",
+      "bytes": 11970756,
+      "sha256": "58d92ed07827857e63d81a56df4e7f479539a577b84c71a2819f8ed6e33d85af",
+      "memoryBytes": 27000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-island-01-component-lod0",
+      "version": 1,
+      "url": "/assets/trees/island_tree_01_component_lod0.glb",
+      "format": "glb",
+      "bytes": 18224012,
+      "sha256": "71f5a4d981aabbc864eae2c5524e1ae36eef019b219975ee3ed8e969a50a5026",
+      "memoryBytes": 41000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
       "id": "tree-island-01-leaves-alpha-1k",
       "version": 1,
       "url": "/assets/trees/island_tree_01_leaves_alpha_1k.png",
@@ -347,6 +367,58 @@
       "sha256": "6281dace4ca5a75c8799276724a8e4d01bfb969942977018ceb1620801b06b91",
       "memoryBytes": 100000000,
       "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-fir-01-lod0",
+      "version": 1,
+      "url": "/assets/trees/fir_tree_01_course_lod0.glb",
+      "format": "glb",
+      "bytes": 36403492,
+      "sha256": "a18e39d5f2be69a60c0bd7ba4e9692f5c06579c737c9011b2fcad7726ea55bfc",
+      "memoryBytes": 90000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-fir-01-lod1",
+      "version": 1,
+      "url": "/assets/trees/fir_tree_01_course_lod1.glb",
+      "format": "glb",
+      "bytes": 23923260,
+      "sha256": "7b115487fb22a905c127bf8b6dd70526d99c98aa7cf18ac32f42611b5d5cbb06",
+      "memoryBytes": 60000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-island-02-lod1",
+      "version": 1,
+      "url": "/assets/trees/island_tree_02_lod1.glb",
+      "format": "glb",
+      "bytes": 18079964,
+      "sha256": "0a74543d0d49d3f1abe9a464527986edd425465adf6bd64a02680ce25bf64fd9",
+      "memoryBytes": 40000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "fresh-pine-straw-color-roughness-v2",
+      "version": 1,
+      "url": "/assets/textures/fresh_pine_straw_color_roughness_v2.png",
+      "format": "png",
+      "bytes": 11620254,
+      "sha256": "9d45038c1d8c75844b736be8090bc6eaebda0a0b6371c499dd5ce7d60cbb449a",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
+    },
+    {
+      "id": "fresh-pine-straw-normal-height-ao-v2",
+      "version": 1,
+      "url": "/assets/textures/fresh_pine_straw_normal_height_ao_v2.png",
+      "format": "png",
+      "bytes": 11449599,
+      "sha256": "68c4f799716ba0ce43270fdb34e1021ddaf6cbfa81d766e21f4938af047737a9",
+      "memoryBytes": 22369622,
+      "dimensions": { "width": 2048, "height": 2048 },
+      "memoryBasis": "rgba8-mip-chain"
     },
     {
       "id": "tree-island-02-leaves-alpha-1k",
@@ -407,6 +479,36 @@
       "bytes": 2633176,
       "sha256": "d56b5b7dbb618274f8b86e298aee3925a615e1646ba03f508cb66fd937c329ae",
       "memoryBytes": 4500000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-pine-sapling-small-course-lod0",
+      "version": 1,
+      "url": "/assets/trees/pine_sapling_small_course_lod0.glb",
+      "format": "glb",
+      "bytes": 9706632,
+      "sha256": "140b1520d9e49da3688dbfb8cc030ead178203aa7f8b2a2d5c4ed2f5686f342d",
+      "memoryBytes": 30000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-pine-sapling-small-course-lod1",
+      "version": 1,
+      "url": "/assets/trees/pine_sapling_small_course_lod1.glb",
+      "format": "glb",
+      "bytes": 6087492,
+      "sha256": "b5a7a4e3bb77ef399ef1cba4470cbb226a26e88373b0434ca2caacc35a96ca4c",
+      "memoryBytes": 17000000,
+      "memoryBasis": "decoded-glb-estimate"
+    },
+    {
+      "id": "tree-island-01-multimaterial-lod0",
+      "version": 1,
+      "url": "/assets/trees/island_tree_01.glb",
+      "format": "glb",
+      "bytes": 7830180,
+      "sha256": "4206c8fc183a13a79818dbb44499b7fae5b29b09a7005e842e37a57746442dc8",
+      "memoryBytes": 36000000,
       "memoryBasis": "decoded-glb-estimate"
     }
   ],
@@ -751,6 +853,35 @@
       }
     },
     {
+      "id": "tree-pine-sapling-small-geometry",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-pine-sapling-small-exact-authored-variant",
+      "priority": { "base": 76, "projectedNeed": { "near": 1, "mid": 0.9, "far": 0.7 } },
+      "variants": {
+        "critical": {
+          "version": 1,
+          "fileId": "tree-pine-sapling-small-course-lod1",
+          "lod": { "family": "polyhaven-pine-sapling-small", "level": 1, "maxDistanceMeters": 4000, "authored": true }
+        },
+        "balanced": {
+          "version": 1,
+          "fileId": "tree-pine-sapling-small-course-lod1",
+          "lod": { "family": "polyhaven-pine-sapling-small", "level": 1, "maxDistanceMeters": 4000, "authored": true }
+        },
+        "quality": {
+          "version": 1,
+          "fileId": "tree-pine-sapling-small-course-lod0",
+          "lod": { "family": "polyhaven-pine-sapling-small", "level": 0, "maxDistanceMeters": 75, "authored": true }
+        },
+        "ultra": {
+          "version": 1,
+          "fileId": "tree-pine-sapling-small-course-lod0",
+          "lod": { "family": "polyhaven-pine-sapling-small", "level": 0, "maxDistanceMeters": 75, "authored": true }
+        }
+      }
+    },
+    {
       "id": "tree-small-02-hero-geometry",
       "version": 1,
       "kind": "geometry",
@@ -771,15 +902,25 @@
       "semantic": "polyhaven-island-tree-01-authored-lod",
       "priority": { "base": 55, "projectedNeed": { "near": 0.85, "mid": 0.75, "far": 0.3 } },
       "variants": {
+        "critical": {
+          "version": 1,
+          "fileId": "tree-island-01-multimaterial-lod0",
+          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 2400, "authored": true }
+        },
+        "balanced": {
+          "version": 1,
+          "fileId": "tree-island-01-multimaterial-lod0",
+          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 2400, "authored": true }
+        },
         "quality": {
           "version": 1,
-          "fileId": "tree-island-01-lod0",
-          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 240, "authored": true }
+          "fileId": "tree-island-01-multimaterial-lod0",
+          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 2400, "authored": true }
         },
         "ultra": {
           "version": 1,
-          "fileId": "tree-island-01-lod0",
-          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 240, "authored": true }
+          "fileId": "tree-island-01-multimaterial-lod0",
+          "lod": { "family": "polyhaven-island-tree-01", "level": 0, "maxDistanceMeters": 2400, "authored": true }
         }
       }
     },
@@ -803,14 +944,69 @@
       "variants": {
         "quality": {
           "version": 1,
-          "fileId": "tree-island-02-lod0",
-          "lod": { "family": "polyhaven-island-tree-02", "level": 0, "maxDistanceMeters": 240, "authored": true }
+          "fileId": "tree-island-02-lod1",
+          "lod": { "family": "polyhaven-island-tree-02", "level": 1, "maxDistanceMeters": 2400, "authored": true }
         },
         "ultra": {
           "version": 1,
           "fileId": "tree-island-02-lod0",
-          "lod": { "family": "polyhaven-island-tree-02", "level": 0, "maxDistanceMeters": 240, "authored": true }
+          "lod": { "family": "polyhaven-island-tree-02", "level": 0, "maxDistanceMeters": 75, "authored": true }
         }
+      }
+    },
+    {
+      "id": "tree-fir-01-geometry",
+      "version": 1,
+      "kind": "geometry",
+      "semantic": "polyhaven-fir-tree-01-source-faithful-lod",
+      "priority": { "base": 70, "projectedNeed": { "near": 1, "mid": 0.9, "far": 0.65 } },
+      "variants": {
+        "critical": {
+          "version": 1,
+          "fileId": "tree-fir-01-lod1",
+          "lod": { "family": "polyhaven-fir-tree-01", "level": 1, "maxDistanceMeters": 4000, "authored": true }
+        },
+        "balanced": {
+          "version": 1,
+          "fileId": "tree-fir-01-lod1",
+          "lod": { "family": "polyhaven-fir-tree-01", "level": 1, "maxDistanceMeters": 4000, "authored": true }
+        },
+        "quality": {
+          "version": 1,
+          "fileId": "tree-fir-01-lod0",
+          "lod": { "family": "polyhaven-fir-tree-01", "level": 0, "maxDistanceMeters": 75, "authored": true }
+        },
+        "ultra": {
+          "version": 1,
+          "fileId": "tree-fir-01-lod0",
+          "lod": { "family": "polyhaven-fir-tree-01", "level": 0, "maxDistanceMeters": 75, "authored": true }
+        }
+      }
+    },
+    {
+      "id": "forest-floor-03-color-roughness",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "generated-fresh-longleaf-pine-straw-albedo-roughness-pack",
+      "priority": { "base": 61, "projectedNeed": { "near": 1, "mid": 0.9, "far": 0.6 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "fresh-pine-straw-color-roughness-v2" },
+        "balanced": { "version": 1, "fileId": "fresh-pine-straw-color-roughness-v2" },
+        "quality": { "version": 1, "fileId": "fresh-pine-straw-color-roughness-v2" },
+        "ultra": { "version": 1, "fileId": "fresh-pine-straw-color-roughness-v2" }
+      }
+    },
+    {
+      "id": "forest-floor-03-normal-height-ao",
+      "version": 1,
+      "kind": "texture",
+      "semantic": "generated-fresh-longleaf-pine-straw-normal-height-ao-pack",
+      "priority": { "base": 60, "projectedNeed": { "near": 1, "mid": 0.8, "far": 0.3 } },
+      "variants": {
+        "critical": { "version": 1, "fileId": "fresh-pine-straw-normal-height-ao-v2" },
+        "balanced": { "version": 1, "fileId": "fresh-pine-straw-normal-height-ao-v2" },
+        "quality": { "version": 1, "fileId": "fresh-pine-straw-normal-height-ao-v2" },
+        "ultra": { "version": 1, "fileId": "fresh-pine-straw-normal-height-ao-v2" }
       }
     },
     {
@@ -908,7 +1104,10 @@
         { "assetId": "ball-geometry", "required": true },
         { "assetId": "ball-relief", "required": true },
         { "assetId": "tree-small-02-geometry", "required": true },
-        { "assetId": "tree-small-02-leaves-alpha", "required": true }
+        { "assetId": "tree-small-02-leaves-alpha", "required": true },
+        { "assetId": "tree-pine-sapling-small-geometry", "required": true },
+        { "assetId": "tree-island-01-geometry", "required": true },
+        { "assetId": "tree-fir-01-geometry", "required": true }
       ]
     },
     "balanced": {
@@ -921,10 +1120,10 @@
       "extends": "balanced",
       "entries": [
         { "assetId": "environment-sky-kloofendal", "required": false },
-        { "assetId": "tree-island-01-geometry", "required": false },
-        { "assetId": "tree-island-01-leaves-alpha", "required": false },
         { "assetId": "tree-island-02-geometry", "required": false },
         { "assetId": "tree-island-02-leaves-alpha", "required": false },
+        { "assetId": "forest-floor-03-color-roughness", "required": false },
+        { "assetId": "forest-floor-03-normal-height-ao", "required": false },
         { "assetId": "environment-fern-02", "required": false },
         { "assetId": "environment-grass-medium-02", "required": false },
         { "assetId": "environment-grass-bermuda-01", "required": false },

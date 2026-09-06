@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const source = await readFile(new URL('../src/scene/Trees.js', import.meta.url), 'utf8');
-const rangeSource = await readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8');
+const rangeSource = await readFile(new URL('../src/scene/PlayableCourseScene.js', import.meta.url), 'utf8');
 const coniferBuild = await readFile(new URL('../scripts/build_conifer_v3.py', import.meta.url), 'utf8');
 
 test('tree GPU classifier uses exclusive near, middle, and impostor bands', () => {
@@ -26,14 +26,19 @@ test('tree GPU classifier uses exclusive near, middle, and impostor bands', () =
 
 test('projected-size thresholds are conservative and shared by GPU and residency estimate', () => {
   assert.match(source, /const TREE_LOD0_PROJECTED_HEIGHT = 0\.75;/);
+  assert.match(source, /const MATURE_FOREST_LOD0_PROJECTED_HEIGHT = 0\.33;/);
   assert.match(source, /const TREE_LOD1_PROJECTED_HEIGHT = 0\.20;/);
   assert.match(source, /const TREE_PROJECTED_STRUCTURE_RATIO = 0\.03;/);
   assert.match(source, /const TREE_IMPOSTOR_PROJECTED_STRUCTURE = 0\.009;/);
   assert.match(source, /const TREE_V8_LOD0_PROJECTED_HEIGHT = 1\.0;/);
   assert.match(source, /const TREE_V8_IMPOSTOR_PROJECTED_STRUCTURE = 0\.011;/);
   assert.match(source, /const residency = this\.residencyThresholds/);
-  assert.match(source, /56\.2% of LOD0's indexed triangles/);
-  assert.match(source, /this is about 270 px of full-tree height/);
+  assert.match(source, /Mature course overstory receives its stricter/);
+  assert.match(source, /matureCourseOverstory \? MATURE_FOREST_LOD0_PROJECTED_HEIGHT/);
+  assert.match(source, /lodNearMultiplier: matureCourseOverstory \? 2\.60 : nativeSapling \? 1\.25 : 1\.0/);
+  assert.match(source, /lodFarMultiplier: matureCourseOverstory \? 2\.60 : nativeSapling \? 1\.25 : 1\.0/);
+  assert.match(source, /lodNearPolicyFloor: matureCourseOverstory \? 0\.90 : 0\.10/);
+  assert.match(source, /lodFarPolicyFloor: matureCourseOverstory \? 0\.86 : 0\.10/);
   assert.match(source, /projectedHeight\.greaterThan\(projectedLod0Threshold\)/);
   assert.match(source, /projectedHeight\.greaterThan\(float\(residency\.lod1\)\)/);
   assert.match(source, /projectedHeight > projectedLod0Threshold/);
@@ -88,8 +93,8 @@ test('tree beauty path isolates one indirect command per role primitive and band
   assert.doesNotMatch(source, /const siblingCountsEqual = true/);
 });
 
-test('LOD1 authored atlas uses shared daylight mask path while LOD0 stays PBR', () => {
-  assert.match(source, /const middleLod = label === 'lod1'/);
+test('authored distance LODs use shared daylight mask path while LOD0 stays PBR', () => {
+  assert.match(source, /const middleLod = lodLabel !== 'lod0'/);
   assert.match(source, /const cheapMiddleAtlas = middleLod && _isAuthoredAlphaAtlas\(part\)/);
   assert.match(source, /new MeshBasicNodeMaterial\(\)/);
   assert.match(source, /const barkTile = atlasUv\.x\.lessThan\(0\.25\)\.and\(atlasUv\.y\.lessThan\(0\.25\)\)/);
@@ -157,19 +162,62 @@ test('conifer foliage uses bounded, sun-oriented two-sided transmission', () => 
 });
 
 test('foliage coverage rejects low-alpha hairs without temporal stipple', () => {
-  assert.match(source, /const TREE_FOLIAGE_ALPHA_CUTOFF = 0\.05/);
-  assert.match(source, /function useStableFoliageCoverage\(material, alphaNode\)/);
+  assert.match(source, /const TREE_FOLIAGE_ALPHA_CUTOFF = 0\.10/);
+  assert.match(source, /const TREE_MIDDLE_FOLIAGE_ALPHA_CUTOFF = 0\.06/);
+  assert.match(source, /const TREE_FAR_FOLIAGE_ALPHA_CUTOFF = 0\.035/);
+  assert.match(source, /visualLodCertification\.lod2 \* 2/,
+    'LOD2 residency must come from catalog visual certification');
+  assert.match(source, /function useStableFoliageCoverage\(material, alphaNode, cutoff = TREE_FOLIAGE_ALPHA_CUTOFF\)/);
   assert.match(source, /material\.opacityNode = alphaNode/);
-  assert.match(source, /material\.alphaTest = TREE_FOLIAGE_ALPHA_CUTOFF/);
+  assert.match(source, /material\.alphaTest = cutoff/);
   assert.match(source, /material\.alphaHash = false/);
   assert.match(source, /material\.transparent = false/);
   assert.match(source, /material\.depthWrite = true/);
+  assert.match(source, /const reactiveThinCoverage = 1/,
+    'subpixel opaque trunks and branches require the same temporal coverage path');
+  assert.match(source, /mrt\(\{ velocity: vec4\(treeVelocity, reactiveThinCoverage, 0\) \}\)/);
   assert.match(source, /material\.alphaTest = TREE_IMPOSTOR_ALPHA_CUTOFF/,
     'far impostors retain their lower measured cutoff so thin grounded silhouettes survive');
 });
 
+test('source-split middle foliage keeps authored RGB, normal map, and alpha on a lit Lambert path', () => {
+  assert.match(source, /const cheapMiddleFoliage = middleLod && part\.isFoliage && part\.material\.map/);
+  assert.match(source, /material = new SharedEnvironmentTreeLambertMaterial/);
+  assert.match(source, /class SharedEnvironmentTreeLambertLightingModel extends PhongLightingModel/);
+  assert.match(source, /super\(false\)/,
+    'middle foliage omits only the irrelevant specular lobe');
+  assert.match(source, /material\.normalMap = part\.material\.normalMap/);
+  assert.match(source, /normalMap\([\s\S]*texture\(material\.normalMap\)[\s\S]*material\.normalScale/,
+    'authored normal textures must be decoded through Three tangent space');
+  assert.match(source, /authoredNormalView\.transformDirection\(cameraWorldMatrix\)/,
+    'the custom storage-owned transform must retain the authored tangent-space normal sample');
+  assert.match(source, /if \(material\.normalMap\)/,
+    'normal-mapped materials must not be replaced by the geometry-only shading normal');
+  assert.match(source, /const middleFoliageColor = foliageColorNode\(part\.material, tint\)/);
+  assert.match(source, /const coverageCutoff = farLod[\s\S]*TREE_FAR_FOLIAGE_ALPHA_CUTOFF[\s\S]*TREE_MIDDLE_FOLIAGE_ALPHA_CUTOFF/);
+  assert.match(source, /material\.colorNode = needleTransmission\(\s*middleFoliageColor, transmissionFactor\(\), this\.environment/,
+    'the retained middle canopy keeps bounded sun-oriented needle transmission');
+  assert.match(source, /useStableFoliageCoverage\(material, texture\(part\.material\.alphaMap\)\.r\)/);
+});
+
+test('source fir structure keeps authored PBR maps on one exposure-matched environment path in both LODs', () => {
+  assert.match(source, /class SharedEnvironmentTreeStandardMaterial extends MeshStandardNodeMaterial/);
+  assert.match(source, /const normalizedFirStructure = this\.assetId === 'polyhaven-fir-tree-01'\s*&& !part\.isFoliage && part\.material\.map/);
+  assert.match(source, /material = new SharedEnvironmentTreeStandardMaterial\(\)/);
+  assert.match(source, /material\.copy\(part\.material\)/,
+    'the structural path must retain the source glTF normal and ARM maps');
+  assert.match(source, /material\.treeEnvironment = this\.environment/);
+  assert.match(source, /const sourceColorFactor = part\.material\.color/);
+  assert.match(source, /texture\(part\.material\.map\)\.rgb\s*\.mul\(vec3\(sourceColorFactor\.r, sourceColorFactor\.g, sourceColorFactor\.b\)\)\s*\.mul\(FIR_SOURCE_STRUCTURE_LINEAR_NORMALIZATION\)/);
+  assert.match(source, /const FIR_SOURCE_STRUCTURE_LINEAR_NORMALIZATION = vec3\(1\.45\)/);
+  assert.doesNotMatch(source, /FIR_SOURCE_STRUCTURE_LINEAR_NORMALIZATION[\s\S]{0,120}emissiveNode/,
+    'readability must come from neutral albedo exposure under real lighting, not emission');
+});
+
 test('tree geometry keeps all semantic parts grounded under one rigid source transform', () => {
-  assert.match(source, /part\.offsetY = -height \* 0\.075/);
+  assert.doesNotMatch(source, /part\.offsetY\s*=\s*-[^;]+/,
+    'foliage must never move independently from its authored trunk and branches');
+  assert.match(source, /offsetY: 0/);
   assert.match(source, /const leanX = 0/);
   assert.match(source, /const leanZ = 0/);
   assert.match(source, /const localPosition = positionGeometry/);
@@ -219,13 +267,13 @@ test('tree motion uses authored hierarchy and one root wind sample per history f
   const clearDispatch = source.indexOf('this.renderer.compute(this._clearCompute)');
   assert.ok(windDispatch >= 0 && windDispatch < clearDispatch,
     'source wind must be written before the existing beauty compute queue');
-  assert.match(source, /const windMotionAt = \(sample\) =>/);
+  assert.match(source, /const windMotionAt = \(sample, time\) =>/);
   assert.doesNotMatch(source, /const flutterMask|const flutterAmplitude|const transverse/,
     'alpha-cut foliage must not shear under independent per-vertex flutter');
   assert.match(source, /const arcDrop = horizontal\.length\(\)\.pow\(2\)/);
   assert.match(source, /const packedWind = this\._sourceWindReadOnly\.element\(sourceId\)/);
-  assert.match(source, /windMotionAt\(currentWind\)/);
-  assert.match(source, /windMotionAt\(previousWind\)/);
+  assert.match(source, /windMotionAt\(currentWind, this\.environment\.time\)/);
+  assert.match(source, /windMotionAt\(previousWind, this\.environment\.previousTime\)/);
   assert.doesNotMatch(source, /windAt\(staticWorld/);
   assert.doesNotMatch(source, /windAt\(world/);
   assert.match(source, /const bendWeight = heightFraction\.pow\(1\.7\)/);

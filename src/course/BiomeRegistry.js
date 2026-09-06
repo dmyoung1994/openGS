@@ -297,8 +297,11 @@ function boundaryDistance(boundary, bounds, x, z) {
 
 export function compileBiomeTransitionField(course, { texelsPerM = 1 } = {}) {
   const { bounds } = course;
-  const width = Math.max(2, Math.round((bounds.maxX - bounds.minX) * texelsPerM));
-  const height = Math.max(2, Math.round((bounds.maxZ - bounds.minZ) * texelsPerM));
+  const hasTransitions = course.biomeTransitions.length > 0;
+  // No boundary means every sample has the same weights. A single clamped texel
+  // represents that constant exactly, without rasterizing or uploading the course.
+  const width = hasTransitions ? Math.max(2, Math.round((bounds.maxX - bounds.minX) * texelsPerM)) : 1;
+  const height = hasTransitions ? Math.max(2, Math.round((bounds.maxZ - bounds.minZ) * texelsPerM)) : 1;
   const weights = new Float32Array(width * height * TRANSITION_WEIGHT_NAMES.length);
   const landData = new Uint16Array(width * height * 4);
   const waterData = new Uint16Array(width * height * 4);
@@ -325,7 +328,7 @@ export function compileBiomeTransitionField(course, { texelsPerM = 1 } = {}) {
   };
   return Object.freeze({
     course, bounds, width, height, texelsPerM, weights,
-    hasTransitions: course.biomeTransitions.length > 0,
+    hasTransitions,
     landTexture: makeTexture(landData, 'biome-transition-land-rgba16f'),
     waterTexture: makeTexture(waterData, 'biome-transition-water-rgba16f'),
     sample: (x, z) => classifyBiomeAt(course, x, z),

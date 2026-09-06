@@ -21,10 +21,13 @@ import {
 // ring while a shot is in progress would draw unrelated head/tail segments together,
 // which is a corrupt renderer state rather than a useful lower-quality mode.
 const SUBDIVISIONS = 8;
-const LIVE_TRACER_OPACITY = 0.78;
+const LIVE_TRACER_OPACITY = 1.0;
 const LIVE_TRACER_WIDTH_PIXELS = 5.2;
-const HISTORY_TRACER_OPACITY = 0.38;
+const HISTORY_TRACER_OPACITY = 1.0;
 const HISTORY_TRACER_WIDTH_PIXELS = 2.2;
+// Rasterized margin each side of the drawn width, so the analytic coverage ramp is
+// always interior to the geometry. One pixel is exactly the box filter's support.
+const COVERAGE_SKIRT_PIXELS = 1.0;
 
 function createRibbonGeometry(drawArgsAttr, instanceCount) {
   const positions = [];
@@ -45,7 +48,9 @@ function createRibbonGeometry(drawArgsAttr, instanceCount) {
   return geo;
 }
 
-function createRibbonMaterial({ points, pointCount, opacity, ribbonPixels, history = false }) {
+function createRibbonMaterial({
+  points, pointCount, opacity, ribbonPixels, ribbonColor = null, alongFade = null,
+}) {
   const segment = uint(instanceIndex);
   const finalPoint = pointCount.sub(uint(1)).max(uint(0));
   const i0 = segment.equal(uint(0)).select(uint(0), segment.sub(uint(1)));
@@ -95,35 +100,49 @@ function createRibbonMaterial({ points, pointCount, opacity, ribbonPixels, histo
     .mul(oneMinus(smoothstep(0.985, 1.0, along)));
   const side = positionGeometry.x;
   // A clean broadcast ribbon keeps the trajectory readable over turf, trees, and
-  // sky. It stays optically quiet: contrast comes from a soft neutral body and a
-  // restrained green leading edge, never a separate bloom or halo pass.
-  const halfWidthPx = ribbonPixels.mul(0.5).mul(endpointTaper.max(0.025));
-  const ndcOffset = perpendicular.mul(side).mul(halfWidthPx.mul(2.0)).div(screenSize);
+  // sky. The body is solid white; only pixel coverage and endpoints are feathered.
+  const visualHalfPx = ribbonPixels.mul(0.5).mul(endpointTaper.max(0.025));
+  // Rasterize a skirt beyond the width actually drawn. When the quad edge coincides
+  // with the end of the coverage ramp, the shader can only ever subtract coverage
+  // from inside the quad: a pixel straddling the true edge is never shaded at all, so
+  // the silhouette is a hard rasterized staircase and the line's brightness swims with
+  // wherever pixel centres happen to fall. With the skirt the whole ramp lives inside
+  // the geometry and every partially covered pixel gets shaded.
+  const geometryHalfPx = visualHalfPx.add(COVERAGE_SKIRT_PIXELS);
+  const ndcOffset = perpendicular.mul(side).mul(geometryHalfPx.mul(2.0)).div(screenSize);
   const finalClip = vec4(clip.xy.add(ndcOffset.mul(clip.w)), clip.z, clip.w);
 
   // These are screen-space coverage coordinates, so linear (no-perspective)
   // centroid interpolation avoids rotation-dependent warping and samples from
-  // outside a thin oblique triangle. Derivatives then widen both silhouette and
-  // endpoint transitions by their actual per-fragment pixel footprint.
-  const vSide = varying(side, 'vTracerSide').setInterpolation('linear', 'centroid');
+  // outside a thin oblique triangle. Carrying the offset in pixels makes coverage
+  // exactly rotation-invariant rather than an estimate from screen derivatives.
+  const vOffsetPx = varying(side.mul(geometryHalfPx), 'vTracerOffsetPx')
+    .setInterpolation('linear', 'centroid');
+  const vHalfPx = varying(visualHalfPx, 'vTracerHalfPx').setInterpolation('linear', 'centroid');
   const vAlong = varying(along, 'vTracerAlong').setInterpolation('linear', 'centroid');
   const alongFootprint = vAlong.fwidth().abs();
   const tailFeather = alongFootprint.mul(1.25).max(0.035).min(0.12);
   const headFeather = alongFootprint.mul(1.25).max(0.015).min(0.08);
   const fragmentTaper = smoothstep(0.0, tailFeather, vAlong)
     .mul(oneMinus(smoothstep(oneMinus(headFeather), 1.0, vAlong)));
-  const edge = float(1.0).sub(vSide.abs());
-  // `vSide` spans -1..1 across the physical ribbon. Its fwidth therefore measures
-  // exactly how much of that span one pixel covers at the current width/rotation.
-  // The bounds keep broad lines crisp and sub-pixel tapers finite without a halo.
-  const edgeFeather = vSide.fwidth().abs().mul(0.75).clamp(0.08, 1.0);
-  const edgeCoverage = smoothstep(0.0, edgeFeather, edge);
-  const trailNeutral = vec3(0.84, 0.90, 0.84);
-  const flightGreen = vec3(0.34, 0.78, 0.46);
-  const color = history
-    ? vec3(1.0, 1.0, 1.0)
-    : mix(trailNeutral, flightGreen, smoothstep(0.70, 0.98, vAlong));
-  const alpha = edgeCoverage.mul(fragmentTaper).mul(opacity).clamp(0.0, 1.0);
+  // Box-filtered coverage of a band of half-width h at pixel distance d: solid
+  // through the body, ramping across exactly one pixel at the boundary. The 2h cap
+  // is what lets a sub-pixel ribbon dim smoothly instead of dropping in and out of
+  // the raster as it tapers, so no separate minimum width is needed.
+  const edgeCoverage = vHalfPx.add(0.5).sub(vOffsetPx.abs())
+    .min(vHalfPx.mul(2.0))
+    .clamp(0.0, 1.0);
+  // Shot tracers are always the solid white body above. `ribbonColor` exists only
+  // for the loading green's putt mural, which tints each holed line to build a
+  // legible overlay; nothing on the play path supplies it.
+  const color = ribbonColor ?? vec3(1.0, 1.0, 1.0);
+  // Optional length gradient, faint where the stroke began and full at its head.
+  // A shot tracer is uniformly solid along the flight; only the loading green's
+  // mural asks for direction, so the play path keeps the undivided expression.
+  const coverage = alongFade
+    ? edgeCoverage.mul(fragmentTaper).mul(mix(alongFade, float(1.0), vAlong.clamp(0.0, 1.0)))
+    : edgeCoverage.mul(fragmentTaper);
+  const alpha = coverage.mul(opacity).clamp(0.0, 1.0);
 
   const mat = new MeshBasicNodeMaterial({
     transparent: true,
@@ -137,8 +156,40 @@ function createRibbonMaterial({ points, pointCount, opacity, ribbonPixels, histo
   return mat;
 }
 
+// Uniform arc-length resample. `storage(attribute, 'vec4', count)` bakes the array
+// length into the generated WGSL, so promoted lines of varying length each force a
+// fresh pipeline compile. Callers that promote repeatedly (the loading green, once
+// per holed putt) pin one length and pay that compile exactly once.
+function resamplePolyline(points, count) {
+  const source = points.length / 3;
+  if (!Number.isInteger(count) || count < 2) throw new Error('Tracer history resampling needs at least two samples.');
+  if (source < 2) throw new Error('Tracer history resampling needs at least two source samples.');
+  const lengths = new Float64Array(source);
+  for (let i = 1; i < source; i++) {
+    lengths[i] = lengths[i - 1] + Math.hypot(
+      points[i * 3] - points[(i - 1) * 3],
+      points[i * 3 + 1] - points[(i - 1) * 3 + 1],
+      points[i * 3 + 2] - points[(i - 1) * 3 + 2]);
+  }
+  const total = lengths[source - 1];
+  const out = new Float32Array(count * 3);
+  let segment = 0;
+  for (let sample = 0; sample < count; sample++) {
+    const target = total * sample / (count - 1);
+    while (segment < source - 2 && lengths[segment + 1] < target) segment++;
+    const span = lengths[segment + 1] - lengths[segment];
+    const amount = span > 0 ? (target - lengths[segment]) / span : 0;
+    for (let axis = 0; axis < 3; axis++) {
+      const a = points[segment * 3 + axis], b = points[(segment + 1) * 3 + axis];
+      out[sample * 3 + axis] = a + (b - a) * amount;
+    }
+  }
+  return out;
+}
+
 class HistoricalTracer {
-  constructor(scene, renderer, points, serial) {
+  constructor(scene, renderer, points, serial,
+    { ribbonPixels, color = null, alongFade = null } = {}) {
     this.renderer = renderer;
     this.pointsAttr = new StorageBufferAttribute(new Float32Array(points.length / 3 * 4), 4);
     for (let i = 0; i < points.length / 3; i++) {
@@ -153,7 +204,8 @@ class HistoricalTracer {
     this.pointCount = points.length / 3;
     this.uPointCount = uniform(this.pointCount, 'uint');
     this.uOpacity = uniform(HISTORY_TRACER_OPACITY);
-    this.uRibbonPixels = uniform(HISTORY_TRACER_WIDTH_PIXELS);
+    this.uRibbonPixels = uniform(ribbonPixels ?? HISTORY_TRACER_WIDTH_PIXELS);
+    this.uColor = color ? uniform(color.clone()) : null;
     this.drawArgsAttr = new IndirectStorageBufferAttribute(new Uint32Array([
       SUBDIVISIONS * 6, this.pointCount - 1, 0, 0, 0,
     ]), 5);
@@ -163,6 +215,8 @@ class HistoricalTracer {
       pointCount: this.uPointCount,
       opacity: this.uOpacity,
       ribbonPixels: this.uRibbonPixels,
+      ribbonColor: this.uColor,
+      alongFade,
       history: true,
     });
     this.line = new Mesh(this.geo, this.material);
@@ -182,14 +236,24 @@ class HistoricalTracer {
 }
 
 export class Tracer {
-  constructor(scene, { renderer, max = 2048, maxHistory = 16 } = {}) {
+  constructor(scene, {
+    renderer, max = 2048, maxHistory = 16, liveWidthPixels = LIVE_TRACER_WIDTH_PIXELS,
+    historyWidthPixels = HISTORY_TRACER_WIDTH_PIXELS, historySamples = null, liveColor = null,
+    alongFade = null,
+  } = {}) {
     if (!renderer?.isWebGPURenderer) throw new Error('Tracer requires the strict WebGPU renderer.');
     if (!Number.isInteger(max) || max < 4) throw new Error('Tracer history capacity must be an integer >= 4.');
     if (!Number.isInteger(maxHistory) || maxHistory < 1) throw new Error('Tracer shot-history capacity must be an integer >= 1.');
+    if (historySamples !== null && (!Number.isInteger(historySamples) || historySamples < 2)) {
+      throw new Error('Tracer history sample count must be null or an integer >= 2.');
+    }
     this.scene = scene;
     this.renderer = renderer;
     this.max = max;
     this.maxHistory = maxHistory;
+    this.historyWidthPixels = historyWidthPixels;
+    this.alongFade = alongFade;
+    this.historySamples = historySamples;
     this.count = 0;
     this._point = new Vector3();
     this._cpuPoints = new Float32Array(max * 3);
@@ -207,7 +271,9 @@ export class Tracer {
     this.uPoint = uniform(this._point);
     this.uPointCount = uniform(0, 'uint');
     this.uOpacity = uniform(LIVE_TRACER_OPACITY);
-    this.uRibbonPixels = uniform(LIVE_TRACER_WIDTH_PIXELS);
+    this.uRibbonPixels = uniform(liveWidthPixels);
+    // Left null on the play path so the shot ribbon keeps its literal white body.
+    this.uColor = liveColor ? uniform(liveColor.clone()) : null;
 
     this._appendCompute = Fn(() => {
       this._points.element(this.uAppendIndex).assign(vec4(this.uPoint, 1.0));
@@ -234,6 +300,8 @@ export class Tracer {
       pointCount: this.uPointCount,
       opacity: this.uOpacity,
       ribbonPixels: this.uRibbonPixels,
+      ribbonColor: this.uColor,
+      alongFade,
     }));
     this.line.name = 'shot-tracer-gpu-indirect';
     this.line.visible = false;
@@ -247,11 +315,19 @@ export class Tracer {
   }
 
   promoteActiveToWhite() {
+    return this.promoteActiveToHistory();
+  }
+
+  promoteActiveToHistory({ color = null } = {}) {
     this._assertLive();
     if (this.count < 2) return false;
-    const points = this._cpuPoints.slice(0, this.count * 3);
+    const captured = this._cpuPoints.slice(0, this.count * 3);
+    const points = this.historySamples === null
+      ? captured
+      : resamplePolyline(captured, this.historySamples);
     this._history.push(new HistoricalTracer(
       this.scene, this.renderer, points, ++this._historySerial,
+      { ribbonPixels: this.historyWidthPixels, color, alongFade: this.alongFade },
     ));
     while (this._history.length > this.maxHistory) {
       this._history.shift().dispose();
@@ -259,13 +335,34 @@ export class Tracer {
     return true;
   }
 
+  // Re-tunes every retained line from newest to oldest. The mural uses this to keep
+  // one hero stroke and let the rest recede, which is what stops a dozen equally
+  // loud lines from reading as noise. `style(age, total)` sees age 0 as the newest.
+  restyleHistory(style) {
+    this._assertLive();
+    const total = this._history.length;
+    for (let index = 0; index < total; index++) {
+      const line = this._history[index];
+      const applied = style(total - 1 - index, total);
+      if (applied?.opacity !== undefined) line.uOpacity.value = applied.opacity;
+      if (applied?.color) {
+        if (!line.uColor) throw new Error('Tracer history line was not created with a colour.');
+        line.uColor.value.copy(applied.color);
+      }
+    }
+  }
+
+  setLiveColor(color) {
+    this._assertLive();
+    if (!this.uColor) throw new Error('Tracer was not constructed with a live ribbon colour.');
+    this.uColor.value.copy(color);
+  }
+
   reset() {
     this._assertLive();
     this.count = 0;
     this.uPointCount.value = 0;
-    // Reset is the launch boundary for the same active material later held on the
-    // result screen. Restoring opaque alpha here made the orbit reveal stair-steps
-    // that were intentionally filtered in the constructor's presentation setup.
+    // Keep the white body opaque across launch/result; edge coverage remains AA.
     this.uOpacity.value = LIVE_TRACER_OPACITY;
     this.line.visible = false;
     this.renderer.compute(this._resetCompute);

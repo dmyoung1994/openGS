@@ -2,23 +2,16 @@ import { Terrain } from '../terrain/Terrain.js';
 import { Grass } from '../terrain/Grass.js';
 import { buildBunkerMesh } from '../scene/Bunkers.js';
 import { createGolfBallMesh } from '../scene/GolfBall.js';
-import { GeneratedFoliageForest, GeneratedFoliageTree } from '../scene/GeneratedFoliageTree.js';
-import { createLocalFoliagePackRegistry, loadFoliageAlias } from '../foliage/FoliagePackResolver.js';
+import { ProceduralTreeForest } from '../scene/ProceduralTrees.js';
+import { legacyTreeDefinition, normalizeTreeDefinition } from '../trees/TreeDefinition.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import {
-  BufferAttribute, BufferGeometry, ClampToEdgeWrapping, CylinderGeometry,
-  DoubleSide, Group, LinearMipmapLinearFilter, Mesh, MeshStandardMaterial, NearestFilter, PlaneGeometry,
-  SRGBColorSpace, TextureLoader, Vector3,
+  LinearFilter, NoColorSpace, SRGBColorSpace, TextureLoader,
 } from 'three';
-import { MeshBasicNodeMaterial } from 'three/webgpu';
-import { mix, texture, vec3 } from 'three/tsl';
 
 const viewerGltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const viewerTextureLoader = new TextureLoader();
-const localFoliagePackRegistry = createLocalFoliagePackRegistry(
-  globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__ ?? [],
-);
 import { WaterSurface } from '../scene/WaterSurface.js';
 
 // Asset registry for the isolated viewer (viewer.html).
@@ -117,6 +110,10 @@ function turfPatch(kind, { withGrass = false, camera, renderer, motionHistory, e
     heightFn: swell,
     surfaceFn,
     zones,
+    // Viewer patches intentionally end at their 44 m boundary. An exact finite
+    // grid keeps that silhouette continuous instead of letting course clipmap
+    // sentinel triangles cut notches through the exposed horizon.
+    finiteCanvas: true,
     // Terrain's production material owns the GPU-authored macro/zone fields and
     // therefore requires the live WebGPU renderer in the isolated lab too.
     renderer,
@@ -131,311 +128,59 @@ function turfPatch(kind, { withGrass = false, camera, renderer, motionHistory, e
   return out;
 }
 
-// Candidate-only v4 viewer path.  This is deliberately a direct GLTF subject:
-// it exercises the authored masked PBR atlas and scaffold without importing the
-// production tree residency/catalog path.  The candidate is CPU-baked and is
-// not referenced by Range/Trees/course assets.
-async function coniferV4CandidatePatch({ renderer, lod = 0 }) {
+async function proceduralTreePatch({ renderer, camera }, archetype = 'live-oak') {
   const minX = PATCH_X, minZ = -PATCH / 2;
   const cx = minX + PATCH / 2, cz = 0;
   const terrain = new Terrain({
     bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH },
     spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
-    surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
+    surfaceFn: () => 'fairway', zones: ZONES.fairway(), finiteCanvas: true, renderer,
   });
-  const gltf = await viewerGltfLoader.loadAsync(
-    `/assets/trees_candidates/conifer_v4/conifer_v4_lod${lod}.glb`,
-  );
-  const subject = gltf.scene;
-  subject.position.set(cx, terrain.heightAt(cx, cz), cz);
-  subject.traverse((object) => {
-    if (!object.isMesh) return;
-    object.castShadow = true;
-    object.receiveShadow = true;
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    for (const material of materials) {
-      if (!material) continue;
-      material.transparent = false;
-      material.alphaTest = 0.06;
-      material.depthWrite = true;
-      material.needsUpdate = true;
-    }
-  });
-  const renderVertices = lod === 0 ? 116652 : 62172;
-  const triangles = lod === 0 ? 38884 : 20724;
-  const treeBeauty = {
-    group: subject,
-    update() {},
-    residencyEstimate() {
-      return { candidateOnly: true, lod, renderVertices, triangles,
-        materialPrimitives: 1, twigAlphaTest: 0.06, height: 18.895 };
+  const query = new URL(window.location.href).searchParams;
+  const variant = Math.max(0, Math.min(3, Number.parseInt(query.get('variant') ?? '0', 10) || 0));
+  const definition = archetype === 'imagegen-live-oak'
+    ? await fetch('/assets/procedural-trees/imagegen-live-oak/definition.json').then((response) => {
+      if (!response.ok) throw new Error(`ImageGen tree definition failed to load (${response.status}).`);
+      return response.json();
+    })
+    : archetype === 'l-system' ? {
+    id: 'viewer-l-system', generator: 'l-system', seed: 17, variantCount: 1,
+    grammar: {
+      axiom: ['F'], iterations: 4, angle: 24, step: 0.72, radius: 0.18, tropism: [0, 0.12, 0],
+      productions: { F: [{ weight: 1, successor: [
+        { symbol: 'F', parameters: [{ op: '*', args: [{ var: 'p0' }, 0.86] }] },
+        '[', '+', 'F', 'L', ']', '[', '-', 'F', 'L', ']', 'F',
+      ] }] },
     },
-    readDiagnostics() { return this.residencyEstimate(); },
-    dispose() {},
-  };
-  return { terrain, objects: [terrain.mesh, subject], focus: { x: cx, z: cz }, treeBeauty };
-}
-
-function generatedFirCardGeometry(clusters) {
-  const positions = [];
-  const normals = [];
-  const uvs = [];
-  const indices = [];
-  const up = new Vector3(0, 1, 0);
-  const tangent = new Vector3();
-  const branch = new Vector3();
-  const cardUp = new Vector3();
-  const normal = new Vector3();
-  const center = new Vector3();
-  const corner = new Vector3();
-  let cardCount = 0;
-  const random = (n) => {
-    const value = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
-    return value - Math.floor(value);
-  };
-
-  function appendCard({ y, azimuth, length, width, roll, cluster }) {
-    branch.set(Math.cos(azimuth), 0.055 + random(cardCount + 71) * 0.08, Math.sin(azimuth)).normalize();
-    tangent.set(-Math.sin(azimuth), 0, Math.cos(azimuth));
-    cardUp.copy(up).multiplyScalar(Math.cos(roll)).addScaledVector(tangent, Math.sin(roll)).normalize();
-    center.copy(branch).multiplyScalar(length * 0.5 + 0.10);
-    center.y += y;
-    // Broad canopy lighting should follow the crown volume, not expose the
-    // orientation of each flat support plane. Fine needle response stays in the
-    // albedo; this spherical normal keeps adjacent crossed sprays coherent.
-    normal.set(center.x, Math.max(0.35, width * 0.22), center.z).normalize();
-    const halfLength = length * 0.5;
-    const halfWidth = width * 0.5;
-    const base = positions.length / 3;
-    const signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
-    for (const [su, sv] of signs) {
-      corner.copy(center).addScaledVector(branch, su * halfLength).addScaledVector(cardUp, sv * halfWidth);
-      positions.push(corner.x, corner.y, corner.z);
-      normals.push(normal.x, normal.y, normal.z);
-    }
-    const { u0, v0, u1, v1 } = cluster.uv;
-    const uBase = cluster.baseEdge === 'right' ? u1 : u0;
-    const uTip = cluster.baseEdge === 'right' ? u0 : u1;
-    uvs.push(uBase, v0, uTip, v0, uTip, v1, uBase, v1);
-    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-    cardCount++;
-  }
-
-  // A Douglas-fir crown is assembled from radial branch sprays, not random
-  // billboards. Dense cards mass the interior while crossed sparse cards break
-  // the outline and keep the crown volumetric when a radial plane turns edge-on.
-  const levels = 15;
-  for (let level = 0; level < levels; level++) {
-    const t = level / (levels - 1);
-    const y = 1.8 + t * 17.1;
-    const radius = 0.68 + 4.55 * Math.pow(1 - t, 0.76);
-    const branches = level < 9 ? 7 : (level < 13 ? 6 : 5);
-    for (let branchIndex = 0; branchIndex < branches; branchIndex++) {
-      const seed = level * 19 + branchIndex * 7;
-      const azimuth = branchIndex * Math.PI * 2 / branches + level * 0.47 + (random(seed) - 0.5) * 0.18;
-      const length = radius * (0.84 + random(seed + 1) * 0.20);
-      const primaryIndex = level < 3 ? 3 : (level > 9 ? 0 : [1, 2, 5][(level + branchIndex) % 3]);
-      const primary = clusters[primaryIndex];
-      appendCard({
-        y, azimuth, length,
-        width: Math.max(0.50, length / Math.max(1.15, primary.aspect) * 0.62),
-        roll: (random(seed + 2) - 0.5) * 0.72,
-        cluster: primary,
-      });
-      if (level < 14) {
-        const breaker = clusters[(level + branchIndex) % 3 === 0 ? 7 : 0];
-        appendCard({
-          y: y + 0.08, azimuth: azimuth + 0.035, length: length * 0.88,
-          width: Math.max(0.42, length / Math.max(1.1, breaker.aspect) * 0.46),
-          roll: 0.94 + (random(seed + 3) - 0.5) * 0.54,
-          cluster: breaker,
-        });
-      }
-    }
-  }
-
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
-  geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
-  geometry.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2));
-  geometry.setIndex(indices);
-  geometry.computeBoundingSphere();
-  return { geometry, cardCount };
-}
-
-// Candidate-only generated-cluster renderer. It proves the source/processing/card
-// assembly loop in the real viewer while staying isolated from Range and the
-// production tree catalog. One masked foliage draw plus one trunk draw makes its
-// performance shape honest enough to evaluate before building hierarchical LOD.
-function generatedPackInspection(pack, { subject, mipLevel = 0 }) {
-  const group = new Group();
-  group.name = `generated-foliage-pack-${subject}`;
-  if (subject === 'mip') {
-    // Forced low mips are magnified for inspection; nearest filtering makes the
-    // actual retained texels readable instead of smoothly reconstructing them.
-    pack.atlas.magFilter = NearestFilter;
-    pack.atlas.needsUpdate = true;
-  }
-  const atlasSample = texture(pack.atlas).level(mipLevel);
-  const material = new MeshBasicNodeMaterial({ side: DoubleSide });
-  if (subject === 'atlas' || subject === 'mip') {
-    // Composite transparent atlas texels over a neutral reference so dilation,
-    // fringe, cell gutters, and a forced mip are visible without checkerboard
-    // aliasing becoming part of the inspection result.
-    material.colorNode = mix(vec3(0.075), atlasSample.rgb, atlasSample.a);
-    material.opacity = 1;
-  } else {
-    material.colorNode = atlasSample.rgb;
-    material.opacityNode = atlasSample.a;
-    material.alphaTest = 0.02;
-    material.transparent = false;
-    material.depthWrite = true;
-  }
-  material.needsUpdate = true;
-
-  if (subject === 'atlas' || subject === 'mip') {
-    const plane = new Mesh(new PlaneGeometry(12, 12), material);
-    plane.position.set(-2, 9.5, 0);
-    group.add(plane);
-  } else {
-    for (const [index, cluster] of pack.metadata.clusters.entries()) {
-      const width = 2.8;
-      const height = width / Math.max(0.5, cluster.aspect);
-      const geometry = new PlaneGeometry(width, height);
-      const cardUv = geometry.getAttribute('uv');
-      for (let vertex = 0; vertex < cardUv.count; vertex++) {
-        cardUv.setXY(vertex,
-          cluster.uv.u0 + (cluster.uv.u1 - cluster.uv.u0) * cardUv.getX(vertex),
-          cluster.uv.v0 + (cluster.uv.v1 - cluster.uv.v0) * cardUv.getY(vertex));
-      }
-      cardUv.needsUpdate = true;
-      const card = new Mesh(geometry, material);
-      card.name = `generated-foliage-card:${index}:${cluster.name}`;
-      card.position.set(-2 + (index % 4 - 1.5) * 3.25, 12.0 - Math.floor(index / 4) * 5.0, 0);
-      group.add(card);
-    }
-  }
-
-  return {
-    group,
-    diagnostics: Object.freeze({
-      candidateOnly: true, generatedSource: true, labSubject: subject,
-      mipLevel, clusterCount: pack.metadata.clusters.length,
-      clusterNames: pack.metadata.clusters.map(({ name }) => name),
-      drawCalls: subject === 'cards' ? pack.metadata.clusters.length : 1,
-      textureMode: pack.textureMode, atlasMetrics: pack.metadata.metrics,
-    }),
-    dispose() {
-      for (const child of group.children) child.geometry?.dispose();
-      material.dispose();
-      pack.atlas.dispose(); pack.materialMask.dispose();
-      for (const barkTexture of Object.values(pack.bark)) barkTexture.dispose();
+    materials: {
+      bark: { color: '#513c2a', roughness: 0.96 },
+      leaves: { color: '#315b31', roughness: 0.9, alphaCutoff: 0.32, doubleSided: true },
+      blossoms: { color: '#efd5d7', roughness: 0.8 },
     },
+  } : structuredClone(legacyTreeDefinition(archetype));
+  definition.variantCount = 1;
+  definition.seed = (definition.seed + variant) >>> 0;
+  const normalized = normalizeTreeDefinition(definition);
+  const placement = {
+    id: 'viewer-tree', definitionId: normalized.id, x: cx, z: cz, rotationY: 0,
+    scale: 1, seed: variant, age: 1, health: 1, windExposure: 0.5,
   };
-}
-
-async function generatedTreePatch({ renderer, camera, environment, motionHistory }, {
-  alias, height, foliageStandoff, frameWidth, forceBand = null,
-}) {
-  const minX = PATCH_X, minZ = -PATCH / 2;
-  const cx = minX + PATCH / 2, cz = 0;
-  const terrain = new Terrain({
-    bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH },
-    spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
-    surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
+  const forest = await ProceduralTreeForest.create({
+    definitions: [normalized], placements: [placement], camera, terrain, renderer, seed: variant,
   });
-  const textureMode = new URL(window.location.href).searchParams.get('texture') === 'png' ? 'png' : 'ktx2';
-  const requestedDebug = new URL(window.location.href).searchParams.get('debug') ?? 'beauty';
-  const debugMode = ['beauty', 'alpha', 'material', 'normal', 'lod', 'hull', 'overdraw'].includes(requestedDebug)
-    ? requestedDebug : 'beauty';
-  const boundedQueryNumber = (name, fallback, min, max) => {
-    const value = new URL(window.location.href).searchParams.get(name);
-    if (value === null || value.trim() === '') return fallback;
-    const raw = Number(value);
-    return Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : fallback;
-  };
-  const labControls = {
-    alphaTest: boundedQueryNumber('alphaTest', 0.20, 0, 0.95),
-    roughnessStrength: boundedQueryNumber('roughness', 1, 0, 1),
-    normalShaping: boundedQueryNumber('normalShape', 0, 0, 1),
-    transmissionStrength: boundedQueryNumber('transmission', 1, 0, 2),
-  };
-  const pack = await loadFoliageAlias(alias, {
-    renderer, textureMode, allowCandidate: true, local: localFoliagePackRegistry,
-  });
-  const requestedSubject = new URL(window.location.href).searchParams.get('subject') ?? 'tree';
-  const subject = ['tree', 'atlas', 'cards', 'mip'].includes(requestedSubject) ? requestedSubject : 'tree';
-  if (subject !== 'tree') {
-    const mipLevel = subject === 'mip' ? boundedQueryNumber('mip', 4, 0, 10) : 0;
-    const inspection = generatedPackInspection(pack, { subject, mipLevel });
-    const baseY = terrain.heightAt(cx, cz);
-    inspection.group.position.set(cx, baseY, cz);
-    const treeBeauty = {
-      group: inspection.group, update() {},
-      residencyEstimate() { return inspection.diagnostics; },
-      readDiagnostics() { return inspection.diagnostics; },
-      dispose() { inspection.dispose(); },
-    };
-    return {
-      terrain, objects: [terrain.mesh, inspection.group], focus: { x: cx, z: cz }, treeBeauty,
-      focusY: baseY + 9.5, foliageStandoff: 10,
-      frameBounds: { center: [cx, baseY + 9.5, cz], size: [14, 14, 1] },
-    };
+  const debug = query.get('debug') ?? 'beauty';
+  for (const batch of forest.batches) {
+    if (debug === 'structure') for (const name of ['nearLeaves', 'nearBlossoms', 'farLeaves', 'farBlossoms']) batch.draws[name].visible = false;
+    if (debug === 'foliage') for (const name of ['nearBranches', 'farBranches']) batch.draws[name].visible = false;
   }
-  const generatedTree = new GeneratedFoliageTree({ pack, environment, camera, motionHistory,
-    seed: 0x51a7e5d, height, debugMode, forceBand, labControls });
-  const group = generatedTree.group;
+  const diagnostics = forest.workloadDiagnostics();
+  const bounds = forest.batches[0].skeleton.bounds;
   const baseY = terrain.heightAt(cx, cz);
-  group.position.set(cx, baseY, cz);
-  const treeBeauty = {
-    group,
-    update(activeCamera) { generatedTree.update(activeCamera); },
-    residencyEstimate(activeCamera) { return generatedTree.diagnostics(activeCamera); },
-    readDiagnostics() { return generatedTree.diagnostics(camera); },
-    dispose() { generatedTree.dispose(); },
-  };
   return {
-    terrain, objects: [terrain.mesh, group], focus: { x: cx, z: cz }, treeBeauty,
-    focusY: baseY + height * 0.49,
-    foliageStandoff,
-    frameBounds: { center: [cx, baseY + height * 0.5, cz], size: [frameWidth, height, frameWidth] },
-  };
-}
-
-async function generatedDouglasFirForestPatch({ renderer, camera, environment, motionHistory }) {
-  const minX = PATCH_X - 28, minZ = -32;
-  const cx = PATCH_X, cz = 0;
-  const terrain = new Terrain({
-    bounds: { minX, maxX: minX + 56, minZ, maxZ: minZ + 64 },
-    spacing: 0.8, renderSpacing: 0.8, heightFn: swell,
-    surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
-  });
-  const textureMode = new URL(window.location.href).searchParams.get('texture') === 'png' ? 'png' : 'ktx2';
-  const pack = await loadFoliageAlias('builtin.douglas-fir.pnw.v1', {
-    renderer, textureMode, allowCandidate: true,
-  });
-  const perimeter = [
-    [-24, -26, 0.96], [-15, -29, 0.72], [-5, -30, 1.08], [7, -29, 0.82], [20, -25, 1.02],
-    [-25, -12, 0.76], [-24, 5, 1.12], [-25, 22, 0.88],
-    [25, -9, 1.04], [24, 8, 0.70], [26, 24, 0.98],
-    [-18, 27, 0.74], [-6, 29, 1.06], [8, 28, 0.84], [20, 26, 0.94],
-  ].map(([dx, dz, scale], index) => ({
-    x: cx + dx, z: cz + dz, y: terrain.heightAt(cx + dx, cz + dz), scale,
-    rotY: index * 2.399 + (index % 3) * 0.17,
-  }));
-  const forest = new GeneratedFoliageForest({ pack, placements: perimeter, environment, camera, motionHistory, renderer,
-    seed: 0x67d0a61, identityCount: 3 });
-  return {
-    terrain, objects: [terrain.mesh, forest.group], focus: { x: cx, z: cz },
-    focusY: terrain.heightAt(cx, cz) + 8,
-    frameBounds: { center: [cx, terrain.heightAt(cx, cz) + 10, cz], size: [56, 22, 64] },
-    treeBeauty: {
-      group: forest.group,
-      update(activeCamera) { forest.update(activeCamera); },
-      residencyEstimate() { return forest.residencyEstimate(); },
-      readDiagnostics() { return forest.residencyEstimate(); },
-      dispose() { forest.dispose(); },
-    },
+    terrain, objects: [terrain.mesh, forest.group, forest.shadow.mesh], focus: { x: cx, z: cz },
+    treeBeauty: forest, focusY: baseY + bounds.center[1], foliageStandoff: bounds.canopyRadius,
+    frameBounds: { center: [cx + bounds.center[0], baseY + bounds.center[1], cz + bounds.center[2]], size: bounds.size },
+    treeDefinition: normalized, proceduralDiagnostics: diagnostics,
   };
 }
 
@@ -445,19 +190,46 @@ async function onlineTreeReferencePatch({
   scale = 1,
   targetHeight = 12,
   frameWidth = targetHeight * 0.82,
+  alphaMaps = [],
 }) {
   const minX = PATCH_X, minZ = -PATCH / 2;
   const cx = minX + PATCH / 2, cz = 0;
   const terrain = new Terrain({
     bounds: { minX, maxX: minX + PATCH, minZ, maxZ: minZ + PATCH },
     spacing: 0.6, renderSpacing: 0.6, heightFn: swell,
-    surfaceFn: () => 'fairway', zones: ZONES.fairway(), renderer,
+    surfaceFn: () => 'fairway', zones: ZONES.fairway(), finiteCanvas: true, renderer,
   });
   const baseY = terrain.heightAt(cx, cz);
-  const gltf = await viewerGltfLoader.loadAsync(file);
+  const [gltf, loadedAlphaMaps] = await Promise.all([
+    viewerGltfLoader.loadAsync(file),
+    Promise.all(alphaMaps.map(async ({ material, url }) => {
+      const alphaMap = await viewerTextureLoader.loadAsync(url);
+      alphaMap.colorSpace = NoColorSpace;
+      alphaMap.minFilter = LinearFilter;
+      alphaMap.magFilter = LinearFilter;
+      alphaMap.generateMipmaps = false;
+      alphaMap.needsUpdate = true;
+      return { material, alphaMap };
+    })),
+  ]);
+  const alphaByMaterial = new Map(loadedAlphaMaps.map(({ material, alphaMap }) => [material, alphaMap]));
   gltf.scene.position.set(cx, baseY, cz);
   gltf.scene.scale.setScalar(scale);
-  gltf.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    o.receiveShadow = true;
+    const materials = Array.isArray(o.material) ? o.material : [o.material];
+    for (const material of materials) {
+      const alphaMap = alphaByMaterial.get(material?.name);
+      if (!alphaMap) continue;
+      material.alphaMap = alphaMap;
+      material.alphaTest = 0.10;
+      material.transparent = false;
+      material.depthWrite = true;
+      material.needsUpdate = true;
+    }
+  });
   return {
     terrain, objects: [terrain.mesh, gltf.scene], focus: { x: cx, z: cz },
     focusY: baseY + targetHeight * 0.48,
@@ -476,6 +248,71 @@ async function islandTreeSourcePatch({ renderer }) {
   return onlineTreeReferencePatch({
     renderer, file: '/assets/trees/island_tree_01.glb', scale: 2.5,
     targetHeight: 12.5, frameWidth: 12.5,
+  });
+}
+
+async function pineSaplingSmallSourcePatch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/pine_sapling_small_exact_a.glb', scale: 12,
+    targetHeight: 15.6, frameWidth: 12,
+  });
+}
+
+async function pineSaplingSmallLod1Patch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/pine_sapling_small_component_lod1.glb', scale: 12,
+    targetHeight: 15.6, frameWidth: 12,
+  });
+}
+
+async function pineTree01SourcePatch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/pine_tree_01_source_lod0.glb', scale: 1,
+    targetHeight: 14.858, frameWidth: 11,
+    alphaMaps: [{ material: 'pine_tree_01_twig.001', url: '/assets/trees/pine_tree_01_twig_alpha_1k.png' }],
+  });
+}
+
+async function pineTree01Lod1Patch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/pine_tree_01_source_lod1.glb', scale: 1,
+    targetHeight: 14.858, frameWidth: 11,
+    alphaMaps: [{ material: 'pine_tree_01_twig.001', url: '/assets/trees/pine_tree_01_twig_alpha_1k.png' }],
+  });
+}
+
+async function firTree01SourcePatch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/fir_tree_01_source_lod0.glb', scale: 1,
+    targetHeight: 14.055, frameWidth: 13,
+  });
+}
+
+async function firTree01Lod1Patch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/fir_tree_01_source_lod1.glb', scale: 1,
+    targetHeight: 14.055, frameWidth: 13,
+  });
+}
+
+async function firSaplingMediumLod0Patch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/fir_sapling_medium_component_lod0.glb', scale: 1,
+    targetHeight: 8.83, frameWidth: 9,
+  });
+}
+
+async function firSaplingMediumExactPatch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/fir_sapling_medium_exact_a.glb', scale: 1,
+    targetHeight: 8.83, frameWidth: 9,
+  });
+}
+
+async function firSaplingMediumLod1Patch({ renderer }) {
+  return onlineTreeReferencePatch({
+    renderer, file: '/assets/trees/fir_sapling_medium_component_lod1.glb', scale: 1,
+    targetHeight: 8.83, frameWidth: 9,
   });
 }
 
@@ -499,6 +336,7 @@ function pondPatch({ renderer, motionHistory, environment }) {
     heightFn,
     surfaceFn: (x, z) => Math.hypot(x - cx, z - cz) < pond.r ? 'water' : 'deepRough',
     zones: ZONES.deepRough(),
+    finiteCanvas: true,
     motionHistory,
     renderer,
   });
@@ -524,9 +362,24 @@ function standingTurf(kind, opts = {}) {
 }
 
 export const ASSETS = {
+  'procedural: ImageGen live oak': (ctx) => proceduralTreePatch(ctx, 'imagegen-live-oak'),
+  'procedural: live oak': (ctx) => proceduralTreePatch(ctx, 'live-oak'),
+  'procedural: broadleaf oak': (ctx) => proceduralTreePatch(ctx, 'broadleaf-oak'),
+  'procedural: douglas fir': (ctx) => proceduralTreePatch(ctx, 'douglas-fir'),
+  'procedural: loblolly pine': (ctx) => proceduralTreePatch(ctx, 'loblolly-pine'),
+  'procedural: stochastic l-system': (ctx) => proceduralTreePatch(ctx, 'l-system'),
   'tree: source broadleaf comparator': (ctx) => sourceTreePatch(ctx),
   'reference: Poly Haven Tree Small 02 (CC0)': (ctx) => sourceTreePatch(ctx),
   'reference: Poly Haven Island Tree 01 (CC0)': (ctx) => islandTreeSourcePatch(ctx),
+  'reference: Poly Haven Pine Sapling Small (CC0)': (ctx) => pineSaplingSmallSourcePatch(ctx),
+  'reference: Poly Haven Pine Sapling Small LOD1 (CC0)': (ctx) => pineSaplingSmallLod1Patch(ctx),
+  'reference: Poly Haven Pine Tree 01 (CC0)': (ctx) => pineTree01SourcePatch(ctx),
+  'reference: Poly Haven Pine Tree 01 LOD1 (CC0)': (ctx) => pineTree01Lod1Patch(ctx),
+  'reference: Poly Haven Fir Tree 01 (CC0)': (ctx) => firTree01SourcePatch(ctx),
+  'reference: Poly Haven Fir Tree 01 LOD1 (CC0)': (ctx) => firTree01Lod1Patch(ctx),
+  'reference: Poly Haven Fir Sapling Medium LOD0 (CC0)': (ctx) => firSaplingMediumLod0Patch(ctx),
+  'reference: Poly Haven Fir Sapling Medium Exact (CC0)': (ctx) => firSaplingMediumExactPatch(ctx),
+  'reference: Poly Haven Fir Sapling Medium LOD1 (CC0)': (ctx) => firSaplingMediumLod1Patch(ctx),
   'water: pond lab': (ctx) => pondPatch(ctx),
   'turf: fairway': standingTurf('fairway'),
   'turf: green': standingTurf('green'),

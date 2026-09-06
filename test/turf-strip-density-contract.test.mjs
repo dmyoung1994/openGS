@@ -5,13 +5,16 @@ import {
   MOW_STRIPE_PERIOD_M,
   MOW_STRIPE_PASS_WIDTH_M,
   MOW_STRIPE_CROSS_SLOPE,
+  MOW_STRIPE_ALBEDO_CONTRAST,
   TURF_BLADE_SATURATION,
+  TURF_BLADE_LIGHTNESS,
   TURF_UNDERCOAT_LIGHTNESS,
   TURF_UNDERCOAT_SATURATION,
   turfBase,
   turfBladeBase,
   turfUndercoatBase,
   mowingStripCoordinate,
+  mowingStripLay,
   mowingStripPhase,
 } from '../src/terrain/turfColor.js';
 
@@ -34,7 +37,8 @@ test('fairway mowing passes are straight, reel-width, and fairway-only', async (
     'shader stripes must use a measurable physical period');
   assert.match(source, /const stripLay\s*=\s*smoothstep\(0\.28, 0\.72, stripWave\)/,
     'mowing response must resolve into equal-width passes with a realistic overlap transition');
-  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(0\.006\)/,
+  assert.equal(MOW_STRIPE_ALBEDO_CONTRAST, 0.04);
+  assert.match(source, /const mowBand\s*=\s*stripLay\.sub\(0\.5\)\.mul\(MOW_STRIPE_ALBEDO_CONTRAST\)/,
     'fairway albedo must remain subordinate to physical leaf-lay contrast');
   assert.match(source, /const mowBump\s*=\s*layDirection\.mul\(stripLay\.sub\(0\.5\)\.mul\(0\.035\)\)/,
     'fairway passes must remain primarily a physical leaf-lay normal response');
@@ -64,6 +68,8 @@ test('mowing strip phase is deterministic and does not follow the camera', () =>
   const deltaA = mowingStripCoordinate(11, -20) - mowingStripCoordinate(10, -20);
   const deltaB = mowingStripCoordinate(12, -20) - mowingStripCoordinate(11, -20);
   assert.equal(deltaA, deltaB, 'straight reel lines must have zero coordinate curvature');
+  assert.ok(mowingStripLay(0, 0) > mowingStripLay(MOW_STRIPE_PASS_WIDTH_M, 0),
+    'adjacent reel passes must alternate their shared leaf lay');
 });
 
 test('rough retains thick blade ribbons while increasing close-field coverage', async () => {
@@ -84,8 +90,14 @@ test('rough retains thick blade ribbons while increasing close-field coverage', 
     'rough needs dense high-colony occupancy without widening blades');
   assert.match(source, /ROUGH_COLONY_FLOOR\s*=\s*0\.88/,
     'rough colony mass must remain present between individual blades');
-  assert.equal(TURF_BLADE_SATURATION, 1.28,
+  // Raised from 1.28 alongside the unity sky PMREM. Supplying the real blue sky
+  // fill that the former 0.34 multiplier withheld dropped rendered daylight turf
+  // saturation from 0.805 to 0.663; chlorophyll reflects very little blue, so the
+  // pigment carries the correction and the light transport stays physical.
+  assert.equal(TURF_BLADE_SATURATION, 1.62,
     'rough pigment needs natural species/age colour variation without neon saturation');
+  assert.equal(TURF_BLADE_LIGHTNESS, 0.90,
+    'the added chroma must not double as an exposure lift on the blade pigment');
   assert.match(source, /BLADE_COLOR\[ name \] = turfBladeBase\( name, new Color\(\) \)/,
     'geometric blades must consume the shared rough pigment transform');
   assert.match(source, /const age = mix\( hD, ecological, 0\.45 \)/,

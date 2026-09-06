@@ -20,7 +20,7 @@ test('CC0 environment catalog validates the shipped runtime tree record', () => 
   assert.equal(catalog.version, 2);
   assert.equal(tree.license.spdx, 'CC0-1.0');
   assert.equal(tree.lods[0].sha256, '1566c2de9c40cfa4d144089c818f7c67b4cd4283a237e89a3a05b5464f895813');
-  assert.equal(tree.lods[1].sha256, 'ac3e7ab2bbec249e55ce330c24d7460d01ce10e8ce2435ce11c84e186616a211');
+  assert.equal(tree.lods[1].sha256, 'a5ed2f596ccc0ff5e304a6d55c0b0789f9e891de1bee9403a5f266fbe5cd8ca9');
   assert.equal(tree.impostor.kind, 'baked-atlas');
   assert.equal(tree.impostor.sha256, '04de7c72460a6e7f30831abd4e901e9cf82152e2f711c770de40480e7b8c4bb6');
   assert.equal(tree.impostor.azimuthFrames, 8);
@@ -48,10 +48,11 @@ test('catalog requires explicit registered transition habitats for vegetation', 
 });
 
 test('catalog lookup is stable when manifest records are reordered', () => {
-  const second = structuredClone(manifest.assets[0]);
+  const source = manifest.assets.find((asset) => asset.id === 'polyhaven-tree-small-02');
+  const second = structuredClone(source);
   second.id = 'polyhaven-tree-small-test';
   second.derivativeLineage.sourceAssetId = 'polyhaven-tree-small-test';
-  const reordered = { ...manifest, assets: [second, structuredClone(manifest.assets[0])] };
+  const reordered = { ...manifest, assets: [second, structuredClone(source)] };
   const catalog = validateEnvironmentCatalog(reordered);
   assert.equal(getCatalogAsset(catalog, 'polyhaven-tree-small-02').id, 'polyhaven-tree-small-02');
   assert.equal(getCatalogAsset(catalog, 'polyhaven-tree-small-test').id, 'polyhaven-tree-small-test');
@@ -71,6 +72,16 @@ test('catalog rejects unknown license and malformed content hashes', () => {
   const badHash = structuredClone(manifest);
   badHash.assets[0].lods[0].sha256 = 'not-a-hash';
   assert.throws(() => validateEnvironmentCatalog(badHash), /SHA-256/);
+});
+
+test('tree LOD visual certification is optional, finite, and non-negative', () => {
+  const certified = structuredClone(manifest);
+  certified.assets[0].lods[1].visualMaxProjectedPixels = 24;
+  assert.equal(validateEnvironmentCatalog(certified).assets[0].lods[1].visualMaxProjectedPixels, 24);
+
+  const negative = structuredClone(certified);
+  negative.assets[0].lods[1].visualMaxProjectedPixels = -1;
+  assert.throws(() => validateEnvironmentCatalog(negative), /visualMaxProjectedPixels must be >= 0/);
 });
 
 test('runtime catalog load fails closed when a declared derivative is unavailable', async () => {

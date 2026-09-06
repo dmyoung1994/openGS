@@ -13,11 +13,12 @@ intent and map it onto the features and tools below.** Ignore the mechanics.
 ## What this engine is
 
 A Three.js / WebGPU golf simulator. The editable source of truth is
-`course.project.json` schema v4: one site, 1–18 holes, stable object IDs, route
-splines, semantic landforms, atmosphere, and environment records. The active hole
-compiles deterministically to `course.json` schema v3, the strict physics/render
-manifest. The engine BAKES the terrain heightfield and surface classes from those
-features (`src/scene/Range.js` `_height` / `_surface`). **Never author raw heights,
+`course.project.json` schema v5: one site, 1–18 holes, stable object IDs, route
+splines, semantic landforms, atmosphere, and environment records. A routed project
+compiles deterministically to a shared-site `course.json` schema v4; an unrouted
+practice project retains the legacy schema-v3 contract. The engine BAKES the terrain
+heightfield and surface classes from those features (`src/scene/PlayableCourseScene.js`
+`_height` / `_surface`). **Never author raw heights,
 meshes, materials, renderer algorithms, or shaders through a course prompt.**
 
 The renderer also has one deterministic environment timeline shared by sky,
@@ -35,8 +36,9 @@ projection; ball flight must not recenter that projection or redraw it per step.
 TRAA retains its bounded Halton projection sequence during cinematic camera motion;
 the velocity/depth resolve owns history rejection instead of falling back to a
 single hard sample for each moving frame.
-After HDR bloom and the explicit Neutral/sRGB transform, one display-referred FXAA
-pass cleans current-frame disocclusion edges that have no safe temporal history.
+The graph proceeds directly from TRAA and bloom through the explicit Neutral/sRGB
+transform. Do not add a second display-space antialiasing pass: it softens authored
+asset detail instead of reducing geometry cost.
 
 ## Coordinate system
 
@@ -45,22 +47,56 @@ near `z ≈ 2` and the course runs toward **negative z**. A green D yards out si
 `z ≈ -D * 0.9144` (e.g. 150 yд → `z ≈ -137`). `y` (elevation) is computed
 automatically — you do not set it.
 
+That coordinate contract is local to each authored hole. For a multi-hole project,
+`site.routing.placements` gives every hole a site origin and bearing, and
+`site.routing.transitions` authors each consecutive green-to-tee connector. The
+compiler transforms all routes and features into one bounded site, validates route
+crossings and non-adjacent rough-envelope separation, and emits one shared terrain.
+Page identity owns composition selection: `/range.html` uses the thin
+single-corridor `Range`, `/creator.html` uses `CreatorScene` for both its disposable
+canvas and routed authoring world, and `/play.html` uses `PlayScene`. Explicit page
+paths take precedence over stale `?view=` values. `CreatorScene` and `PlayScene`
+share routed active-hole lifecycle through `CourseScene`; all page compositions
+consume `PlayableCourseScene`'s shared terrain, hazard, water, vegetation, target,
+and presentation primitives. Never choose a page scene merely from whether loaded
+course data happens to contain routing.
+
 ## Project and runtime schemas
 
-Author mutations target the v4 project, never an arbitrary JSON path. Supported
+Author mutations target the v5 project, never an arbitrary JSON path. Supported
 semantic types are `project`, `site`, `atmosphere`, `hole`, `route`, `tee`,
-`green`, `bunker`, `pond`, `landform`, `environment-object`, and
-`synthetic-tree`. Every item uses a stable kebab-case ID and changes exactly one
+`green`, `bunker`, `pond`, `landform`, `forest-floor-area`, `surface-materials`, `environment-object`, and
+`procedural-tree-definition`, and `procedural-tree`. Every item uses a stable kebab-case ID and changes exactly one
 object. `route.points` is the editable centerline spline; landforms use registered
 forms (`ridge`, `bowl`, `shelf`, `saddle`, `shoulder`, `drainage-channel`,
-`plateau`, `swale`). The compiler currently lowers the active hole into the
-runtime corridor and feature representation below.
+`plateau`, `swale`). The compiler lowers an unrouted project to the legacy
+representation below, or adds a `routing` object and every transformed feature
+array for a schema-v4 shared site.
+
+Maintained pine straw is a first-class site entity. Author each
+`forest-floor-area` as `{id, shape:[{x,z},...]}` with 4–32 sparse world-space
+control points. The compiler expands those controls into a smooth filtered SDF in
+the existing zone texture. Design broad woodland beds from route strategy, terrain,
+and forest composition; never trace crown circles, fill all deep rough, or reuse
+rectangular scatter bounds. Preview tee, landing, approach, and overview, then
+revise the stable area entity rather than painting compiled runtime data.
 
 The project-level atmosphere preset is data, not a renderer override:
 `climate`, `season`, `localTime`, `weather`, `cloudCoverage`, `windSpeedMph`, and
 `windDirectionDegrees`. It configures the existing deterministic environment
 timeline; sky scattering, sun/moon light, stars, clouds, bloom, and shadows remain
 engine-owned algorithms.
+
+The site also owns a versioned `surfaceMaterials` object. Its `turf` controls
+parallax, detail normal, AO, self-shadow, matte roughness/specular response,
+saturation, and value. Its `forestFloor` controls physical relief depth, tangent
+normal strength, source-colour contribution, macro variation, canopy affinity,
+mature-crown grass density, and crown feathering. These fields are render-only:
+they never alter collision height or surface IDs. A material-only project revision
+must call the live scene's semantic material API and update existing uniforms; it
+must not rebuild Terrain, Grass, trees, renderer, or camera.
+Author it through the singleton `surface-materials` semantic entity rather than
+replacing the whole site or editing compiled runtime data.
 
 The compiled `course.json` contract is:
 
@@ -81,14 +117,14 @@ The compiled `course.json` contract is:
   "ponds":   [ { "x": 55, "z": -122, "r": 15, "depth": 1.6 } ],
   "atmosphere": { "climate": "temperate-maritime", "season": "summer", "localTime": "15:30", "weather": "partly-cloudy", "cloudCoverage": 0.25, "windSpeedMph": 8, "windDirectionDegrees": 250 },
   "environment": {
-    "foliageAliases": ["builtin.douglas-fir.pnw.v1", "builtin.monterey-cypress.coastal.v1"],
     "objectBudget": 700,
     "placements": [ { "id": "hero-tree", "assetId": "polyhaven-island-tree-01", "x": -72, "z": -70, "rotationY": 1.15, "scale": 1.55 } ],
     "scatter": [],
     "assembly": [],
     "edgeDressing": [],
     "exclusions": [],
-    "syntheticTrees": [ { "id": "oak-left-1", "archetype": "live-oak", "x": -72, "z": -70, "rotationY": 1.15, "scale": 1.1, "seed": 42, "age": 0.85, "health": 0.95, "windExposure": 0.6 } ]
+    "proceduralTreeDefinitions": [ { "id": "coastal-oak", "generator": "parametric", "seed": 42, "variantCount": 3, "parameters": { "...": "complete validated tree-builder parameter record" }, "materials": { "...": "bark, leaves, blossoms" } } ],
+    "proceduralTrees": [ { "id": "oak-left-1", "definitionId": "coastal-oak", "x": -72, "z": -70, "rotationY": 1.15, "scale": 1.1, "seed": 42, "age": 0.85, "health": 0.95, "windExposure": 0.6 } ]
   }
 }
 ```
@@ -111,6 +147,25 @@ The compiled `course.json` contract is:
 
 ## Environment dressing
 
+Photo-backed grassland studies may opt into `site.groundCover: "native-grasslands"`.
+This changes native deep-rough blade morphology/pigment and its distant material,
+not terrain height, surface IDs, ball lies, or other courses. Maintain short rough
+beside protected cuts and validate foreground stems, continuous distant mass, live
+shared wind, and active-camera LOD together. Original architecture can use strict
+catalog `building` records with a local editable `.blend` provenance source;
+authored glass, metal and emissive fixtures retain their PBR values and real shadows.
+New studies belong in separate projects; do not overwrite the active course merely
+to audition a reference.
+
+For separated tee terraces/native carries, a shared-site hole's full strategic
+`route.points` still starts at its primary tee and preserves measured yardage.
+Optional `route.fairwayStartMeters` (finite, 0..route length; omitted means 0)
+delays only the maintained fairway/rough corridor along that route. Tees and greens
+retain their own surface ownership. This avoids painting a continuous fairway
+between isolated tee boxes; never shorten the strategic route or relax tee/yardage
+validation to achieve that visual result. Validate the baked surface field at tee,
+native gap, fairway start and maintained shoulder.
+
 Catalog-backed trees, shrubs/groundcover, rocks, and deadwood are authorable through
 `environment.placements`, `scatter`, `assembly`, and `edgeDressing`. Asset IDs must
 exist in `public/assets/environment/catalog.json`; placement is deterministic from
@@ -118,18 +173,30 @@ the course and record seeds, constrained by catalog spacing/slope data, protecte
 playing surfaces, exclusions, and the hard object budget. Raw terrain elevation and
 materials remain intentionally non-authorable.
 
-Generated foliage is selected by a versioned `environment.foliageAlias` string or
-an ordered, unique `environment.foliageAliases` array; the forms are mutually
-exclusive. Aliases resolve through the immutable built-in/local pack registry, never
-through raw course paths. Practice-range planting derives its perimeter mix only from
-the declared aliases and fails closed on an undeclared species.
+Forest assemblies expose two age-class semantics. `forest-cluster` is mature
+overstory and resolves a plausible 15–25 m anchor/support/fill hierarchy from the
+catalog asset's native dimensions. `forest-understory` retains a tree's authored
+sapling/regeneration age class near native scale; it must not manufacture mature
+trees from small source models. Layers may share `habitatMassId` to form one
+ecological stand. Crown habitat owns exact grass exclusion, not a maintained ground
+bed's silhouette. A `pine-needle-litter` site uses explicit `forest-floor-area`
+features for Augusta-style continuous woodland beds. Keep 4–32 broad control points,
+smooth turf-facing sweeps, irregular depth into the trees, and hard exclusions for
+maintained surfaces and hazards. `crownFeatherMeters` supplies the tight inward SDF
+cut without adding geometry or rebaking the feature.
 
-`environment.syntheticTrees` is a separate explicit source for deterministic,
-geometry-only trees. Registered archetypes are `broadleaf-oak`, `live-oak`,
-`maple`, `monterey-cypress`, `douglas-fir`, and `loblolly-pine`. Bark relief,
-crown form, age, health, and scale are procedural geometry/material parameters;
-there are no scan or generated texture dependencies. These records never stand in
-for catalog assets. A missing or invalid Poly Haven GLB still fails closed. Both
+Tree LODs remain catalog-authored geometry with their source materials and alpha.
+When a middle tier looks sparse, first validate whole-crown occupancy, source
+alpha, lighting, and golfer-view composition. Do not hide the defect with blur,
+temporal smearing, billboards, or missing-instance budgets. A source can be fully
+resident and still be the wrong dominant canopy form.
+
+`environment.proceduralTreeDefinitions` contains reusable deterministic parametric
+or safe data-only L-system definitions. `environment.proceduralTrees` contains
+placements that reference those definitions. Agents may use ImageGen to create one
+transparent front/right/top sheet, fit it with `npm run tree:build`, and generate a
+leaf texture for explicit leaf meshes. Whole-tree billboards and catalog fallbacks
+remain forbidden. A missing or invalid Poly Haven GLB still fails closed. Both
 sources use stable grass-canopy suppression and camera-independent light-owned
 shadow residency so beauty LOD changes cannot make flight shadows disappear.
 
@@ -154,53 +221,71 @@ shadow residency so beauty LOD changes cannot make flight shadows disappear.
    starts in a close, long-lens three-quarter terrain-maquette composition that makes
    its contour, collar, earth edge, regulation pin, and wind response immediately
    legible without wide-angle perspective keystoning.
-   Previewing or
-   applying a proposal replaces the showcase with the authored course; starting a new
+   Previewing a proposal or compiling a direct live checkpoint replaces the
+   showcase with the authored course; starting a new
    conversation advances its deterministic variant and reframes a fresh green, while
    preview recovery and hot rebuilds retain the current variant. A picked terrain point
    resolves to the closest stable v4
    object (or terrain surface/biome context), and that selection plus the current
-   camera view are attached to the prompt. The creator also captures automatic
-   tee/landing/approach/overview review views. The local Codex SDK runs
-   read-only in an isolated temporary workspace and returns typed proposal cards;
-   it never edits the repository. The designer previews, revises, rejects, or
-   applies cards individually. Dependencies are included and explained. Accepted
-   objects are saved to `course.project.json`, compiled to `course.json`, and kept
-   as separate semantic undo events. An existing Codex login is required; there is
-   no API-key fallback in the local creator.
+   camera view are attached to the prompt. The creator also captures automatic,
+   route-aware tee/decision/approach/overview review views without rebuilding the
+   scene. For the revision and observation protocol, read
+   `live-editor-loop.md`. The local Codex SDK runs as a live
+   workspace agent with repository write access, inherited `AGENTS.md` and skill
+   instructions, live web search and sandbox network access, and no interactive approvals.
+   Network use is limited by the environment skill's asset-acquisition contract:
+   inspect the local catalog first, accept only verified compatible licenses, record
+   provenance and hashes, and fail closed when source or derivative validation fails.
+   In direct live-build mode it authors in small valid checkpoints: update
+   `course.project.json`, compile the shared site to `course.json`, wait for the
+   matching post-edit observation, then continue with later holes or environment work.
+   Reasoning summaries, command state, and file-change summaries stream into the
+   creator status bar, including the latest checkpoint revision and observation
+   state. The Vite sidecar watches the editable project, compiled
+   runtime, catalog metadata, geometry/build code, GLBs, and textures; each valid
+   runtime checkpoint updates the production scene in the same page. Catalog changes
+   reload and reverify referenced model derivatives before presentation. An existing
+   Codex login is required; there is no API-key fallback in the local creator.
 2. **Terminal via MCP** — the course-engine MCP server (`scripts/course-mcp.mjs`)
    exposes the tools below. Register it: `claude mcp add course-engine -- node
-   scripts/course-mcp.mjs` (or `codex mcp add …`). Writes land on `course.json`,
-   which live-reloads the running sim.
+   scripts/course-mcp.mjs` (or `codex mcp add …`). It uses the same project-v5
+   authoring kernel, history, and compiler as the in-app agent. No tool authors
+   `course.json` directly.
 
-Runtime schema v3 requires `meta.schema: 3` and `biomeTransitions` (use `[]` when no
+Legacy runtime schema v3 requires `meta.schema: 3` and `biomeTransitions` (use `[]` when no
 transition is intended). For transition records and registered profiles, read
 `../../golf-biome-transitions/references/engine-contract.md`.
 
 ### MCP tools (course-engine)
 
 - `describe_schema` — the schema + contour vocabulary (this file, condensed).
-- `get_course` — current `course.json` + a summary.
+- `get_context` — compact revision-tagged project, active-hole, asset, decision,
+  and scene-capability context used by the in-app agent.
+- `get_course` — authoritative `course.project.json` v5, revision, and compiled runtime.
 - `classify_point {x,z}` — the playing surface at a point (tee/green/fringe/fairway/
   rough/deepRough/sand/water), the fairway half-width at that z, and nearby
   features. **Use this to place features precisely** (it replaces the prior engine's
   `inspect_region`).
 - `classify_biome {x,z}` — semantic transition owner, habitat, profile weights,
   and primary/target biome at a point; it does not replace gameplay classification.
-- `validate_course {course?}` — normalize + design sanity checks (bounds, feature
+- `validate_course {project?}` — normalize/compile + design sanity checks (bounds, feature
   overlaps, undersized "pots"); returns warnings. Does not write.
-- `set_course {course}` — validate then write the full course. This is the
-  mutation (it replaces `stage_commands`); read `get_course`, edit, `set_course`.
+- `query_tree_assets {biome?,source?}` — discover authored and approved procedural
+  trees without loading either full catalog.
+- `apply_mutations {baseRevision,mutations,intent?}` — apply typed semantic project
+  mutations, record an undoable checkpoint, then compile runtime.
 
 ## Workflow mapping (from the SKILL steps)
 
 - "Operate through the engine tool server / inspect before editing" → call
-  `get_course` and `classify_point` before authoring; make edits with `set_course`.
+  `get_context` and `classify_point` before authoring; make edits with
+  revision-guarded `apply_mutations`.
 - "Run the green/approach/hazard/bunker analyzers" → run `validate_course` and read
   its warnings; there are no `.mjs` analyzers here. Prove geometry with validation;
   prove look by inspecting the running sim (golfer height, low oblique, overhead).
 - "Prefer editable vector features; derive render/physics grids from them" → already
   true by construction: you edit features, the engine derives everything.
-- Keep one proposal item per semantic object. Applying multiple selected cards is
-  coherent at the project level but records independent object history; keep metre
-  scale, tee reachability, dependencies, and features within bounds.
+- In proposal-review mode, keep one proposal item per semantic object. Applying
+  multiple selected cards is coherent at the project level but records independent
+  object history. In direct live mode, preserve those same stable object boundaries
+  in the v5 project and checkpoint only valid compilable states.

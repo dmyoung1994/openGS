@@ -18,21 +18,23 @@ const freezeProfile = (profile) => Object.freeze({
   renderScale: Object.freeze({ ...profile.renderScale }),
 });
 
-// These are policy bounds, not a renderer branch.  A future consumer can apply
-// the snapshot's renderScale to its internal target while keeping the same
-// materials and shader graph at every mode.
+// Keep the scene pass at presentation resolution in every mode. Three r185's
+// TRAA history is source-resolution, so a sub-native source scale is only a
+// spatial stretch, not temporal upscaling. That made the whole course soft and
+// caused thin authored foliage to read like a blurry impostor. Performance now
+// adapts through bounded workload modes and output pixel caps instead.
 export const VISUAL_QUALITY_MODE_PROFILES = Object.freeze({
   battery: freezeProfile({
     id: 'battery',
     targetMs: 33.3,
-    renderScale: { min: 0.50, max: 0.70, initial: 0.60 },
+    renderScale: { min: 1.00, max: 1.00, initial: 1.00 },
     scaleStepDown: 0.06,
     scaleStepUp: 0.04,
   }),
   balanced: freezeProfile({
     id: 'balanced',
     targetMs: 33.3,
-    renderScale: { min: 0.55, max: 0.80, initial: 0.70 },
+    renderScale: { min: 1.00, max: 1.00, initial: 1.00 },
     scaleStepDown: 0.07,
     scaleStepUp: 0.04,
   }),
@@ -41,14 +43,14 @@ export const VISUAL_QUALITY_MODE_PROFILES = Object.freeze({
     // Quality is the high-fidelity 30 fps contract used by the current A18 Pro
     // machine and capable phones. Ultra alone targets the 4090-class 60 fps path.
     targetMs: 33.3,
-    renderScale: { min: 0.60, max: 0.90, initial: 0.82 },
+    renderScale: { min: 1.00, max: 1.00, initial: 1.00 },
     scaleStepDown: 0.08,
     scaleStepUp: 0.05,
   }),
   ultra: freezeProfile({
     id: 'ultra',
     targetMs: 16.7,
-    renderScale: { min: 0.67, max: 1.00, initial: 0.92 },
+    renderScale: { min: 1.00, max: 1.00, initial: 1.00 },
     scaleStepDown: 0.08,
     scaleStepUp: 0.05,
   }),
@@ -216,6 +218,7 @@ export class VisualQualityController {
     this._adaptationCount = 0;
     this._presentationLock = null;
     this._nextPresentationLockId = 1;
+    this._resetObservation();
 
     const profile = profileFor(this._activeMode);
     const requestedScale = options.renderScale ?? profile.renderScale.initial;
@@ -265,6 +268,7 @@ export class VisualQualityController {
     this._gpuEwma = null;
     this._frameEwma = null;
     this._lastSampleAt = null;
+    this._resetObservation();
     this._resetPressureCounters();
     this._lastAdaptation = {
       atMs: null,
@@ -346,6 +350,7 @@ export class VisualQualityController {
     if (this._presentationLock) return this.snapshot();
     const input = typeof sample === 'number' ? { frameMs: sample } : sample;
     if (!input || typeof input !== 'object') return this.snapshot();
+    if (input.eligible === false) { this._resetObservation(); return this.snapshot(); }
 
     const gpuMs = metricFrom(input, ['gpuMs', 'gpuTimeMs', 'gpuFrameMs']);
     const frameMs = metricFrom(input, ['frameMs', 'frameTimeMs', 'cpuFrameMs', 'frame']);
@@ -363,18 +368,14 @@ export class VisualQualityController {
       ? timestamp
       : Math.max(this._lastSampleAt, timestamp);
 
+    if (this._mode === 'auto') {
+      this._observeAuto({ gpuMs, frameMs, cpuMs: metricFrom(input, ['cpuMs']) }, this._lastSampleAt);
+      return this.snapshot();
+    }
     const pressureMs = this._pressureMs();
     if (pressureMs === null) return this.snapshot();
     const profile = profileFor(this._activeMode);
-    // The usual overload margin prevents resolution chatter. Once Auto is already
-    // pinned to a profile's minimum scale, however, that margin can strand it just
-    // above the actual frame contract forever (for example 33.5 ms against 33.3 ms).
-    // At that bound, sustained misses count as pressure so Auto can lower the next
-    // workload tier; cooldown and sample hysteresis still prevent one-frame demotion.
-    const missesTargetAtLowerAutoBound = this._mode === 'auto'
-      && this._renderScale <= profile.renderScale.min + EPSILON
-      && pressureMs > profile.targetMs;
-    if (pressureMs > profile.targetMs * this._overloadRatio || missesTargetAtLowerAutoBound) {
+    if (pressureMs > profile.targetMs * this._overloadRatio) {
       this._highPressureSamples += 1;
       this._lowPressureSamples = 0;
     } else if (pressureMs < profile.targetMs * this._recoveryRatio) {
@@ -401,6 +402,7 @@ export class VisualQualityController {
   snapshot() {
     const profile = profileFor(this._activeMode);
     const pressureMs = this._pressureMs();
+    const targetMs = this._mode === 'auto' ? 33.3 : profile.targetMs;
     return {
       version: 1,
       mode: this._mode,
@@ -410,7 +412,7 @@ export class VisualQualityController {
       environmentTier: environmentTierSnapshot(this._tier),
       profile: {
         id: profile.id,
-        targetMs: profile.targetMs,
+        targetMs,
         renderScale: { ...profile.renderScale },
       },
       renderScale: this._renderScale,
@@ -418,9 +420,9 @@ export class VisualQualityController {
         min: profile.renderScale.min,
         max: profile.renderScale.max,
       },
-      targetMs: profile.targetMs,
-      frameTargetMs: profile.targetMs,
-      gpuTargetMs: profile.targetMs,
+      targetMs,
+      frameTargetMs: targetMs,
+      gpuTargetMs: targetMs,
       gpuMs: this._gpuEwma,
       frameMs: this._frameEwma,
       pressureMs,
@@ -429,6 +431,9 @@ export class VisualQualityController {
         frameMs: this._frameEwma,
         pressureMs,
       },
+      observation: this._observation.lastWindow ? { ...this._observation.lastWindow } : null,
+      promotionTrial: this._observation.trial ? { ...this._observation.trial } : null,
+      promotionRetryAfter: this._observation.retryAfter,
       sampleCount: this._sampleCount,
       highPressureSamples: this._highPressureSamples,
       lowPressureSamples: this._lowPressureSamples,
@@ -482,6 +487,7 @@ export class VisualQualityController {
 
   _captureMutableState() {
     return {
+      observation: structuredClone(this._observation),
       mode: this._mode,
       activeMode: this._activeMode,
       renderScale: this._renderScale,
@@ -498,6 +504,7 @@ export class VisualQualityController {
   }
 
   _restoreMutableState(state) {
+    this._observation = structuredClone(state.observation);
     this._mode = state.mode;
     this._activeMode = state.activeMode;
     this._renderScale = state.renderScale;
@@ -510,6 +517,58 @@ export class VisualQualityController {
     this._lastAdaptationAt = state.lastAdaptationAt;
     this._lastAdaptation = cloneAdaptation(state.lastAdaptation);
     this._adaptationCount = state.adaptationCount;
+  }
+
+  _resetObservation() {
+    this._observation = { startedAt: null, frames: [], gpus: [], cpus: [], overWindows: 0,
+      headroomSince: null, trial: null, retryAfter: 0, lastWindow: null };
+  }
+
+  _observeAuto({ frameMs, gpuMs, cpuMs }, atMs) {
+    const state = this._observation;
+    state.startedAt ??= atMs;
+    if (frameMs !== null) state.frames.push(frameMs);
+    if (gpuMs !== null) state.gpus.push(gpuMs);
+    if (cpuMs !== null) state.cpus.push(cpuMs);
+    if (atMs - state.startedAt < 2000) return;
+    const p95 = values => {
+      if (!values.length) return null;
+      values.sort((a, b) => a - b);
+      return values[Math.ceil(values.length * 0.95) - 1];
+    };
+    const window = {
+      startedAt: state.startedAt, endedAt: atMs,
+      frameP95: p95(state.frames), gpuP95: p95(state.gpus), cpuP95: p95(state.cpus),
+      frameMean: state.frames.length ? state.frames.reduce((a, b) => a + b, 0) / state.frames.length : null,
+    };
+    const overloaded = window.gpuP95 > 33.3 || window.cpuP95 > 33.3
+      || window.frameP95 > 34 || window.frameMean > 1000 / 30 + 0.1;
+    // A complete presentation frame is the conservative fallback on adapters
+    // without timestamps; never treat a missing GPU sample as zero GPU cost.
+    const headroom = (window.gpuP95 ?? window.frameP95 ?? Infinity) < 27
+      && (window.cpuP95 ?? window.frameP95 ?? Infinity) < 27
+      && (window.frameP95 ?? Infinity) <= 34;
+    window.limitingWork = window.gpuP95 > 33.3 ? 'gpu'
+      : window.cpuP95 > 33.3 ? 'cpu' : overloaded ? 'presentation' : 'none';
+    state.lastWindow = window;
+    state.startedAt = atMs; state.frames = []; state.gpus = []; state.cpus = [];
+    state.overWindows = overloaded ? state.overWindows + 1 : 0;
+    state.headroomSince = headroom ? state.headroomSince ?? window.startedAt : null;
+    if (state.trial && overloaded) {
+      this._changeAutoActiveMode(-1, atMs, 'promotion-trial-failed');
+      state.trial = null; state.retryAfter = atMs + 30000;
+      state.overWindows = 0; state.headroomSince = null;
+      return;
+    }
+    if (state.trial && atMs - state.trial.startedAt >= 5000) state.trial = null;
+    if (state.overWindows >= 2) {
+      this._changeAutoActiveMode(-1, atMs, 'performance');
+      state.overWindows = 0; state.headroomSince = null;
+    } else if (!state.trial && atMs >= state.retryAfter && state.headroomSince !== null
+      && atMs - state.headroomSince >= 10000) {
+      if (this._changeAutoActiveMode(1, atMs, 'headroom')) state.trial = { startedAt: atMs };
+      state.headroomSince = null;
+    }
   }
 
   _maybeAdapt(atMs, profile) {
@@ -581,25 +640,10 @@ export class VisualQualityController {
     const nextIndex = currentIndex + delta;
     const startingIndex = PROFILE_MODE_ORDER.indexOf(this._startingMode);
     // Auto may recover only as far as the capability-derived starting ceiling.
-    // Otherwise a sustained easy camera on an A18-class device promotes itself
-    // into the 60 fps Ultra contract and immediately oscillates back down.
+    // Spare capacity can restore quality without exceeding the hardware ceiling.
     if (delta > 0 && nextIndex > startingIndex) return false;
     const nextMode = PROFILE_MODE_ORDER[nextIndex];
     if (!nextMode) return false;
-
-    // Promotion must be justified by the destination budget, not merely by
-    // headroom in the current profile. A stable 20 ms frame is comfortably below
-    // Quality's 33.3 ms target but cannot satisfy Ultra's 16.7 ms contract; using
-    // only the current threshold would eventually promote, overload, and demote in
-    // a slow quality/workload loop. Demotion remains pressure-driven by the current
-    // profile and therefore needs no equivalent destination gate.
-    if (delta > 0) {
-      const nextProfile = profileFor(nextMode);
-      const pressureMs = this._pressureMs();
-      if (pressureMs === null || pressureMs >= nextProfile.targetMs * this._recoveryRatio) {
-        return false;
-      }
-    }
 
     const previousMode = this._activeMode;
     const nextProfile = profileFor(nextMode);

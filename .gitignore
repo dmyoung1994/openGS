@@ -26,3 +26,14 @@ shots/
 
 # Persistent local Course Creator proposal threads, captures, and semantic history.
 .course-builder/
+
+# Tree-bake pipeline intermediates that landed alongside the runtime assets rather
+# than in trees_src/. Same rule, same reason: the game loads the *_course_lod*.glb
+# and impostor atlases, while these source/exact/component/silhouette meshes are
+# inputs to scripts/process_*.py and scripts/fetch_polyhaven_*.mjs. Provenance for
+# each is recorded in docs/*-provenance.md so a bake can be reproduced.
+public/assets/trees/*_source_lod*.glb
+public/assets/trees/*_exact_*.glb
+public/assets/trees/*_component_lod*.glb
+public/assets/trees/*_silhouette_lod*.glb
+public/assets/environment/jacaranda-tree/jacaranda-tree.glb

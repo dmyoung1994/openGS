@@ -1,1371 +1,3652 @@
 {
   "meta": {
-    "id": "local-course-project",
-    "name": "Practice Range",
+    "id": "pineglass-forest-project",
+    "name": "Pineglass Forest",
     "mode": "realistic",
-    "schema": 4,
-    "notes": "Augusta-inspired Southern parkland practice range with immaculate playable corridors, asymmetrical mature canopy framing, restrained native edges, and layered golfer-height depth."
+    "schema": 5,
+    "notes": "Routing audit: a non-crossing triangular loop with approximately 72.7 m and 81.3 m woodland walks, safe transformed rough envelopes, and the opening tee and finishing green on opposite sides of the clubhouse clearing. Needle Bend is a 42-43.5 m strategic par-4 corridor with alternating landing-edge bunkers. Fern Gate is intentionally semi-blind: its 165-yard line and raised entry are readable from the tee while the putting surface reveals from the approach. Glasswood Reach alternates a drive-right bunker, lay-up-left bunker, and paired greenside guards. Mature forest rooms use catalog-backed pine structure over pine-needle litter; openings remain deliberate rather than uniform."
   },
-  "activeHoleId": "practice-range",
+  "activeHoleId": "pineglass-hole-1",
   "site": {
     "bounds": {
-      "minX": -110,
-      "maxX": 110,
-      "minZ": -340,
-      "maxZ": 30
+      "minX": -430,
+      "maxX": 120,
+      "minZ": -240,
+      "maxZ": 460
     },
     "catalogVersion": 2,
     "placementAlgorithmVersion": 1,
-    "biome": "temperate-maritime",
-    "biomeTransitions": [
+    "biome": "temperate-alpine",
+    "groundCover": "pine-needle-litter",
+    "forestFloorAreas": [
       {
-        "id": "resort-ocean-edge",
-        "from": "temperate-maritime",
-        "to": "marine-ocean",
-        "boundary": {
-          "kind": "course-edge",
-          "sides": [
-            "min-x",
-            "max-x",
-            "min-z"
-          ]
-        },
-        "profile": "natural-resort-beach",
-        "seed": 1843021,
-        "widthScale": 0.5,
-        "priority": 100
+        "id": "needle-west-pine-straw",
+        "shape": [
+          {
+            "x": -430,
+            "z": -185
+          },
+          {
+            "x": -380,
+            "z": -178
+          },
+          {
+            "x": -350,
+            "z": -150
+          },
+          {
+            "x": -343,
+            "z": -88
+          },
+          {
+            "x": -338,
+            "z": -8
+          },
+          {
+            "x": -334,
+            "z": 82
+          },
+          {
+            "x": -333,
+            "z": 175
+          },
+          {
+            "x": -336,
+            "z": 265
+          },
+          {
+            "x": -349,
+            "z": 334
+          },
+          {
+            "x": -386,
+            "z": 365
+          },
+          {
+            "x": -430,
+            "z": 362
+          }
+        ]
+      },
+      {
+        "id": "needle-east-pine-straw",
+        "shape": [
+          {
+            "x": -282,
+            "z": 326
+          },
+          {
+            "x": -258,
+            "z": 314
+          },
+          {
+            "x": -248,
+            "z": 276
+          },
+          {
+            "x": -245,
+            "z": 222
+          },
+          {
+            "x": -241,
+            "z": 162
+          },
+          {
+            "x": -230,
+            "z": 96
+          },
+          {
+            "x": -218,
+            "z": 42
+          },
+          {
+            "x": -241,
+            "z": 18
+          },
+          {
+            "x": -268,
+            "z": 34
+          },
+          {
+            "x": -274,
+            "z": 108
+          },
+          {
+            "x": -278,
+            "z": 204
+          }
+        ]
+      },
+      {
+        "id": "fern-north-pine-straw",
+        "shape": [
+          {
+            "x": -224,
+            "z": -40
+          },
+          {
+            "x": -151,
+            "z": -36
+          },
+          {
+            "x": -96,
+            "z": -56
+          },
+          {
+            "x": -103,
+            "z": -91
+          },
+          {
+            "x": -142,
+            "z": -105
+          },
+          {
+            "x": -205,
+            "z": -101
+          }
+        ]
+      },
+      {
+        "id": "fern-south-pine-straw",
+        "shape": [
+          {
+            "x": -226,
+            "z": -146
+          },
+          {
+            "x": -204,
+            "z": -205
+          },
+          {
+            "x": -83,
+            "z": -214
+          },
+          {
+            "x": -64,
+            "z": -178
+          },
+          {
+            "x": -96,
+            "z": -145
+          },
+          {
+            "x": -166,
+            "z": -140
+          }
+        ]
+      },
+      {
+        "id": "glasswood-west-pine-straw",
+        "shape": [
+          {
+            "x": -286,
+            "z": -24
+          },
+          {
+            "x": -232,
+            "z": -28
+          },
+          {
+            "x": -218,
+            "z": 45
+          },
+          {
+            "x": -235,
+            "z": 118
+          },
+          {
+            "x": -248,
+            "z": 206
+          },
+          {
+            "x": -260,
+            "z": 308
+          },
+          {
+            "x": -282,
+            "z": 455
+          },
+          {
+            "x": -236,
+            "z": 460
+          },
+          {
+            "x": -218,
+            "z": 386
+          },
+          {
+            "x": -203,
+            "z": 294
+          },
+          {
+            "x": -184,
+            "z": 196
+          },
+          {
+            "x": -168,
+            "z": 98
+          },
+          {
+            "x": -180,
+            "z": 18
+          },
+          {
+            "x": -215,
+            "z": -32
+          }
+        ]
+      },
+      {
+        "id": "glasswood-east-pine-straw",
+        "shape": [
+          {
+            "x": -155,
+            "z": -24
+          },
+          {
+            "x": -76,
+            "z": -28
+          },
+          {
+            "x": -22,
+            "z": 4
+          },
+          {
+            "x": -20,
+            "z": 72
+          },
+          {
+            "x": -64,
+            "z": 100
+          },
+          {
+            "x": -82,
+            "z": 184
+          },
+          {
+            "x": -76,
+            "z": 292
+          },
+          {
+            "x": -102,
+            "z": 398
+          },
+          {
+            "x": -158,
+            "z": 404
+          },
+          {
+            "x": -144,
+            "z": 316
+          },
+          {
+            "x": -148,
+            "z": 220
+          },
+          {
+            "x": -139,
+            "z": 112
+          }
+        ]
       }
     ],
-    "environmentSeed": 1128746828,
+    "surfaceMaterials": {
+      "version": 1,
+      "turf": {
+        "parallax": 1,
+        "detailNormal": 1,
+        "ao": 0.62,
+        "selfShadow": 0.55,
+        "roughnessBase": 0.72,
+        "roughnessRange": 0.16,
+        "specular": 0.58,
+        "grazingRoughness": 0.4,
+        "saturation": 1,
+        "value": 1
+      },
+      "forestFloor": {
+        "reliefDepthMeters": 0.035,
+        "normalStrength": 0.85,
+        "sourceColorStrength": 1,
+        "macroVariation": 0.28,
+        "canopyAffinity": 0,
+        "crownCoreGrassDensity": 0,
+        "crownFeatherMeters": 0.25
+      }
+    },
+    "biomeTransitions": [],
+    "environmentSeed": 2749138061,
     "atmosphere": {
       "climate": "temperate-maritime",
       "season": "summer",
-      "localTime": "15:30",
+      "localTime": "16:10",
       "weather": "partly-cloudy",
-      "cloudCoverage": 0.25,
-      "windSpeedMph": 8,
-      "windDirectionDegrees": 250
+      "cloudCoverage": 0.42,
+      "windSpeedMph": 6,
+      "windDirectionDegrees": 235
     },
-    "environment": {
-      "objectBudget": 700,
+    "routing": {
+      "clubhouse": {
+        "x": -260,
+        "z": 360
+      },
       "placements": [
         {
-          "id": "parkland-hero-left",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -48,
-          "z": -16,
-          "rotationY": 5.55,
-          "scale": 1.05
+          "holeId": "pineglass-hole-1",
+          "origin": {
+            "x": -300,
+            "z": 300
+          },
+          "bearingDegrees": 0
         },
         {
-          "id": "parkland-hero-right",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 48,
-          "z": -14,
-          "rotationY": 0.72,
-          "scale": 0.98
+          "holeId": "pineglass-hole-2",
+          "origin": {
+            "x": -213,
+            "z": -120
+          },
+          "bearingDegrees": 90
         },
         {
-          "id": "alpine-anchor-left-front",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -60,
-          "z": -70,
-          "rotationY": 1.15,
-          "scale": 0.92
-        },
-        {
-          "id": "alpine-anchor-right-pond",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 82,
-          "z": -104,
-          "rotationY": 4.35,
-          "scale": 0.9
-        },
-        {
-          "id": "alpine-anchor-left-mid",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -72,
-          "z": -205,
-          "rotationY": 2.4,
-          "scale": 1.08
-        },
-        {
-          "id": "alpine-anchor-right-back",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 72,
-          "z": -250,
-          "rotationY": 5.2,
-          "scale": 1.02
-        },
-        {
-          "id": "alpine-frame-left",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -62,
-          "z": -120,
-          "rotationY": 0.72,
-          "scale": 1
-        },
-        {
-          "id": "alpine-frame-right",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 68,
-          "z": -152,
-          "rotationY": 3.86,
-          "scale": 0.96
-        },
-        {
-          "id": "alpine-larch-accent-left-mid",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -75,
-          "z": -150,
-          "rotationY": 1.4,
-          "scale": 0.78
-        },
-        {
-          "id": "alpine-larch-accent-right-front",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 72,
-          "z": -66,
-          "rotationY": 3.9,
-          "scale": 0.72
-        },
-        {
-          "id": "alpine-larch-accent-left-back",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -70,
-          "z": -262,
-          "rotationY": 5.6,
-          "scale": 0.82
-        },
-        {
-          "id": "alpine-midtier-left",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -66,
-          "z": -96,
-          "rotationY": 2.1,
-          "scale": 0.94
-        },
-        {
-          "id": "alpine-midtier-right",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 66,
-          "z": -186,
-          "rotationY": 4.4,
-          "scale": 0.91
-        },
-        {
-          "id": "alpine-understory-left-tee",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -58,
-          "z": -28,
-          "rotationY": 5.3,
-          "scale": 0.74
-        },
-        {
-          "id": "alpine-understory-right-tee",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 58,
-          "z": -34,
-          "rotationY": 1.1,
-          "scale": 0.78
-        },
-        {
-          "id": "alpine-understory-left-pond",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -62,
-          "z": -128,
-          "rotationY": 2.9,
-          "scale": 0.8
-        },
-        {
-          "id": "alpine-understory-right-pond",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 88,
-          "z": -144,
-          "rotationY": 4.8,
-          "scale": 0.75
-        },
-        {
-          "id": "alpine-understory-left-back",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": -64,
-          "z": -226,
-          "rotationY": 0.55,
-          "scale": 0.82
-        },
-        {
-          "id": "alpine-understory-right-back",
-          "assetId": "blendkit-palm-tree-medium-dense",
-          "x": 64,
-          "z": -242,
-          "rotationY": 3.7,
-          "scale": 0.76
-        },
-        {
-          "id": "fallen-trunk-left-front",
-          "assetId": "polyhaven-dead-tree-trunk",
-          "x": -62,
-          "z": -55,
-          "rotationY": 0.42,
-          "scale": 1.08
-        },
-        {
-          "id": "fallen-trunk-right-mid",
-          "assetId": "polyhaven-dead-tree-trunk",
-          "x": 82,
-          "z": -145,
-          "rotationY": 2.65,
-          "scale": 0.92
-        },
-        {
-          "id": "fallen-trunk-left-back",
-          "assetId": "polyhaven-dead-tree-trunk",
-          "x": -90,
-          "z": -225,
-          "rotationY": 5.55,
-          "scale": 1.16
+          "holeId": "pineglass-hole-3",
+          "origin": {
+            "x": -95,
+            "z": -50
+          },
+          "bearingDegrees": 198.54
         }
       ],
-      "scatter": [
+      "transitions": [
         {
-          "id": "fern-drift-left-foreground",
-          "assetIds": [
-            "polyhaven-fern-02"
+          "id": "needle-to-fern-walk",
+          "fromHoleId": "pineglass-hole-1",
+          "toHoleId": "pineglass-hole-2",
+          "points": [
+            {
+              "x": -272,
+              "z": -75
+            },
+            {
+              "x": -248,
+              "z": -96
+            },
+            {
+              "x": -215,
+              "z": -120
+            }
           ],
-          "seed": 715031,
-          "count": 32,
-          "region": {
-            "kind": "bounds",
-            "minX": -60,
-            "maxX": -51,
-            "minZ": -84,
-            "maxZ": -42
-          },
-          "minSpacing": 1.8
+          "width": 2.4
         },
         {
-          "id": "fern-drift-right-moisture",
-          "assetIds": [
-            "polyhaven-fern-02"
+          "id": "fern-to-glasswood-walk",
+          "fromHoleId": "pineglass-hole-2",
+          "toHoleId": "pineglass-hole-3",
+          "points": [
+            {
+              "x": -62,
+              "z": -126
+            },
+            {
+              "x": -78,
+              "z": -101
+            },
+            {
+              "x": -88,
+              "z": -76
+            },
+            {
+              "x": -94,
+              "z": -52
+            }
           ],
-          "seed": 448219,
-          "count": 30,
-          "region": {
-            "kind": "bounds",
-            "minX": 80,
-            "maxX": 89,
-            "minZ": -155,
-            "maxZ": -106
-          },
-          "minSpacing": 1.8
+          "width": 2.6
+        }
+      ]
+    },
+    "environment": {
+      "objectBudget": 720,
+      "placements": [
+        {
+          "id": "fern-gate-north-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -198.03258083411492,
+          "z": -81.46829787944444,
+          "rotationY": 3.6874043768160454,
+          "scale": 1.7306245995685456
         },
         {
-          "id": "fern-drift-left-mid",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 291774,
-          "count": 38,
-          "region": {
-            "kind": "bounds",
-            "minX": -78,
-            "maxX": -67,
-            "minZ": -205,
-            "maxZ": -155
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-north-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -151.11579117015935,
+          "z": -79.46475580846891,
+          "rotationY": 4.459082059763267,
+          "scale": 1.7252125034108756
         },
         {
-          "id": "fern-drift-right-mid",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 903315,
-          "count": 34,
-          "region": {
-            "kind": "bounds",
-            "minX": 76,
-            "maxX": 86,
-            "minZ": -225,
-            "maxZ": -170
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-north-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -147.47371649020351,
+          "z": -78.37850828282535,
+          "rotationY": 6.2759662570371715,
+          "scale": 1.318880882114172
         },
         {
-          "id": "fern-drift-left-backdrop",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 185227,
-          "count": 32,
-          "region": {
-            "kind": "bounds",
-            "minX": -90,
-            "maxX": -78,
-            "minZ": -302,
-            "maxZ": -250
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-north-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -196.89437426859513,
+          "z": -75.58257843181491,
+          "rotationY": 2.6634372049760873,
+          "scale": 1.731849990785122
         },
         {
-          "id": "fern-drift-right-backdrop",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 672943,
-          "count": 32,
-          "region": {
-            "kind": "bounds",
-            "minX": 82,
-            "maxX": 96,
-            "minZ": -320,
-            "maxZ": -250
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-north-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": -186.71012747334316,
+          "z": -69.45217198017053,
+          "rotationY": 0.30333358116406506,
+          "scale": 1.939555217884481
         },
         {
-          "id": "fern-contact-left-front-log",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 810443,
-          "count": 6,
-          "region": {
-            "kind": "bounds",
-            "minX": -66,
-            "maxX": -59,
-            "minZ": -61,
-            "maxZ": -51
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-north-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": -137.56417589145713,
+          "z": -75.80470573017374,
+          "rotationY": 4.362954267220574,
+          "scale": 1.3422360476106405
         },
         {
-          "id": "fern-contact-right-mid-log",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 375184,
-          "count": 6,
-          "region": {
-            "kind": "bounds",
-            "minX": 81,
-            "maxX": 88,
-            "minZ": -151,
-            "maxZ": -141
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-north-understory-6",
+          "assetId": "polyhaven-fern-02",
+          "x": -182.69939457881264,
+          "z": -66.46651471359655,
+          "rotationY": 4.822596064757829,
+          "scale": 1.352312099561095
         },
         {
-          "id": "fern-contact-left-back-log",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 529661,
-          "count": 6,
-          "region": {
-            "kind": "bounds",
-            "minX": -95,
-            "maxX": -86,
-            "minZ": -231,
-            "maxZ": -220
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -221.27629767172039,
+          "z": -214.42466143285856,
+          "rotationY": 4.6843958191114465,
+          "scale": 1.758277572505176
         },
         {
-          "id": "fern-contact-left-outcrop",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 694082,
-          "count": 4,
-          "region": {
-            "kind": "bounds",
-            "minX": -66,
-            "maxX": -54,
-            "minZ": -107,
-            "maxZ": -80
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -271.24615155160427,
+          "z": -222.05236648675054,
+          "rotationY": 2.528418804689193,
+          "scale": 1.5318762550130485
         },
         {
-          "id": "fern-contact-pond-outcrop",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 247901,
-          "count": 4,
-          "region": {
-            "kind": "bounds",
-            "minX": 76,
-            "maxX": 82,
-            "minZ": -114,
-            "maxZ": -107
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -273.6939366161823,
+          "z": -203.55301718460396,
+          "rotationY": 3.337473547169544,
+          "scale": 1.1554971477016807
         },
         {
-          "id": "fern-contact-back-outcrop",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 951623,
-          "count": 4,
-          "region": {
-            "kind": "bounds",
-            "minX": -84,
-            "maxX": -69,
-            "minZ": -252,
-            "maxZ": -223
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -144.09019310958683,
+          "z": -188.94600257044658,
+          "rotationY": 0.9319417570806231,
+          "scale": 1.6391495080664753
         },
         {
-          "id": "fern-understory-left-foreground",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 404817,
-          "count": 28,
-          "region": {
-            "kind": "bounds",
-            "minX": -104,
-            "maxX": -76,
-            "minZ": -105,
-            "maxZ": 10
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": -283.5587674472481,
+          "z": -198.6629155324772,
+          "rotationY": 1.8894219281558406,
+          "scale": 1.8272621925920247
         },
         {
-          "id": "fern-understory-right-foreground",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 736205,
-          "count": 18,
-          "region": {
-            "kind": "bounds",
-            "minX": 78,
-            "maxX": 106,
-            "minZ": -70,
-            "maxZ": 10
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": -194.4454243592918,
+          "z": -171.32885667029768,
+          "rotationY": 3.4951376750161747,
+          "scale": 1.7524067979305982
         },
         {
-          "id": "fern-understory-left-midground",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 148639,
-          "count": 24,
-          "region": {
-            "kind": "bounds",
-            "minX": -106,
-            "maxX": -86,
-            "minZ": -220,
-            "maxZ": -120
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-6",
+          "assetId": "polyhaven-fern-02",
+          "x": -239.2090010177344,
+          "z": -190.4569185548462,
+          "rotationY": 2.1849903518585,
+          "scale": 1.6369877535849808
         },
         {
-          "id": "fern-understory-right-midground",
-          "assetIds": [
-            "polyhaven-fern-02"
-          ],
-          "seed": 863941,
-          "count": 18,
-          "region": {
-            "kind": "bounds",
-            "minX": 95,
-            "maxX": 107,
-            "minZ": -220,
-            "maxZ": -90
-          },
-          "minSpacing": 1.8
+          "id": "fern-gate-south-understory-7",
+          "assetId": "polyhaven-fern-02",
+          "x": -270.59972879476845,
+          "z": -196.7344177979976,
+          "rotationY": 4.8113839329046755,
+          "scale": 1.2144238056614993
+        },
+        {
+          "id": "glasswood-deadwood-habitat-0",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": 7.2651783409583786,
+          "z": 162.85473888288567,
+          "rotationY": 5.95717866675731,
+          "scale": 0.9058371313568205
+        },
+        {
+          "id": "glasswood-deadwood-habitat-1",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": -16.284313779248208,
+          "z": 139.16054927694915,
+          "rotationY": 1.8090094950438051,
+          "scale": 1.0124138819333166
+        },
+        {
+          "id": "glasswood-deadwood-habitat-2",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": -5.2428728531895645,
+          "z": 180.09755495295298,
+          "rotationY": 3.8776762874105692,
+          "scale": 1.0282797762937843
+        },
+        {
+          "id": "glasswood-deadwood-habitat-3",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": 32.18209419968651,
+          "z": 146.92368114691328,
+          "rotationY": 4.252668400320112,
+          "scale": 0.9830473558604718
+        },
+        {
+          "id": "glasswood-deadwood-habitat-4",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": -34.46906181093401,
+          "z": 133.95027386501638,
+          "rotationY": 0.8667701157001667,
+          "scale": 1.1562334295921028
+        },
+        {
+          "id": "glasswood-deadwood-habitat-5",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": 24.211364276834637,
+          "z": 185.13991839574769,
+          "rotationY": 5.396235777028666,
+          "scale": 0.9779791307076812
+        },
+        {
+          "id": "glasswood-deadwood-habitat-6",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": 2.0078230984908503,
+          "z": 114.53783826254262,
+          "rotationY": 2.947972667717352,
+          "scale": 1.1999586775060744
+        },
+        {
+          "id": "glasswood-deadwood-habitat-7",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": -43.39327009676354,
+          "z": 182.56431082348018,
+          "rotationY": 0.8000569404857816,
+          "scale": 0.8132245262619108
+        },
+        {
+          "id": "glasswood-deadwood-habitat-8",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": 41.20523924472561,
+          "z": 184.16980839501335,
+          "rotationY": 2.118780748157033,
+          "scale": 1.0049829837493598
+        },
+        {
+          "id": "glasswood-deadwood-habitat-9",
+          "assetId": "polyhaven-dead-tree-trunk",
+          "x": -27.77625962806162,
+          "z": 110.55253211258777,
+          "rotationY": 4.682458350888118,
+          "scale": 0.9297487618401648
+        },
+        {
+          "id": "glasswood-high-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": 36.37554624583572,
+          "z": 332.7209195215255,
+          "rotationY": 4.360053286040206,
+          "scale": 1.6922525795176626
+        },
+        {
+          "id": "glasswood-high-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -110.86882923496887,
+          "z": 327.59804375935346,
+          "rotationY": 4.656721146807405,
+          "scale": 1.778177671134472
+        },
+        {
+          "id": "glasswood-high-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": 22.08497921936214,
+          "z": 288.9983097463846,
+          "rotationY": 6.189684514667704,
+          "scale": 1.3004451774060726
+        },
+        {
+          "id": "glasswood-high-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": 52.99701201496646,
+          "z": 330.85070909466594,
+          "rotationY": 2.038283821285493,
+          "scale": 1.7794541655108334
+        },
+        {
+          "id": "glasswood-high-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": 23.375979692209512,
+          "z": 327.91178229264915,
+          "rotationY": 3.7529189042505107,
+          "scale": 1.6742255937308073
+        },
+        {
+          "id": "glasswood-high-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": 39.363605349790305,
+          "z": 404.75864184089005,
+          "rotationY": 2.3678602261285002,
+          "scale": 1.3321707310155033
+        },
+        {
+          "id": "glasswood-high-understory-6",
+          "assetId": "polyhaven-fern-02",
+          "x": 69.38057125546038,
+          "z": 443.83765609469265,
+          "rotationY": 3.5481684232054116,
+          "scale": 1.4447651697322725
+        },
+        {
+          "id": "glasswood-high-understory-7",
+          "assetId": "polyhaven-fern-02",
+          "x": -27.998604134190828,
+          "z": 383.1698625488207,
+          "rotationY": 5.135467040861247,
+          "scale": 1.8647766459733246
+        },
+        {
+          "id": "glasswood-high-understory-8",
+          "assetId": "polyhaven-fern-02",
+          "x": 50.901570750866085,
+          "z": 350.00548131298274,
+          "rotationY": 3.9996855102015747,
+          "scale": 1.9174754424020648
+        },
+        {
+          "id": "glasswood-left-gate-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -183.3463349135127,
+          "z": -25.770902656950057,
+          "rotationY": 1.0338230937843818,
+          "scale": 1.9141241170465946
+        },
+        {
+          "id": "glasswood-left-gate-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -190.97960645332932,
+          "z": -27.115355883724988,
+          "rotationY": 1.9772712837998365,
+          "scale": 1.7780891055241228
+        },
+        {
+          "id": "glasswood-left-gate-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -173.56312436633743,
+          "z": 32.28260884643532,
+          "rotationY": 0.5810222449715288,
+          "scale": 1.2883026273921132
+        },
+        {
+          "id": "glasswood-left-gate-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -177.61437711771578,
+          "z": 2.080222626682371,
+          "rotationY": 5.004174679755983,
+          "scale": 1.7899278093129396
+        },
+        {
+          "id": "glasswood-left-gate-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": -186.30519376485609,
+          "z": -8.4394277818501,
+          "rotationY": 0.07969476353821721,
+          "scale": 1.5881772559136151
+        },
+        {
+          "id": "glasswood-left-gate-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": -179.95065004681237,
+          "z": -10.260416254168376,
+          "rotationY": 0.6770481511216732,
+          "scale": 1.4145400632172822
+        },
+        {
+          "id": "glasswood-left-gate-understory-6",
+          "assetId": "polyhaven-fern-02",
+          "x": -174.30652550421655,
+          "z": -5.630827873246744,
+          "rotationY": 2.6821729211652987,
+          "scale": 1.5653884006664156
+        },
+        {
+          "id": "glasswood-low-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -18.20610726135783,
+          "z": -82.95729152858257,
+          "rotationY": 4.1221806295292645,
+          "scale": 1.7790106320753694
+        },
+        {
+          "id": "glasswood-low-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": 38.68922698311508,
+          "z": 4.781040214002132,
+          "rotationY": 4.528984121361856,
+          "scale": 1.4969896452501414
+        },
+        {
+          "id": "glasswood-low-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": 44.52993577579036,
+          "z": -2.62585561722517,
+          "rotationY": 1.1184924107727174,
+          "scale": 1.1683671744540334
+        },
+        {
+          "id": "glasswood-low-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": 48.40843038400635,
+          "z": -120.44525053352118,
+          "rotationY": 0.31507463836336774,
+          "scale": 1.9447992265224456
+        },
+        {
+          "id": "glasswood-low-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": 37.88643256993964,
+          "z": -79.99939654022455,
+          "rotationY": 4.449809150172219,
+          "scale": 1.7138390125706793
+        },
+        {
+          "id": "glasswood-low-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": 98.21920093381777,
+          "z": -64.408511929214,
+          "rotationY": 1.1632260157297776,
+          "scale": 1.905641212500632
+        },
+        {
+          "id": "glasswood-mid-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -56.246091071516275,
+          "z": 106.26606822013855,
+          "rotationY": 5.861920954982687,
+          "scale": 1.7982947234064341
+        },
+        {
+          "id": "glasswood-mid-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": 29.618509530555457,
+          "z": 71.83082319796085,
+          "rotationY": 2.797676893969388,
+          "scale": 1.7796670399606227
+        },
+        {
+          "id": "glasswood-mid-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -43.740580449812114,
+          "z": 145.2410700172186,
+          "rotationY": 1.5207955101630424,
+          "scale": 1.2090382155030965
+        },
+        {
+          "id": "glasswood-mid-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -78.80251835100353,
+          "z": 119.27154082804918,
+          "rotationY": 1.7595332998531112,
+          "scale": 1.2245659181848167
+        },
+        {
+          "id": "glasswood-mid-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": -27.960170519072562,
+          "z": 132.99907725304365,
+          "rotationY": 6.190464005696634,
+          "scale": 1.6089939454570412
+        },
+        {
+          "id": "glasswood-mid-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": 74.61233590263873,
+          "z": 157.00130574405193,
+          "rotationY": 0.6286700836838365,
+          "scale": 1.8167029110714794
+        },
+        {
+          "id": "glasswood-mid-understory-6",
+          "assetId": "polyhaven-fern-02",
+          "x": 62.25793531164527,
+          "z": 190.41267067193985,
+          "rotationY": 3.7744497989958425,
+          "scale": 1.543604526668787
+        },
+        {
+          "id": "needle-opening-room-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -255.499181187246,
+          "z": 264.2358289877884,
+          "rotationY": 3.6233174906542835,
+          "scale": 1.384971130080521
+        },
+        {
+          "id": "needle-opening-room-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -254.50194303272292,
+          "z": 278.97951517580077,
+          "rotationY": 5.204315229441794,
+          "scale": 1.3901754258200525
+        },
+        {
+          "id": "needle-opening-room-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -252.5994167183526,
+          "z": 216.6439344030805,
+          "rotationY": 0.7132363132238806,
+          "scale": 1.683737713471055
+        },
+        {
+          "id": "needle-opening-room-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -254.48869127500802,
+          "z": 248.4897607844323,
+          "rotationY": 0.02785212865581148,
+          "scale": 1.63760152682662
+        },
+        {
+          "id": "needle-turn-rock-outcrop-0",
+          "assetId": "polyhaven-boulder-01",
+          "x": -205.45376420409002,
+          "z": 32.20110159663465,
+          "rotationY": 5.195783144845839,
+          "scale": 1.7753232978936284
+        },
+        {
+          "id": "needle-turn-rock-outcrop-1",
+          "assetId": "polyhaven-boulder-01",
+          "x": -209.88463585861132,
+          "z": 13.451944141772861,
+          "rotationY": 5.0693010614116005,
+          "scale": 1.3553212011046707
+        },
+        {
+          "id": "needle-turn-rock-outcrop-2",
+          "assetId": "polyhaven-boulder-01",
+          "x": -216.16030813158818,
+          "z": 43.98904454722529,
+          "rotationY": 5.100307596358682,
+          "scale": 1.2122060101944954
+        },
+        {
+          "id": "needle-turn-rock-outcrop-3",
+          "assetId": "polyhaven-boulder-01",
+          "x": -201.54708605039423,
+          "z": 10.36470841899591,
+          "rotationY": 5.30528809680159,
+          "scale": 1.048056019046344
+        },
+        {
+          "id": "needle-turn-rock-outcrop-4",
+          "assetId": "polyhaven-boulder-01",
+          "x": -224.94902001782708,
+          "z": 20.065984037266468,
+          "rotationY": 5.345581709384199,
+          "scale": 0.8979618918756023
+        },
+        {
+          "id": "needle-turn-rock-outcrop-5",
+          "assetId": "polyhaven-boulder-01",
+          "x": -208.81946685982786,
+          "z": 55.795543424309685,
+          "rotationY": 5.334626893778544,
+          "scale": 0.8624782141111791
+        },
+        {
+          "id": "needle-turn-rock-outcrop-6",
+          "assetId": "polyhaven-boulder-01",
+          "x": -213.62308759878778,
+          "z": -1.726679680110017,
+          "rotationY": 5.218950971723746,
+          "scale": 0.8844518346246332
+        },
+        {
+          "id": "needle-turn-rock-outcrop-7",
+          "assetId": "polyhaven-boulder-01",
+          "x": -225.36132648163732,
+          "z": 49.31468744164084,
+          "rotationY": 5.169591012220111,
+          "scale": 0.9219078935636207
+        },
+        {
+          "id": "opening-gate-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -354.9073511667084,
+          "z": 280.57045955210924,
+          "rotationY": 1.2705781481769953,
+          "scale": 1.3826230026781559
+        },
+        {
+          "id": "opening-gate-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -344.32388471928425,
+          "z": 251.95397762116045,
+          "rotationY": 4.329312454475467,
+          "scale": 1.5210672818124293
+        },
+        {
+          "id": "opening-gate-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -345.40372039051726,
+          "z": 248.05444160476327,
+          "rotationY": 2.696047656086557,
+          "scale": 1.214196421019733
+        },
+        {
+          "id": "opening-gate-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -352.8012827404309,
+          "z": 243.5581832472235,
+          "rotationY": 2.5532814514725133,
+          "scale": 1.6160359431058167
+        },
+        {
+          "id": "opening-gate-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": -345.3767025815323,
+          "z": 237.41048240102828,
+          "rotationY": 4.956999085628843,
+          "scale": 1.7689811890944838
+        },
+        {
+          "id": "west-high-grove-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -420.9562685340643,
+          "z": 250.09495966136456,
+          "rotationY": 3.424316131368897,
+          "scale": 1.205376759171486
+        },
+        {
+          "id": "west-high-grove-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -392.7008764259517,
+          "z": 434.83095640316606,
+          "rotationY": 4.8595721925734,
+          "scale": 1.871884805895388
+        },
+        {
+          "id": "west-high-grove-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -357.64902014285326,
+          "z": 339.5901625044644,
+          "rotationY": 5.294241219243081,
+          "scale": 1.7457579260692
+        },
+        {
+          "id": "west-high-grove-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -398.38178975507617,
+          "z": 272.5920240394771,
+          "rotationY": 2.944748798573119,
+          "scale": 1.7870030503720045
+        },
+        {
+          "id": "west-high-grove-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": -375.3461470082402,
+          "z": 242.16463169083,
+          "rotationY": 3.948110687343186,
+          "scale": 1.6724044991657139
+        },
+        {
+          "id": "west-high-grove-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": -407.70543463528156,
+          "z": 239.42841930314898,
+          "rotationY": 3.929330043476843,
+          "scale": 1.1840748468413949
+        },
+        {
+          "id": "west-high-grove-understory-6",
+          "assetId": "polyhaven-fern-02",
+          "x": -345.2457752637565,
+          "z": 449.1601620800793,
+          "rotationY": 2.648960805495942,
+          "scale": 1.359862464852631
+        },
+        {
+          "id": "west-low-grove-understory-0",
+          "assetId": "polyhaven-fern-02",
+          "x": -370.17540631932206,
+          "z": -48.21213332936168,
+          "rotationY": 5.230796899366784,
+          "scale": 1.46776500698179
+        },
+        {
+          "id": "west-low-grove-understory-1",
+          "assetId": "polyhaven-fern-02",
+          "x": -397.8984739072621,
+          "z": 151.57956676092,
+          "rotationY": 5.5749919651585556,
+          "scale": 1.5646286915987728
+        },
+        {
+          "id": "west-low-grove-understory-2",
+          "assetId": "polyhaven-fern-02",
+          "x": -375.4665647249203,
+          "z": 143.35228853859007,
+          "rotationY": 5.7639159342573345,
+          "scale": 1.4279613031074403
+        },
+        {
+          "id": "west-low-grove-understory-3",
+          "assetId": "polyhaven-fern-02",
+          "x": -340.20685769384727,
+          "z": 131.46328238770366,
+          "rotationY": 2.507121671086665,
+          "scale": 1.2127248648554085
+        },
+        {
+          "id": "west-low-grove-understory-4",
+          "assetId": "polyhaven-fern-02",
+          "x": -376.7392744682729,
+          "z": 10.687879188917577,
+          "rotationY": 3.6781623289447976,
+          "scale": 1.6811322262510657
+        },
+        {
+          "id": "west-low-grove-understory-5",
+          "assetId": "polyhaven-fern-02",
+          "x": -380.6486122030765,
+          "z": 154.48581482749432,
+          "rotationY": 6.169944380869039,
+          "scale": 1.5940893886610865
+        },
+        {
+          "id": "west-low-grove-understory-6",
+          "assetId": "polyhaven-fern-02",
+          "x": -412.9658216878306,
+          "z": -25.293039232492447,
+          "rotationY": 2.348281563375753,
+          "scale": 1.15721617937088
+        },
+        {
+          "id": "west-low-grove-understory-7",
+          "assetId": "polyhaven-fern-02",
+          "x": -419.08739123493433,
+          "z": -4.367672447115183,
+          "rotationY": 1.2639277123482202,
+          "scale": 1.6413045672699809
+        },
+        {
+          "id": "west-low-grove-understory-8",
+          "assetId": "polyhaven-fern-02",
+          "x": -393.33645384409465,
+          "z": 162.50122989993542,
+          "rotationY": 0.566890476806661,
+          "scale": 1.3994742238894105
+        },
+        {
+          "id": "west-low-grove-understory-9",
+          "assetId": "polyhaven-fern-02",
+          "x": -398.1945496657863,
+          "z": 11.977025605738163,
+          "rotationY": 3.585193317395155,
+          "scale": 1.4685053516179323
         }
       ],
-      "assembly": [
-        {
-          "id": "alpine-rock-outcrop-left",
-          "assetIds": [
-            "polyhaven-boulder-01"
-          ],
-          "seed": 630411,
-          "count": 4,
-          "region": {
-            "kind": "bounds",
-            "minX": -64,
-            "maxX": -55,
-            "minZ": -105,
-            "maxZ": -82
-          },
-          "minSpacing": 2.2,
-          "semantic": "rock-outcrop"
-        },
-        {
-          "id": "alpine-rock-outcrop-pond",
-          "assetIds": [
-            "polyhaven-boulder-01"
-          ],
-          "seed": 888047,
-          "count": 3,
-          "region": {
-            "kind": "bounds",
-            "minX": 76,
-            "maxX": 82,
-            "minZ": -114,
-            "maxZ": -107
-          },
-          "minSpacing": 2.2,
-          "semantic": "rock-outcrop"
-        },
-        {
-          "id": "alpine-rock-outcrop-back",
-          "assetIds": [
-            "polyhaven-boulder-01"
-          ],
-          "seed": 377514,
-          "count": 4,
-          "region": {
-            "kind": "bounds",
-            "minX": -82,
-            "maxX": -70,
-            "minZ": -250,
-            "maxZ": -225
-          },
-          "minSpacing": 2.2,
-          "semantic": "rock-outcrop"
-        },
-        {
-          "id": "habitat-deadwood-left-midground",
-          "assetIds": [
-            "polyhaven-dead-tree-trunk"
-          ],
-          "seed": 590337,
-          "count": 3,
-          "region": {
-            "kind": "bounds",
-            "minX": -103,
-            "maxX": -89,
-            "minZ": -190,
-            "maxZ": -145
-          },
-          "minSpacing": 4,
-          "semantic": "habitat-cluster"
-        },
-        {
-          "id": "habitat-deadwood-right-midground",
-          "assetIds": [
-            "polyhaven-dead-tree-trunk"
-          ],
-          "seed": 206754,
-          "count": 3,
-          "region": {
-            "kind": "bounds",
-            "minX": 95,
-            "maxX": 107,
-            "minZ": -205,
-            "maxZ": -145
-          },
-          "minSpacing": 4,
-          "semantic": "habitat-cluster"
-        },
-        {
-          "id": "forest-cluster-left-foreground",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 103841,
-          "count": 9,
-          "region": {
-            "kind": "bounds",
-            "minX": -84,
-            "maxX": -55,
-            "minZ": -112,
-            "maxZ": 8
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "forest-cluster-right-foreground",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 970301,
-          "count": 8,
-          "region": {
-            "kind": "bounds",
-            "minX": 55,
-            "maxX": 82,
-            "minZ": -78,
-            "maxZ": 8
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "forest-cluster-left-midground",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 516029,
-          "count": 10,
-          "region": {
-            "kind": "bounds",
-            "minX": -86,
-            "maxX": -62,
-            "minZ": -220,
-            "maxZ": -132
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "forest-cluster-right-midground",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 331907,
-          "count": 9,
-          "region": {
-            "kind": "bounds",
-            "minX": 84,
-            "maxX": 100,
-            "minZ": -220,
-            "maxZ": -96
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "forest-cluster-left-shoulder",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 128907,
-          "count": 7,
-          "region": {
-            "kind": "bounds",
-            "minX": -84,
-            "maxX": -62,
-            "minZ": -178,
-            "maxZ": -130
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "forest-cluster-right-shoulder",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 721643,
-          "count": 6,
-          "region": {
-            "kind": "bounds",
-            "minX": 84,
-            "maxX": 100,
-            "minZ": -170,
-            "maxZ": -102
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "grandfir-grove-left-tee",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 604117,
-          "count": 6,
-          "region": {
-            "kind": "bounds",
-            "minX": -82,
-            "maxX": -60,
-            "minZ": -60,
-            "maxZ": -14
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "grandfir-grove-right-mid",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 285093,
-          "count": 6,
-          "region": {
-            "kind": "bounds",
-            "minX": 84,
-            "maxX": 103,
-            "minZ": -132,
-            "maxZ": -88
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "forest-cluster-left-backdrop",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 418703,
-          "count": 8,
-          "region": {
-            "kind": "bounds",
-            "minX": -88,
-            "maxX": -68,
-            "minZ": -326,
-            "maxZ": -238
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "forest-cluster-right-backdrop",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 759211,
-          "count": 7,
-          "region": {
-            "kind": "bounds",
-            "minX": 68,
-            "maxX": 88,
-            "minZ": -322,
-            "maxZ": -232
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "grandfir-side-line-left",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 873541,
-          "count": 42,
-          "region": {
-            "kind": "bounds",
-            "minX": -92,
-            "maxX": -68,
-            "minZ": -332,
-            "maxZ": 12
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "grandfir-side-line-right-pond",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 319867,
-          "count": 2,
-          "region": {
-            "kind": "bounds",
-            "minX": 84,
-            "maxX": 104,
-            "minZ": -152,
-            "maxZ": -82
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "grandfir-side-line-right-front",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 319868,
-          "count": 10,
-          "region": {
-            "kind": "bounds",
-            "minX": 55,
-            "maxX": 82,
-            "minZ": -78,
-            "maxZ": 12
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        },
-        {
-          "id": "grandfir-side-line-right-back",
-          "assetIds": [
-            "blendkit-palm-tree-medium-dense"
-          ],
-          "seed": 319869,
-          "count": 24,
-          "region": {
-            "kind": "bounds",
-            "minX": 68,
-            "maxX": 92,
-            "minZ": -332,
-            "maxZ": -155
-          },
-          "minSpacing": 7,
-          "semantic": "forest-cluster"
-        }
-      ],
+      "scatter": [],
+      "assembly": [],
       "edgeDressing": [],
       "exclusions": [],
-      "syntheticTrees": []
+      "proceduralTreeDefinitions": [
+        {
+          "id": "tall-pine",
+          "generator": "parametric",
+          "seed": 274913,
+          "variantCount": 3,
+          "parameters": {
+            "shape": "tapered-cylindrical",
+            "gScale": 25,
+            "gScaleV": 1.2,
+            "levels": 3,
+            "ratio": 0.016,
+            "ratioPower": 1.45,
+            "flare": 0.45,
+            "baseSplits": 0,
+            "levelsParameters": [
+              {
+                "baseSize": 0.18,
+                "downAngle": 55,
+                "downAngleV": 8,
+                "rotate": 137.5,
+                "rotateV": 10,
+                "branches": 1,
+                "length": 1,
+                "lengthV": 0,
+                "taper": 1,
+                "segSplits": 0,
+                "splitAngle": 24,
+                "splitAngleV": 6,
+                "curveRes": 9,
+                "curve": 3,
+                "curveV": 8,
+                "curveBack": 0,
+                "bendV": 6,
+                "branchDist": 1,
+                "radiusMod": 1,
+                "branchPattern": "alternate",
+                "helixTurns": 0
+              },
+              {
+                "baseSize": 0.38,
+                "downAngle": 76,
+                "downAngleV": 12,
+                "rotate": 137.5,
+                "rotateV": 10,
+                "branches": 26,
+                "length": 0.16,
+                "lengthV": 0.025,
+                "taper": 1,
+                "segSplits": 0,
+                "splitAngle": 24,
+                "splitAngleV": 6,
+                "curveRes": 5,
+                "curve": -18,
+                "curveV": 8,
+                "curveBack": 0,
+                "bendV": 6,
+                "branchDist": 1,
+                "radiusMod": 0.5,
+                "branchPattern": "whorled",
+                "helixTurns": 0
+              },
+              {
+                "baseSize": 0.15,
+                "downAngle": 48,
+                "downAngleV": 8,
+                "rotate": 137.5,
+                "rotateV": 10,
+                "branches": 8,
+                "length": 0.38,
+                "lengthV": 0.04,
+                "taper": 1,
+                "segSplits": 0,
+                "splitAngle": 24,
+                "splitAngleV": 6,
+                "curveRes": 4,
+                "curve": 16,
+                "curveV": 8,
+                "curveBack": 0,
+                "bendV": 6,
+                "branchDist": 1,
+                "radiusMod": 0.32,
+                "branchPattern": "alternate",
+                "helixTurns": 0
+              },
+              {
+                "baseSize": 0.15,
+                "downAngle": 36,
+                "downAngleV": 8,
+                "rotate": 137.5,
+                "rotateV": 10,
+                "branches": 4,
+                "length": 0.45,
+                "lengthV": 0.08,
+                "taper": 1,
+                "segSplits": 0,
+                "splitAngle": 24,
+                "splitAngleV": 6,
+                "curveRes": 3,
+                "curve": 10,
+                "curveV": 8,
+                "curveBack": 0,
+                "bendV": 6,
+                "branchDist": 1,
+                "radiusMod": 0.3,
+                "branchPattern": "alternate",
+                "helixTurns": 0
+              },
+              {
+                "baseSize": 0.15,
+                "downAngle": 30,
+                "downAngleV": 8,
+                "rotate": 137.5,
+                "rotateV": 10,
+                "branches": 3,
+                "length": 0.3,
+                "lengthV": 0.08,
+                "taper": 1,
+                "segSplits": 0,
+                "splitAngle": 24,
+                "splitAngleV": 6,
+                "curveRes": 2,
+                "curve": 10,
+                "curveV": 8,
+                "curveBack": 0,
+                "bendV": 6,
+                "branchDist": 1,
+                "radiusMod": 0.38,
+                "branchPattern": "alternate",
+                "helixTurns": 0
+              }
+            ],
+            "leaves": {
+              "count": 3200,
+              "shape": "spray",
+              "scale": 0.55,
+              "scaleX": 0.8,
+              "bend": 0.25,
+              "stemLength": 0.03
+            },
+            "blossoms": {
+              "count": 0,
+              "shape": "oval",
+              "scale": 0.12,
+              "rate": 0
+            },
+            "tropism": [
+              0,
+              0.18,
+              0
+            ],
+            "pruning": {
+              "ratio": 0,
+              "width": 0.5,
+              "peak": 0.5,
+              "powerLow": 0.5,
+              "powerHigh": 0.5
+            },
+            "pruningVolumes": [],
+            "multipleTrunks": {
+              "count": 1,
+              "radius": 0
+            }
+          },
+          "materials": {
+            "bark": {
+              "color": "#685344",
+              "roughness": 0.96
+            },
+            "leaves": {
+              "color": "#385738",
+              "roughness": 0.9,
+              "alphaCutoff": 0.32,
+              "doubleSided": true,
+              "translucency": 0.25
+            },
+            "blossoms": {
+              "color": "#f2d7d9",
+              "roughness": 0.8
+            }
+          },
+          "version": 2,
+          "plant": {
+            "structure": {
+              "leanX": 0,
+              "leanZ": 0,
+              "crownX": 1,
+              "crownZ": 1,
+              "droop": 0,
+              "collar": 0.2,
+              "buttress": 0,
+              "buttressCount": 5
+            },
+            "foliage": {
+              "density": 1,
+              "variation": 0.2,
+              "spread": 0.025,
+              "roll": 1,
+              "leaflets": 5,
+              "attachmentStart": 0.35,
+              "colorVariation": 0.2
+            },
+            "life": {
+              "age": 1,
+              "health": 1,
+              "season": 0,
+              "flowering": 1,
+              "deciduous": 0
+            },
+            "wind": {
+              "strength": 0.3,
+              "stiffness": 0.6,
+              "flutter": 0.12
+            },
+            "bark": {
+              "ridgeDepth": 0.04,
+              "ridgeFrequency": 18,
+              "variation": 0.2
+            },
+            "envelope": {
+              "shape": "none",
+              "width": 4,
+              "depth": 4,
+              "height": 4,
+              "baseHeight": 0
+            },
+            "quality": {
+              "radialSegments": 9,
+              "nearPixels": 300,
+              "farPixels": 90
+            },
+            "profiles": {
+              "crown": [
+                [
+                  0,
+                  0.3
+                ],
+                [
+                  0.5,
+                  1
+                ],
+                [
+                  1,
+                  0.2
+                ]
+              ],
+              "length": [
+                [
+                  0,
+                  1
+                ],
+                [
+                  1,
+                  1
+                ]
+              ],
+              "density": [
+                [
+                  0,
+                  0.5
+                ],
+                [
+                  1,
+                  1
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "proceduralTrees": [
+        {
+          "id": "augusta-edge-hardwood-01",
+          "definitionId": "tall-pine",
+          "x": -354,
+          "z": 250,
+          "rotationY": 1.74,
+          "scale": 0.987,
+          "seed": 381061515,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-edge-hardwood-03",
+          "definitionId": "tall-pine",
+          "x": -355,
+          "z": 112,
+          "rotationY": 5.36,
+          "scale": 1.084,
+          "seed": 414616753,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-edge-oak-02",
+          "definitionId": "tall-pine",
+          "x": -357,
+          "z": 187,
+          "rotationY": 4.18,
+          "scale": 1.01,
+          "seed": 930779051,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-hardwood-02",
+          "definitionId": "tall-pine",
+          "x": -414,
+          "z": 302,
+          "rotationY": 2.1,
+          "scale": 0.9390000000000001,
+          "seed": 2119678704,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-hardwood-03",
+          "definitionId": "tall-pine",
+          "x": -374,
+          "z": 286,
+          "rotationY": 4.35,
+          "scale": 1.088,
+          "seed": 2136456323,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-hardwood-05",
+          "definitionId": "tall-pine",
+          "x": -422,
+          "z": 242,
+          "rotationY": 5.12,
+          "scale": 0.977,
+          "seed": 2237122037,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-hardwood-07",
+          "definitionId": "tall-pine",
+          "x": -411,
+          "z": 202,
+          "rotationY": 0.94,
+          "scale": 1.081,
+          "seed": 2203566799,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-hardwood-09",
+          "definitionId": "tall-pine",
+          "x": -421,
+          "z": 151,
+          "rotationY": 2.66,
+          "scale": 0.97,
+          "seed": 2304232513,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-hardwood-11",
+          "definitionId": "tall-pine",
+          "x": -416,
+          "z": 91,
+          "rotationY": 3.82,
+          "scale": 0.9400000000000001,
+          "seed": 2237269132,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-oak-01",
+          "definitionId": "tall-pine",
+          "x": -385,
+          "z": 320,
+          "rotationY": 0.34,
+          "scale": 0.934,
+          "seed": 2892468424,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-oak-04",
+          "definitionId": "tall-pine",
+          "x": -401,
+          "z": 268,
+          "rotationY": 1.48,
+          "scale": 1.076,
+          "seed": 2976356519,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-oak-06",
+          "definitionId": "tall-pine",
+          "x": -381,
+          "z": 226,
+          "rotationY": 3.02,
+          "scale": 0.972,
+          "seed": 3009911757,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-oak-08",
+          "definitionId": "tall-pine",
+          "x": -370,
+          "z": 180,
+          "rotationY": 4.74,
+          "scale": 1.097,
+          "seed": 2775025091,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-oak-10",
+          "definitionId": "tall-pine",
+          "x": -391,
+          "z": 127,
+          "rotationY": 5.61,
+          "scale": 1.03,
+          "seed": 2808433234,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "augusta-west-oak-12",
+          "definitionId": "tall-pine",
+          "x": -376,
+          "z": 59,
+          "rotationY": 1.17,
+          "scale": 0.933,
+          "seed": 2774877996,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-north-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -137.99772360711358,
+          "z": -101.03469641506672,
+          "rotationY": 4.222074252625344,
+          "scale": 1.056,
+          "seed": 3371481897,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-north-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -126.00252947071567,
+          "z": -95.10453553125262,
+          "rotationY": 0.7560546248698579,
+          "scale": 0.907,
+          "seed": 3354704278,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-north-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -159.93530576350167,
+          "z": -98.05957921594381,
+          "rotationY": 5.716832758516935,
+          "scale": 0.9590000000000001,
+          "seed": 3337926659,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-north-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -183.70876873987962,
+          "z": -104.99256863878934,
+          "rotationY": 2.220348332820331,
+          "scale": 1.0110000000000001,
+          "seed": 3321149040,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-north-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -168.1893300509546,
+          "z": -100.53193287551403,
+          "rotationY": 4.920502129315547,
+          "scale": 1.049,
+          "seed": 3438592373,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-north-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -180.03315427340567,
+          "z": -94.71948400512338,
+          "rotationY": 1.151049244472664,
+          "scale": 0.9,
+          "seed": 3421814754,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-north-forest-wall-6",
+          "definitionId": "tall-pine",
+          "x": -147.8505029133521,
+          "z": -95.2709794677794,
+          "rotationY": 3.9412262211946807,
+          "scale": 0.9520000000000001,
+          "seed": 3405037135,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -170.25027334224433,
+          "z": -164.59014483494684,
+          "rotationY": 2.633321195963429,
+          "scale": 1.089,
+          "seed": 1728396375,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -180.79376618145034,
+          "z": -160.6642590276897,
+          "rotationY": 6.027374164852993,
+          "scale": 0.9400000000000001,
+          "seed": 1711618756,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -124.08922382863238,
+          "z": -175.72745208861306,
+          "rotationY": 2.197932496985079,
+          "scale": 0.985,
+          "seed": 1761951613,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -154.64756198460236,
+          "z": -178.58410286251456,
+          "rotationY": 4.830321261148981,
+          "scale": 1.037,
+          "seed": 1745173994,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -114.96143866796046,
+          "z": -154.9071230739355,
+          "rotationY": 3.8550436734484954,
+          "scale": 1.096,
+          "seed": 1661285899,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -155.07186978589743,
+          "z": -169.50856287265196,
+          "rotationY": 5.9968306487529475,
+          "scale": 0.9470000000000001,
+          "seed": 1644508280,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-6",
+          "definitionId": "tall-pine",
+          "x": -148.13262653304264,
+          "z": -164.83626483706757,
+          "rotationY": 3.6381239800439986,
+          "scale": 0.992,
+          "seed": 1694841137,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-7",
+          "definitionId": "tall-pine",
+          "x": -177.21336912363768,
+          "z": -172.79247764032334,
+          "rotationY": 1.1057529939077275,
+          "scale": 1.044,
+          "seed": 1678063518,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-8",
+          "definitionId": "tall-pine",
+          "x": -163.44647200545296,
+          "z": -168.9542542747222,
+          "rotationY": 3.826577457133468,
+          "scale": 0.902,
+          "seed": 1594175423,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-9",
+          "definitionId": "tall-pine",
+          "x": -168.30357262166217,
+          "z": -150.58235581498593,
+          "rotationY": 0.3485962914061983,
+          "scale": 0.9540000000000001,
+          "seed": 1577397804,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-south-forest-wall-10",
+          "definitionId": "tall-pine",
+          "x": -194.71562712918967,
+          "z": -173.92271209973842,
+          "rotationY": 0.9190601533558367,
+          "scale": 0.9,
+          "seed": 2386284060,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-target-backdrop-forest-0",
+          "definitionId": "tall-pine",
+          "x": -16.628763827029616,
+          "z": -146.5987978456542,
+          "rotationY": 2.2885565415545774,
+          "scale": 1.078,
+          "seed": 2302247947,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-target-backdrop-forest-1",
+          "definitionId": "tall-pine",
+          "x": 54.711925375740975,
+          "z": -152.57673669373617,
+          "rotationY": 0.45990820369699786,
+          "scale": 0.929,
+          "seed": 2285470328,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-target-backdrop-forest-2",
+          "definitionId": "tall-pine",
+          "x": -21.050271959975362,
+          "z": -111.3708122051321,
+          "rotationY": 3.035221499878563,
+          "scale": 0.974,
+          "seed": 2335803185,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-target-backdrop-forest-3",
+          "definitionId": "tall-pine",
+          "x": 25.48854999244213,
+          "z": -130.73883585166186,
+          "rotationY": 4.38370859238438,
+          "scale": 1.026,
+          "seed": 2319025566,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-target-backdrop-forest-4",
+          "definitionId": "tall-pine",
+          "x": 63.108141485136,
+          "z": -133.07033128337935,
+          "rotationY": 0.866201966594476,
+          "scale": 1.071,
+          "seed": 2369358423,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "fern-gate-target-backdrop-forest-5",
+          "definitionId": "tall-pine",
+          "x": 54.7520733717829,
+          "z": -117.69001900451258,
+          "rotationY": 0.11071823965337986,
+          "scale": 0.922,
+          "seed": 2352580804,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-finish-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -128.8824480236508,
+          "z": 340.4842917365022,
+          "rotationY": 2.3440311763186426,
+          "scale": 1.0190000000000001,
+          "seed": 1698372131,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-high-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -129.4131718983408,
+          "z": 216.07113918289542,
+          "rotationY": 0.748459029854266,
+          "scale": 1.044,
+          "seed": 2884719180,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-high-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -100.37308743689209,
+          "z": 304.53716221731156,
+          "rotationY": 1.0965636769186469,
+          "scale": 0.992,
+          "seed": 2901496799,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-high-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -137.7249446499627,
+          "z": 234.32626343797892,
+          "rotationY": 4.973123291163868,
+          "scale": 0.9400000000000001,
+          "seed": 2918274418,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-high-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -114.00479457806796,
+          "z": 301.29417325370014,
+          "rotationY": 0.4315578563455208,
+          "scale": 1.089,
+          "seed": 2935052037,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-high-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -131.45141357323155,
+          "z": 203.67538387421519,
+          "rotationY": 4.545480014882034,
+          "scale": 1.051,
+          "seed": 2817608704,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-high-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -141.630574533483,
+          "z": 212.3159428080544,
+          "rotationY": 5.043995140175138,
+          "scale": 0.999,
+          "seed": 2834386323,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -78.52680726326071,
+          "z": 55.58296304196119,
+          "rotationY": 5.576713045854189,
+          "scale": 0.916,
+          "seed": 3303881638,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -62.753830164438114,
+          "z": 69.0513944067061,
+          "rotationY": 5.530180838709557,
+          "scale": 1.065,
+          "seed": 3320659257,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -68.16340212943032,
+          "z": 15.399699043482542,
+          "rotationY": 3.1787678933334607,
+          "scale": 1.02,
+          "seed": 3270326400,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -70.77882011770271,
+          "z": 59.97803857550025,
+          "rotationY": 0.3385900546291296,
+          "scale": 0.968,
+          "seed": 3287104019,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -67.69344661268406,
+          "z": -6.8095893785357475,
+          "rotationY": 5.153868471491837,
+          "scale": 0.909,
+          "seed": 3370992114,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -76.75774472998455,
+          "z": 3.1400843895971775,
+          "rotationY": 5.586096651530458,
+          "scale": 1.058,
+          "seed": 3387769733,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-6",
+          "definitionId": "tall-pine",
+          "x": -57.56434237817302,
+          "z": 1.5532328560948372,
+          "rotationY": 2.1741928300069464,
+          "scale": 1.0130000000000001,
+          "seed": 3337436876,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-7",
+          "definitionId": "tall-pine",
+          "x": -69.05756219755858,
+          "z": 29.617250822484493,
+          "rotationY": 3.795810930875584,
+          "scale": 0.9610000000000001,
+          "seed": 3354214495,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-low-forest-wall-8",
+          "definitionId": "tall-pine",
+          "x": -68.28690595692024,
+          "z": 39.398494102060795,
+          "rotationY": 0.5677321433168782,
+          "scale": 0.902,
+          "seed": 3438102590,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-mid-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -105.44066750211641,
+          "z": 172.3828300461173,
+          "rotationY": 1.9924796441005166,
+          "scale": 1.083,
+          "seed": 3383026158,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-mid-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -133.73872662428766,
+          "z": 133.9406389114447,
+          "rotationY": 3.1002770718756922,
+          "scale": 1.0310000000000001,
+          "seed": 3399803777,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-mid-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -107.1477945917286,
+          "z": 135.14917435823008,
+          "rotationY": 5.215494994232444,
+          "scale": 0.986,
+          "seed": 3349470920,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-mid-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -118.82943377830088,
+          "z": 136.74688496394083,
+          "rotationY": 1.3247059532630554,
+          "scale": 0.934,
+          "seed": 3366248539,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-mid-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -116.63998218951747,
+          "z": 166.89563852967694,
+          "rotationY": 1.914609570967979,
+          "scale": 1.076,
+          "seed": 3450136634,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-mid-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -113.41212722472847,
+          "z": 176.32520497776568,
+          "rotationY": 3.6721346983040726,
+          "scale": 1.024,
+          "seed": 3466914253,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-east-mid-forest-wall-6",
+          "definitionId": "tall-pine",
+          "x": -126.37718399288133,
+          "z": 127.90688882349059,
+          "rotationY": 0.45125548798522874,
+          "scale": 0.979,
+          "seed": 3416581396,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-finish-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -261.89578594174236,
+          "z": 407.30577951762825,
+          "rotationY": 0.2672989493884405,
+          "scale": 0.901,
+          "seed": 3535832809,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-high-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -259.7734157652594,
+          "z": 297.6857718722895,
+          "rotationY": 3.0269152821655405,
+          "scale": 1.07,
+          "seed": 1148277794,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-high-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -242.02156554721296,
+          "z": 302.47277656709775,
+          "rotationY": 3.2446383253299222,
+          "scale": 1.018,
+          "seed": 1165055413,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-high-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -259.1376391425729,
+          "z": 173.22463608311955,
+          "rotationY": 5.70231864939746,
+          "scale": 0.973,
+          "seed": 1114722556,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-high-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -248.50589860975742,
+          "z": 234.04829422209878,
+          "rotationY": 4.575876850037942,
+          "scale": 0.921,
+          "seed": 1131500175,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-high-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -247.15893442975357,
+          "z": 269.15762892737985,
+          "rotationY": 3.4406725502793973,
+          "scale": 1.077,
+          "seed": 1081167318,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-high-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -245.3932838528417,
+          "z": 282.689631099347,
+          "rotationY": 4.079152402305175,
+          "scale": 1.025,
+          "seed": 1097944937,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -157.6955432293471,
+          "z": 32.959929852513596,
+          "rotationY": 2.929937585420926,
+          "scale": 0.9560000000000001,
+          "seed": 2335580660,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -165.39028675062582,
+          "z": 50.16572057153098,
+          "rotationY": 5.933514356152358,
+          "scale": 0.904,
+          "seed": 2352358279,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -167.63024491257966,
+          "z": 18.80091442493722,
+          "rotationY": 4.706333077389165,
+          "scale": 1.053,
+          "seed": 2369135898,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -145.05776497418992,
+          "z": -9.859143558423966,
+          "rotationY": 5.72412427869516,
+          "scale": 1.0010000000000001,
+          "seed": 2385913517,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -163.60705547733232,
+          "z": -8.326169967185706,
+          "rotationY": 0.79425194403295,
+          "scale": 0.9630000000000001,
+          "seed": 2268470184,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -157.50952609116212,
+          "z": 14.786805763142183,
+          "rotationY": 6.005291473500259,
+          "scale": 0.911,
+          "seed": 2285247803,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-6",
+          "definitionId": "tall-pine",
+          "x": -151.74892395618372,
+          "z": -0.3639062389265746,
+          "rotationY": 0.25681686632189243,
+          "scale": 1.06,
+          "seed": 2302025422,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-7",
+          "definitionId": "tall-pine",
+          "x": -169.65800552163273,
+          "z": 36.81535348761827,
+          "rotationY": 4.334586519921462,
+          "scale": 1.008,
+          "seed": 2318803041,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-low-forest-wall-8",
+          "definitionId": "tall-pine",
+          "x": -167.641640616348,
+          "z": -0.6136246828828007,
+          "rotationY": 2.315898003544787,
+          "scale": 0.97,
+          "seed": 2201359708,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-mid-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -224.39486346114427,
+          "z": 164.69922019797377,
+          "rotationY": 2.6496714750067514,
+          "scale": 0.931,
+          "seed": 1528697692,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-mid-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -230.00973988510668,
+          "z": 124.85213660821319,
+          "rotationY": 1.0256443386606877,
+          "scale": 1.08,
+          "seed": 1545475311,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-mid-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -215.6245826818049,
+          "z": 191.67084177443758,
+          "rotationY": 5.223777900345873,
+          "scale": 1.028,
+          "seed": 1562252930,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-mid-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -239.64702749345452,
+          "z": 143.25513490731828,
+          "rotationY": 0.21848202554475876,
+          "scale": 0.976,
+          "seed": 1579030549,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-mid-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -213.66049269307405,
+          "z": 146.0734622995369,
+          "rotationY": 3.7262472378399756,
+          "scale": 0.9380000000000001,
+          "seed": 1461587216,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-mid-forest-wall-5",
+          "definitionId": "tall-pine",
+          "x": -212.56605839915574,
+          "z": 164.76160362223163,
+          "rotationY": 1.9959861387772375,
+          "scale": 1.087,
+          "seed": 1478364835,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "glasswood-west-mid-forest-wall-6",
+          "definitionId": "tall-pine",
+          "x": -228.9861554466188,
+          "z": 193.69711508508772,
+          "rotationY": 0.4368780461356374,
+          "scale": 1.0350000000000001,
+          "seed": 1495142454,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-lower-turn-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -249.91852441756055,
+          "z": 34.249162999913096,
+          "rotationY": 0.3844938974970102,
+          "scale": 1.029,
+          "seed": 47075133,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-lower-turn-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -242.89035509480163,
+          "z": 38.772940561175346,
+          "rotationY": 5.97988082930779,
+          "scale": 1.081,
+          "seed": 30297514,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-lower-turn-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -243.3375329039991,
+          "z": 27.484881351701915,
+          "rotationY": 4.067801062093435,
+          "scale": 0.932,
+          "seed": 13519895,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-turn-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -260.1346947513521,
+          "z": 130.03719181171618,
+          "rotationY": 5.098473204422326,
+          "scale": 1.041,
+          "seed": 157247265,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-turn-forest-wall-1",
+          "definitionId": "tall-pine",
+          "x": -265.1008971892297,
+          "z": 143.3151518041268,
+          "rotationY": 4.321895892837333,
+          "scale": 1.093,
+          "seed": 140469646,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-turn-forest-wall-2",
+          "definitionId": "tall-pine",
+          "x": -250.7198242917657,
+          "z": 129.38685209839605,
+          "rotationY": 5.363658354219672,
+          "scale": 0.9440000000000001,
+          "seed": 123692027,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-turn-forest-wall-3",
+          "definitionId": "tall-pine",
+          "x": -264.2878530584276,
+          "z": 181.31896757287905,
+          "rotationY": 0.5104674819910219,
+          "scale": 0.996,
+          "seed": 106914408,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-turn-forest-wall-4",
+          "definitionId": "tall-pine",
+          "x": -265.7961669676006,
+          "z": 122.24065435468219,
+          "rotationY": 1.2626021710541049,
+          "scale": 1.034,
+          "seed": 224357741,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-east-upper-forest-wall-0",
+          "definitionId": "tall-pine",
+          "x": -268.14381832256913,
+          "z": 281.59034341340885,
+          "rotationY": 2.655785806950362,
+          "scale": 1.054,
+          "seed": 3406601218,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-green-backdrop-canopy-0",
+          "definitionId": "tall-pine",
+          "x": -320.3286982886493,
+          "z": -133.53140904917382,
+          "rotationY": 3.0404569340468393,
+          "scale": 1.064,
+          "seed": 3444857156,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-green-backdrop-canopy-1",
+          "definitionId": "tall-pine",
+          "x": -345.97603681730106,
+          "z": -132.85147414542735,
+          "rotationY": 3.5295290533379826,
+          "scale": 1.012,
+          "seed": 3461634775,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-green-backdrop-canopy-2",
+          "definitionId": "tall-pine",
+          "x": -334.023822133895,
+          "z": -142.09694329067133,
+          "rotationY": 6.181935943771481,
+          "scale": 0.96,
+          "seed": 3478412394,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-green-backdrop-canopy-3",
+          "definitionId": "tall-pine",
+          "x": -340.1217349048238,
+          "z": -103.97453430341557,
+          "rotationY": 5.797153064362928,
+          "scale": 0.908,
+          "seed": 3495190013,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-middle-canopy-0",
+          "definitionId": "tall-pine",
+          "x": -362.53691894491203,
+          "z": 15.886410095263273,
+          "rotationY": 0.835763192503071,
+          "scale": 0.909,
+          "seed": 2271685125,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-middle-canopy-1",
+          "definitionId": "tall-pine",
+          "x": -367.8816074221395,
+          "z": 130.11884190607816,
+          "rotationY": 4.4953333789647925,
+          "scale": 0.9610000000000001,
+          "seed": 2254907506,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-0",
+          "definitionId": "tall-pine",
+          "x": -346.568510428071,
+          "z": 121.4462286233902,
+          "rotationY": 1.9924469434926908,
+          "scale": 0.983,
+          "seed": 260390558,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-1",
+          "definitionId": "tall-pine",
+          "x": -346.1438503600657,
+          "z": 198.6192475957796,
+          "rotationY": 6.220633235669015,
+          "scale": 0.931,
+          "seed": 277168177,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-2",
+          "definitionId": "tall-pine",
+          "x": -355.32860719040036,
+          "z": 232.92873023310676,
+          "rotationY": 0.849825685645213,
+          "scale": 1.087,
+          "seed": 226835320,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-3",
+          "definitionId": "tall-pine",
+          "x": -346.7675869651139,
+          "z": 263.65378107177094,
+          "rotationY": 5.627127463074168,
+          "scale": 1.0350000000000001,
+          "seed": 243612939,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-4",
+          "definitionId": "tall-pine",
+          "x": -353.7990730814636,
+          "z": 163.44598351744935,
+          "rotationY": 1.2641860037013777,
+          "scale": 0.976,
+          "seed": 327501034,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-5",
+          "definitionId": "tall-pine",
+          "x": -350.1103058978915,
+          "z": -14.843804759439081,
+          "rotationY": 0.49694904954547736,
+          "scale": 0.924,
+          "seed": 344278653,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-6",
+          "definitionId": "tall-pine",
+          "x": -352.50310043245554,
+          "z": 282.3433358152397,
+          "rotationY": 3.7504919260828427,
+          "scale": 1.08,
+          "seed": 293945796,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-7",
+          "definitionId": "tall-pine",
+          "x": -355.92497212439775,
+          "z": 210.90414747130126,
+          "rotationY": 2.589499773093843,
+          "scale": 1.028,
+          "seed": 310723415,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-8",
+          "definitionId": "tall-pine",
+          "x": -345.19010727852583,
+          "z": 275.6122082937509,
+          "rotationY": 6.179079526001644,
+          "scale": 0.997,
+          "seed": 126169606,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-9",
+          "definitionId": "tall-pine",
+          "x": -344.3735662214458,
+          "z": 228.265133399982,
+          "rotationY": 6.218856435349578,
+          "scale": 0.9450000000000001,
+          "seed": 142947225,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        },
+        {
+          "id": "needle-west-shoulder-canopy-10",
+          "definitionId": "tall-pine",
+          "x": -352.80165385082364,
+          "z": 319.5634626294486,
+          "rotationY": 2.081109672811251,
+          "scale": 1.044,
+          "seed": 46383507,
+          "age": 1,
+          "health": 1,
+          "windExposure": 0.7
+        }
+      ]
     }
   },
   "holes": [
     {
-      "id": "practice-range",
-      "name": "Practice Range",
+      "id": "pineglass-hole-1",
+      "name": "Needle Bend",
       "number": 1,
-      "kind": "practice",
-      "par": 3,
-      "seed": 1128746828,
+      "kind": "hole",
+      "par": 4,
+      "seed": 104110041,
       "route": {
-        "id": "practice-range-route",
+        "id": "pineglass-hole-1-route",
         "points": [
           {
             "x": 0,
             "z": 2
           },
           {
-            "x": 16,
-            "z": -274.32
+            "x": -2,
+            "z": -82
+          },
+          {
+            "x": 1,
+            "z": -168
+          },
+          {
+            "x": 10,
+            "z": -252
+          },
+          {
+            "x": 22,
+            "z": -330
+          },
+          {
+            "x": 28,
+            "z": -374.9
           }
         ],
-        "fairwayHalfWidth": 26,
-        "roughWidth": 18
+        "fairwayHalfWidth": 21,
+        "roughWidth": 9
       },
       "tees": [
         {
-          "id": "practice-range-tee",
-          "label": "Primary",
+          "id": "pineglass-hole-1-tee",
+          "label": "Championship",
           "x": 0,
           "z": 2,
-          "boxHalfX": 3.2,
-          "z0": -2,
-          "z1": 6
+          "boxHalfX": 3.8,
+          "z0": -3,
+          "z1": 7
         }
       ],
-      "fringeWidth": 2.2,
+      "fringeWidth": 2.4,
       "greens": [
         {
-          "id": "practice-range-green-1",
-          "yards": 50,
-          "x": -6,
-          "r": 7,
-          "contour": "tilt",
-          "shape": [
-            {
-              "x": -12.5,
-              "z": -44
-            },
-            {
-              "x": -10,
-              "z": -49.8
-            },
-            {
-              "x": -5,
-              "z": -52
-            },
-            {
-              "x": 0.3,
-              "z": -48.2
-            },
-            {
-              "x": 0.8,
-              "z": -42.9
-            },
-            {
-              "x": -2.7,
-              "z": -38.9
-            },
-            {
-              "x": -8.4,
-              "z": -39.4
-            }
-          ],
-          "z": -45.72
-        },
-        {
-          "id": "practice-range-green-2",
-          "yards": 100,
-          "x": 10,
-          "r": 8,
-          "contour": "punchbowl",
-          "shape": [
-            {
-              "x": 2.5,
-              "z": -90
-            },
-            {
-              "x": 5,
-              "z": -97.5
-            },
-            {
-              "x": 11.5,
-              "z": -100.2
-            },
-            {
-              "x": 17.6,
-              "z": -96
-            },
-            {
-              "x": 18.4,
-              "z": -89.4
-            },
-            {
-              "x": 13.6,
-              "z": -84
-            },
-            {
-              "x": 6.6,
-              "z": -84.8
-            }
-          ],
-          "z": -91.44
-        },
-        {
-          "id": "practice-range-green-3",
-          "yards": 150,
-          "x": -14,
-          "r": 9,
+          "id": "pineglass-hole-1-green",
+          "yards": 410,
+          "x": 28,
+          "z": -374.9,
+          "r": 11.5,
           "contour": "spine",
           "shape": [
             {
-              "x": -22.7,
-              "z": -136
+              "x": 17.4,
+              "z": -373.1
             },
             {
-              "x": -20,
-              "z": -144.5
+              "x": 19.4,
+              "z": -382.5
             },
             {
-              "x": -12.5,
-              "z": -147
+              "x": 26.2,
+              "z": -386
             },
             {
-              "x": -5.2,
-              "z": -141.6
+              "x": 34.2,
+              "z": -384.1
             },
             {
-              "x": -5.8,
-              "z": -133.8
+              "x": 39.2,
+              "z": -376.7
             },
             {
-              "x": -11,
-              "z": -128.4
+              "x": 37,
+              "z": -367.5
             },
             {
-              "x": -18.8,
-              "z": -130
+              "x": 29.3,
+              "z": -364.1
+            },
+            {
+              "x": 21,
+              "z": -366.2
             }
-          ],
-          "z": -137.16
-        },
-        {
-          "id": "practice-range-green-4",
-          "yards": 200,
-          "x": 8,
-          "r": 10,
-          "contour": "tier",
-          "shape": [
-            {
-              "x": -1.4,
-              "z": -181
-            },
-            {
-              "x": 2.1,
-              "z": -190
-            },
-            {
-              "x": 10.8,
-              "z": -193
-            },
-            {
-              "x": 18.1,
-              "z": -187
-            },
-            {
-              "x": 17.3,
-              "z": -178.8
-            },
-            {
-              "x": 11.2,
-              "z": -173
-            },
-            {
-              "x": 3.4,
-              "z": -175
-            }
-          ],
-          "z": -182.88
-        },
-        {
-          "id": "practice-range-green-5",
-          "yards": 250,
-          "x": -4,
-          "r": 11,
-          "contour": "crown",
-          "shape": [
-            {
-              "x": -14.4,
-              "z": -225
-            },
-            {
-              "x": -11.8,
-              "z": -234.8
-            },
-            {
-              "x": -2.4,
-              "z": -239
-            },
-            {
-              "x": 6.6,
-              "z": -233.1
-            },
-            {
-              "x": 6.1,
-              "z": -223.8
-            },
-            {
-              "x": 0,
-              "z": -217.2
-            },
-            {
-              "x": -8.8,
-              "z": -218.5
-            }
-          ],
-          "z": -228.6
-        },
-        {
-          "id": "practice-range-green-6",
-          "yards": 300,
-          "x": 16,
-          "r": 11,
-          "contour": "saddle",
-          "shape": [
-            {
-              "x": 5.7,
-              "z": -272.8
-            },
-            {
-              "x": 9.2,
-              "z": -283
-            },
-            {
-              "x": 18.6,
-              "z": -286.8
-            },
-            {
-              "x": 27.3,
-              "z": -280.2
-            },
-            {
-              "x": 26,
-              "z": -270.2
-            },
-            {
-              "x": 19.8,
-              "z": -264.1
-            },
-            {
-              "x": 10.8,
-              "z": -265.7
-            }
-          ],
-          "z": -274.32
+          ]
         }
       ],
       "bunkers": [
         {
-          "id": "practice-range-bunker-1",
-          "x": 20,
-          "z": -86,
-          "r": 5,
-          "depth": 1,
-          "pot": false,
-          "shape": [
-            {
-              "x": 15.1,
-              "z": -85
-            },
-            {
-              "x": 17.2,
-              "z": -90.1
-            },
-            {
-              "x": 21.9,
-              "z": -91
-            },
-            {
-              "x": 25.3,
-              "z": -87.2
-            },
-            {
-              "x": 23.7,
-              "z": -82.1
-            },
-            {
-              "x": 18.9,
-              "z": -81.3
-            }
-          ]
-        },
-        {
-          "id": "practice-range-bunker-2",
-          "x": 1,
-          "z": -99,
-          "r": 3,
-          "depth": 2,
-          "pot": true
-        },
-        {
-          "id": "practice-range-bunker-3",
-          "x": -25,
-          "z": -132,
-          "r": 5.4,
-          "depth": 1.1,
-          "pot": false,
-          "shape": [
-            {
-              "x": -30.3,
-              "z": -130.8
-            },
-            {
-              "x": -28,
-              "z": -136.7
-            },
-            {
-              "x": -22.4,
-              "z": -137
-            },
-            {
-              "x": -19.4,
-              "z": -132.7
-            },
-            {
-              "x": -22,
-              "z": -127
-            },
-            {
-              "x": -27.4,
-              "z": -127.3
-            }
-          ]
-        },
-        {
-          "id": "practice-range-bunker-4",
-          "x": -30,
-          "z": -119,
-          "r": 4.6,
-          "depth": 0.7,
-          "pot": false,
-          "shape": [
-            {
-              "x": -34.4,
-              "z": -118.1
-            },
-            {
-              "x": -32.7,
-              "z": -123.2
-            },
-            {
-              "x": -28.1,
-              "z": -123.5
-            },
-            {
-              "x": -25.2,
-              "z": -120
-            },
-            {
-              "x": -27.2,
-              "z": -114.6
-            },
-            {
-              "x": -31.7,
-              "z": -114.8
-            }
-          ]
-        },
-        {
-          "id": "practice-range-bunker-5",
-          "x": 6,
-          "z": -190,
-          "r": 5.6,
-          "depth": 1,
-          "pot": false,
-          "shape": [
-            {
-              "x": 0.6,
-              "z": -189
-            },
-            {
-              "x": 2.6,
-              "z": -195.4
-            },
-            {
-              "x": 8.4,
-              "z": -195.7
-            },
-            {
-              "x": 11.9,
-              "z": -191.4
-            },
-            {
-              "x": 9.8,
-              "z": -184.4
-            },
-            {
-              "x": 4.1,
-              "z": -184.5
-            }
-          ]
-        },
-        {
-          "id": "practice-range-bunker-6",
-          "x": 4,
-          "z": -276,
-          "r": 5.6,
-          "depth": 1.1,
-          "pot": false,
-          "shape": [
-            {
-              "x": -1.8,
-              "z": -274.8
-            },
-            {
-              "x": 0.7,
-              "z": -281
-            },
-            {
-              "x": 6.4,
-              "z": -282.2
-            },
-            {
-              "x": 9.8,
-              "z": -278
-            },
-            {
-              "x": 7.4,
-              "z": -272.4
-            },
-            {
-              "x": 2,
-              "z": -271
-            }
-          ]
-        },
-        {
-          "id": "practice-range-bunker-7",
-          "x": 28,
-          "z": -267,
-          "r": 4.4,
+          "id": "pineglass-hole-1-bunker-right",
+          "x": 27,
+          "z": -226,
+          "r": 5.8,
           "depth": 0.85,
           "pot": false,
           "shape": [
             {
-              "x": 23.6,
-              "z": -266.2
+              "x": 21.6,
+              "z": -224.4
             },
             {
-              "x": 25.4,
-              "z": -271.1
+              "x": 23.3,
+              "z": -230.2
             },
             {
-              "x": 29.8,
-              "z": -271.5
+              "x": 27.6,
+              "z": -232
             },
             {
-              "x": 32.4,
-              "z": -268.1
+              "x": 32.5,
+              "z": -229
             },
             {
-              "x": 30.7,
-              "z": -263.4
+              "x": 32,
+              "z": -223.7
             },
             {
-              "x": 26.2,
-              "z": -263.2
+              "x": 28.9,
+              "z": -220.5
+            },
+            {
+              "x": 24.5,
+              "z": -220.9
+            }
+          ]
+        },
+        {
+          "id": "pineglass-hole-1-bunker-left",
+          "x": -20,
+          "z": -248,
+          "r": 5.2,
+          "depth": 0.72,
+          "pot": false,
+          "shape": [
+            {
+              "x": -25,
+              "z": -246.7
+            },
+            {
+              "x": -23,
+              "z": -252.2
+            },
+            {
+              "x": -18.5,
+              "z": -253.3
+            },
+            {
+              "x": -14.9,
+              "z": -249.5
+            },
+            {
+              "x": -16.4,
+              "z": -244
+            },
+            {
+              "x": -21.3,
+              "z": -242.8
             }
           ]
         }
       ],
-      "ponds": [
+      "ponds": [],
+      "landforms": [
         {
-          "id": "practice-range-pond-1",
-          "x": 55,
-          "z": -122,
-          "r": 15,
-          "depth": 1.6,
-          "shape": [
+          "id": "pineglass-hole-1-left-forest-shoulder",
+          "kind": "shoulder",
+          "points": [
             {
-              "x": 71,
-              "z": -124
+              "x": -38,
+              "z": -70
             },
             {
-              "x": 69,
-              "z": -115
+              "x": -43,
+              "z": -165
             },
             {
-              "x": 63,
-              "z": -110
+              "x": -39,
+              "z": -275
+            }
+          ],
+          "width": 34,
+          "height": 1.4,
+          "falloff": 26
+        },
+        {
+          "id": "pineglass-hole-1-turn-ridge",
+          "kind": "ridge",
+          "points": [
+            {
+              "x": 30,
+              "z": -145
             },
             {
-              "x": 57,
-              "z": -112
-            },
-            {
-              "x": 52,
-              "z": -114
-            },
-            {
-              "x": 52,
-              "z": -115
-            },
-            {
-              "x": 47,
-              "z": -112
-            },
-            {
-              "x": 41,
-              "z": -114
-            },
-            {
-              "x": 38,
-              "z": -121
-            },
-            {
-              "x": 41,
-              "z": -129
+              "x": 40,
+              "z": -235
             },
             {
               "x": 48,
-              "z": -134
+              "z": -315
+            }
+          ],
+          "width": 25,
+          "height": 1.3,
+          "falloff": 24
+        },
+        {
+          "id": "pineglass-hole-1-approach-shelf",
+          "kind": "shelf",
+          "points": [
+            {
+              "x": 16,
+              "z": -292
             },
             {
-              "x": 57,
-              "z": -136
+              "x": 23,
+              "z": -337
             },
             {
-              "x": 66,
-              "z": -132
+              "x": 28,
+              "z": -375
+            }
+          ],
+          "width": 28,
+          "height": 0.65,
+          "falloff": 24
+        },
+        {
+          "id": "pineglass-hole-1-drainage-exit",
+          "kind": "drainage-channel",
+          "points": [
+            {
+              "x": 18,
+              "z": -376
             },
             {
-              "x": 70,
-              "z": -126
+              "x": 6,
+              "z": -394
+            },
+            {
+              "x": -8,
+              "z": -407
+            }
+          ],
+          "width": 9,
+          "height": -0.16,
+          "falloff": 8
+        },
+        {
+          "id": "pineglass-hole-1-short-right-recovery",
+          "kind": "swale",
+          "points": [
+            {
+              "x": 41,
+              "z": -351
+            },
+            {
+              "x": 44,
+              "z": -374
+            }
+          ],
+          "width": 12,
+          "height": -0.22,
+          "falloff": 10
+        }
+      ],
+      "runtime": {
+        "corridor": {
+          "c0": 21,
+          "k": 0.002,
+          "rough": 9
+        }
+      }
+    },
+    {
+      "id": "pineglass-hole-2",
+      "name": "Fern Gate",
+      "number": 2,
+      "kind": "hole",
+      "par": 3,
+      "seed": 216503165,
+      "route": {
+        "id": "pineglass-hole-2-route",
+        "points": [
+          {
+            "x": 0,
+            "z": 2
+          },
+          {
+            "x": -1,
+            "z": -48
+          },
+          {
+            "x": -3,
+            "z": -101
+          },
+          {
+            "x": -6,
+            "z": -150.9
+          }
+        ],
+        "fairwayHalfWidth": 10,
+        "roughWidth": 7
+      },
+      "tees": [
+        {
+          "id": "pineglass-hole-2-tee",
+          "label": "Championship",
+          "x": 0,
+          "z": 2,
+          "boxHalfX": 4.2,
+          "z0": -3,
+          "z1": 7
+        }
+      ],
+      "fringeWidth": 2.6,
+      "greens": [
+        {
+          "id": "pineglass-hole-2-green",
+          "yards": 165,
+          "x": -6,
+          "z": -150.9,
+          "r": 11,
+          "contour": "tilt",
+          "shape": [
+            {
+              "x": -17,
+              "z": -148.1
+            },
+            {
+              "x": -14.7,
+              "z": -157.4
+            },
+            {
+              "x": -7.7,
+              "z": -161.7
+            },
+            {
+              "x": 0.5,
+              "z": -159.1
+            },
+            {
+              "x": 4.6,
+              "z": -151.4
+            },
+            {
+              "x": 1.2,
+              "z": -142.4
+            },
+            {
+              "x": -6.3,
+              "z": -139.8
+            },
+            {
+              "x": -13.1,
+              "z": -142.2
             }
           ]
         }
       ],
-      "landforms": [],
+      "bunkers": [
+        {
+          "id": "pineglass-hole-2-bunker-guard",
+          "x": 11,
+          "z": -141,
+          "r": 5.2,
+          "depth": 0.82,
+          "pot": false,
+          "shape": [
+            {
+              "x": 6.1,
+              "z": -139.2
+            },
+            {
+              "x": 7.6,
+              "z": -144.8
+            },
+            {
+              "x": 11.8,
+              "z": -146.2
+            },
+            {
+              "x": 16,
+              "z": -142.7
+            },
+            {
+              "x": 15.2,
+              "z": -137.5
+            },
+            {
+              "x": 11.2,
+              "z": -135.9
+            },
+            {
+              "x": 7.7,
+              "z": -136.6
+            }
+          ]
+        }
+      ],
+      "ponds": [],
+      "landforms": [
+        {
+          "id": "pineglass-hole-2-connected-entry",
+          "kind": "shelf",
+          "points": [
+            {
+              "x": -4,
+              "z": -125
+            },
+            {
+              "x": -5,
+              "z": -140
+            },
+            {
+              "x": -6,
+              "z": -151
+            }
+          ],
+          "width": 34,
+          "height": 0.8,
+          "falloff": 18
+        },
+        {
+          "id": "pineglass-hole-2-target-reveal-swale",
+          "kind": "swale",
+          "points": [
+            {
+              "x": 0,
+              "z": -42
+            },
+            {
+              "x": -1,
+              "z": -78
+            },
+            {
+              "x": -3,
+              "z": -112
+            }
+          ],
+          "width": 36,
+          "height": -1.1,
+          "falloff": 20
+        },
+        {
+          "id": "pineglass-hole-2-short-left-recovery",
+          "kind": "swale",
+          "points": [
+            {
+              "x": -16,
+              "z": -125
+            },
+            {
+              "x": -21,
+              "z": -145
+            },
+            {
+              "x": -20,
+              "z": -160
+            }
+          ],
+          "width": 14,
+          "height": -0.45,
+          "falloff": 11
+        },
+        {
+          "id": "pineglass-hole-2-back-shoulder",
+          "kind": "shoulder",
+          "points": [
+            {
+              "x": -18,
+              "z": -171
+            },
+            {
+              "x": 0,
+              "z": -176
+            },
+            {
+              "x": 19,
+              "z": -170
+            }
+          ],
+          "width": 18,
+          "height": 1.2,
+          "falloff": 18
+        },
+        {
+          "id": "pineglass-hole-2-drainage-exit",
+          "kind": "drainage-channel",
+          "points": [
+            {
+              "x": -14,
+              "z": -157
+            },
+            {
+              "x": -24,
+              "z": -169
+            },
+            {
+              "x": -36,
+              "z": -177
+            }
+          ],
+          "width": 8,
+          "height": -0.14,
+          "falloff": 8
+        }
+      ],
       "runtime": {
         "corridor": {
-          "c0": 26,
-          "k": 0.065,
-          "rough": 18
+          "c0": 10,
+          "k": 0.006,
+          "rough": 7
+        }
+      }
+    },
+    {
+      "id": "pineglass-hole-3",
+      "name": "Glasswood Reach",
+      "number": 3,
+      "kind": "hole",
+      "par": 5,
+      "seed": 353505535,
+      "route": {
+        "id": "pineglass-hole-3-route",
+        "points": [
+          {
+            "x": 0,
+            "z": 2
+          },
+          {
+            "x": 4,
+            "z": -105
+          },
+          {
+            "x": 7,
+            "z": -210
+          },
+          {
+            "x": -2,
+            "z": -300
+          },
+          {
+            "x": -16,
+            "z": -385
+          },
+          {
+            "x": -27,
+            "z": -452
+          },
+          {
+            "x": -30,
+            "z": -484.5
+          }
+        ],
+        "fairwayHalfWidth": 16,
+        "roughWidth": 10
+      },
+      "tees": [
+        {
+          "id": "pineglass-hole-3-tee",
+          "label": "Championship",
+          "x": 0,
+          "z": 2,
+          "boxHalfX": 4.2,
+          "z0": -3,
+          "z1": 7
+        }
+      ],
+      "fringeWidth": 2.5,
+      "greens": [
+        {
+          "id": "pineglass-hole-3-green",
+          "yards": 535,
+          "x": -30,
+          "z": -484.5,
+          "r": 12,
+          "contour": "saddle",
+          "shape": [
+            {
+              "x": -41.8,
+              "z": -482.1
+            },
+            {
+              "x": -40.5,
+              "z": -491.7
+            },
+            {
+              "x": -33.1,
+              "z": -496.1
+            },
+            {
+              "x": -24.1,
+              "z": -494.2
+            },
+            {
+              "x": -18.2,
+              "z": -486.8
+            },
+            {
+              "x": -20.7,
+              "z": -477
+            },
+            {
+              "x": -28.2,
+              "z": -472.6
+            },
+            {
+              "x": -36.9,
+              "z": -474.7
+            }
+          ]
+        }
+      ],
+      "bunkers": [
+        {
+          "id": "pineglass-hole-3-bunker-drive-right",
+          "x": 24,
+          "z": -232,
+          "r": 6,
+          "depth": 0.76,
+          "pot": false,
+          "shape": [
+            {
+              "x": 18.1,
+              "z": -230.2
+            },
+            {
+              "x": 19.9,
+              "z": -236.4
+            },
+            {
+              "x": 24.8,
+              "z": -238
+            },
+            {
+              "x": 29.8,
+              "z": -234.4
+            },
+            {
+              "x": 29.1,
+              "z": -228.8
+            },
+            {
+              "x": 24.9,
+              "z": -226
+            },
+            {
+              "x": 20.6,
+              "z": -226.7
+            }
+          ]
+        },
+        {
+          "id": "pineglass-hole-3-bunker-layup-left",
+          "x": -23,
+          "z": -348,
+          "r": 6.2,
+          "depth": 0.82,
+          "pot": false,
+          "shape": [
+            {
+              "x": -29,
+              "z": -346.1
+            },
+            {
+              "x": -27,
+              "z": -352.4
+            },
+            {
+              "x": -22.1,
+              "z": -354
+            },
+            {
+              "x": -17,
+              "z": -350.5
+            },
+            {
+              "x": -17.7,
+              "z": -344.7
+            },
+            {
+              "x": -22,
+              "z": -341.7
+            },
+            {
+              "x": -26.4,
+              "z": -342.5
+            }
+          ]
+        },
+        {
+          "id": "pineglass-hole-3-bunker-front-left",
+          "x": -45,
+          "z": -473,
+          "r": 5.5,
+          "depth": 0.88,
+          "pot": false,
+          "shape": [
+            {
+              "x": -50.4,
+              "z": -471.3
+            },
+            {
+              "x": -48.2,
+              "z": -477.2
+            },
+            {
+              "x": -43.8,
+              "z": -478.3
+            },
+            {
+              "x": -39.7,
+              "z": -474.7
+            },
+            {
+              "x": -41.1,
+              "z": -469.2
+            },
+            {
+              "x": -45.7,
+              "z": -467.6
+            },
+            {
+              "x": -49.3,
+              "z": -468.3
+            }
+          ]
+        },
+        {
+          "id": "pineglass-hole-3-bunker-right",
+          "x": -14,
+          "z": -486,
+          "r": 5.1,
+          "depth": 0.78,
+          "pot": false,
+          "shape": [
+            {
+              "x": -18.7,
+              "z": -484.4
+            },
+            {
+              "x": -17.4,
+              "z": -489.7
+            },
+            {
+              "x": -13.4,
+              "z": -491.1
+            },
+            {
+              "x": -9.2,
+              "z": -488.2
+            },
+            {
+              "x": -9.7,
+              "z": -483.3
+            },
+            {
+              "x": -13.6,
+              "z": -480.9
+            },
+            {
+              "x": -17.2,
+              "z": -481.5
+            }
+          ]
+        }
+      ],
+      "ponds": [],
+      "landforms": [
+        {
+          "id": "pineglass-hole-3-first-landing-shelf",
+          "kind": "shelf",
+          "points": [
+            {
+              "x": 3,
+              "z": -165
+            },
+            {
+              "x": 6,
+              "z": -220
+            },
+            {
+              "x": 3,
+              "z": -268
+            }
+          ],
+          "width": 58,
+          "height": 0.75,
+          "falloff": 30
+        },
+        {
+          "id": "pineglass-hole-3-left-turn-shoulder",
+          "kind": "shoulder",
+          "points": [
+            {
+              "x": -44,
+              "z": -285
+            },
+            {
+              "x": -48,
+              "z": -350
+            },
+            {
+              "x": -47,
+              "z": -405
+            }
+          ],
+          "width": 24,
+          "height": 1.4,
+          "falloff": 22
+        },
+        {
+          "id": "pineglass-hole-3-attack-right-shoulder",
+          "kind": "shoulder",
+          "points": [
+            {
+              "x": 28,
+              "z": -300
+            },
+            {
+              "x": 24,
+              "z": -357
+            },
+            {
+              "x": 16,
+              "z": -406
+            }
+          ],
+          "width": 22,
+          "height": 1.6,
+          "falloff": 20
+        },
+        {
+          "id": "pineglass-hole-3-attack-slot",
+          "kind": "plateau",
+          "points": [
+            {
+              "x": -7,
+              "z": -327
+            },
+            {
+              "x": -13,
+              "z": -368
+            },
+            {
+              "x": -18,
+              "z": -405
+            }
+          ],
+          "width": 30,
+          "height": 0.65,
+          "falloff": 18
+        },
+        {
+          "id": "pineglass-hole-3-connected-approach",
+          "kind": "shelf",
+          "points": [
+            {
+              "x": -17,
+              "z": -405
+            },
+            {
+              "x": -24,
+              "z": -447
+            },
+            {
+              "x": -30,
+              "z": -485
+            }
+          ],
+          "width": 30,
+          "height": 0.7,
+          "falloff": 25
+        },
+        {
+          "id": "pineglass-hole-3-green-drainage",
+          "kind": "drainage-channel",
+          "points": [
+            {
+              "x": -38,
+              "z": -491
+            },
+            {
+              "x": -48,
+              "z": -503
+            },
+            {
+              "x": -60,
+              "z": -511
+            }
+          ],
+          "width": 9,
+          "height": -0.16,
+          "falloff": 8
+        },
+        {
+          "id": "pineglass-hole-3-long-left-recovery",
+          "kind": "swale",
+          "points": [
+            {
+              "x": -43,
+              "z": -495
+            },
+            {
+              "x": -39,
+              "z": -509
+            }
+          ],
+          "width": 12,
+          "height": -0.2,
+          "falloff": 10
+        }
+      ],
+      "runtime": {
+        "corridor": {
+          "c0": 16,
+          "k": 0.008,
+          "rough": 10
         }
       }
     }

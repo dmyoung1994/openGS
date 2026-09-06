@@ -18,7 +18,7 @@ const course = {
     objectCount: 9,
     placements: [{ id: 'hero-tree', assetId: 'tree-a', x: 0, z: 0, rotationY: 0, scale: 1 }],
     scatter: [{ id: 'scatter-a', assetIds: ['tree-a'], seed: 8, count: 4, minSpacing: 3, region: { minX: 20, maxX: 50, minZ: 20, maxZ: 50 } }],
-    assembly: [{ id: 'assembly-a', assetIds: ['tree-a'], seed: 9, count: 4, minSpacing: 3, region: { minX: -50, maxX: -20, minZ: -50, maxZ: -20 } }],
+    assembly: [{ id: 'assembly-a', habitatMassId: 'forest-mass-a', assetIds: ['tree-a'], seed: 9, count: 4, minSpacing: 3, semantic: 'forest-cluster', region: { minX: -50, maxX: -20, minZ: -50, maxZ: -20 } }],
     edgeDressing: [],
   },
 };
@@ -29,6 +29,24 @@ test('semantic environment records resolve exactly and deterministically', () =>
   assert.equal(first.length, 9);
   assert.deepEqual(first, second);
   assert.ok(first.every((p) => Object.isFrozen(p) && Number.isFinite(p.y)));
+  const assembly = first.filter((placement) => placement.sourceId.startsWith('assembly-a-'));
+  assert.ok(assembly.every((placement) => placement.habitatGroupId === 'assembly-a'));
+  assert.ok(assembly.every((placement) => placement.habitatMassId === 'forest-mass-a'));
+  assert.ok(assembly.every((placement) => placement.semantic === 'forest-cluster'));
+  assert.ok(assembly.every((placement) => placement.seed === 9));
+  assert.ok(assembly.every((placement) => placement.region.minX === -50
+    && placement.region.maxX === -20 && placement.region.minZ === -50
+    && placement.region.maxZ === -20));
+  assert.ok(first.filter((placement) => !placement.sourceId.startsWith('assembly-a-'))
+    .every((placement) => placement.habitatGroupId === undefined));
+});
+
+test('forest assembly IDs provide an implicit unique habitat mass when authoring omits one', () => {
+  const implicit = structuredClone(course);
+  delete implicit.environment.assembly[0].habitatMassId;
+  const placements = resolveEnvironmentPlacements(implicit, catalog, terrain)
+    .filter((placement) => placement.sourceId.startsWith('assembly-a-'));
+  assert.ok(placements.every(({ habitatMassId }) => habitatMassId === 'assembly-a'));
 });
 
 test('placement fails rather than silently reducing an impossible scatter', () => {
@@ -39,6 +57,52 @@ test('placement fails rather than silently reducing an impossible scatter', () =
   impossible.environment.assembly = [];
   impossible.environment.objectCount = 20;
   assert.throws(() => resolveEnvironmentPlacements(impossible, catalog, terrain), /placed \d+\/20/);
+});
+
+test('mature forest crowns resolve in separator rough but never over maintained turf', () => {
+  const maturePine = Object.freeze({
+    id: 'mature-pine', category: 'tree', dimensions: { height: 10 },
+    bounds: { radius: 2, baseY: 0 }, biomes: ['temperate-alpine'],
+    grounding: { burialFraction: 0 }, transitionHabitats: [],
+    placement: {
+      minSpacing: 3, maxSlopeDegrees: 30,
+      clearance: { tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 },
+    },
+  });
+  const forestCatalog = { byId: new Map([[maturePine.id, maturePine]]) };
+  const forestTerrain = {
+    heightAt: () => 0,
+    normalAt: () => ({ x: 0, y: 1, z: 0 }),
+    surfaceAt: (x) => (Math.abs(x) <= 10 ? 'fairway' : 'rough'),
+  };
+  const forestCourse = {
+    environmentSeed: 91,
+    biome: 'temperate-alpine',
+    corridor: { c0: 10, k: 0, rough: 12 },
+    greens: [], bunkers: [], ponds: [],
+    environment: {
+      objectCount: 1,
+      placements: [], scatter: [], edgeDressing: [],
+      assembly: [{
+        id: 'separator-pines', assetIds: [maturePine.id], seed: 19, count: 1,
+        minSpacing: 3, semantic: 'forest-cluster',
+        // The old whole-region rule rejects minX 21 because the catalog's
+        // 2 m radius + 10 m fairway clearance reaches x=22. The resolved mature
+        // crown is 8..9 m, however, and remains wholly in separator rough.
+        region: { minX: 21, maxX: 23, minZ: -10, maxZ: 10 },
+      }],
+    },
+  };
+  const placements = resolveEnvironmentPlacements(forestCourse, forestCatalog, forestTerrain);
+  assert.equal(placements.length, 1);
+  assert.ok(placements[0].x - maturePine.bounds.radius * placements[0].scale > 10);
+
+  const maintained = structuredClone(forestCourse);
+  maintained.environment.assembly[0].region = { minX: 8, maxX: 9, minZ: -1, maxZ: 1 };
+  assert.throws(
+    () => resolveEnvironmentPlacements(maintained, forestCatalog, forestTerrain),
+    /separator-pines.*placed 0\/1/,
+  );
 });
 
 test('rocks receive deterministic burial and a normalized terrain-following basis', () => {
@@ -119,6 +183,33 @@ test('fallen deadwood may occupy the under-canopy habitat without intersecting t
       placements: [
         { id: 'standing-tree', assetId: 'wide-tree', x: 0, z: 0, rotationY: 0, scale: 1 },
         { id: 'under-canopy-log', assetId: 'fallen-log', x: 2, z: 0, rotationY: 1, scale: 1 },
+      ],
+      scatter: [], assembly: [], edgeDressing: [],
+    },
+  };
+
+  assert.equal(resolveEnvironmentPlacements(habitatCourse, habitatCatalog, terrain).length, 2);
+});
+
+test('rock outcrops may occupy a tree canopy room while retaining trunk clearance', () => {
+  const tree = Object.freeze({
+    id: 'wide-tree', category: 'tree', dimensions: { height: 5 }, bounds: { radius: 3.6, baseY: 0 },
+    biomes: ['temperate-alpine'], placement: { minSpacing: 7, maxSlopeDegrees: 40 },
+  });
+  const rock = Object.freeze({
+    id: 'forest-rock', category: 'rock', dimensions: { height: 1 }, bounds: { radius: 1, baseY: 0 },
+    biomes: ['temperate-alpine'], grounding: { burialFraction: 0.15 },
+    placement: { minSpacing: 2.2, maxSlopeDegrees: 40 },
+  });
+  const habitatCatalog = { byId: new Map([['wide-tree', tree], ['forest-rock', rock]]) };
+  const habitatCourse = {
+    environmentSeed: 93,
+    biome: 'temperate-alpine',
+    environment: {
+      objectCount: 2,
+      placements: [
+        { id: 'standing-tree', assetId: 'wide-tree', x: 0, z: 0, rotationY: 0, scale: 5 },
+        { id: 'under-canopy-rock', assetId: 'forest-rock', x: 4, z: 0, rotationY: 1, scale: 1 },
       ],
       scatter: [], assembly: [], edgeDressing: [],
     },

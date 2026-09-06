@@ -1,130 +1,408 @@
 import {
-  Group, InstancedMesh, Object3D, CylinderGeometry, ConeGeometry, IcosahedronGeometry,
-  MeshStandardMaterial, MeshBasicMaterial, Color, DoubleSide,
+  Color, DoubleSide, Group, InstancedMesh, Matrix4, Object3D,
+  SRGBColorSpace, TextureLoader, Vector3, Frustum, Sphere, RepeatWrapping, InstancedBufferAttribute,
 } from 'three';
-import { createRng, deriveSeed } from '../util/random.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+import { compileTreeGeometry, unpackTreeGeometry } from '../trees/TreeGeometry.js';
+export { compileTreeGeometry } from '../trees/TreeGeometry.js';
+import { yieldToRendering } from '../util/yieldToRendering.js';
+import { MeshStandardNodeMaterial, StorageBufferAttribute } from 'three/webgpu';
+import { Fn, If, uniform, attribute, storage, uint, sin, cos, vec3, vec4, modelWorldMatrix, mrt, materialColor, normalWorld, uv, mx_noise_float, normalView, positionView, textureLoad, ivec2, int, mix } from 'three/tsl';
+import { deriveSeed } from '../util/random.js';
+import { estimateTreeCanopyRadius, normalizeTreeDefinition } from '../trees/TreeDefinition.js';
+import { generateTreeSkeleton } from '../trees/TreeGenerator.js';
+import { prepareTree } from '../trees/TreePreparation.js';
+import { disposeWebGPUAttributes } from './WebGPUResourceDisposal.js';
 
-const ARCHETYPES = Object.freeze({
-  'broadleaf-oak': { height: 17, trunk: 0.58, crown: [6.6, 4.9, 6.2], bark: 0x4a3828, leaf: 0x31582e, form: 'broadleaf' },
-  'live-oak': { height: 15, trunk: 0.68, crown: [8.2, 4.4, 7.1], bark: 0x4b3a2b, leaf: 0x2d552f, form: 'broadleaf' },
-  maple: { height: 18, trunk: 0.52, crown: [6.2, 6.3, 5.8], bark: 0x51443a, leaf: 0x376733, form: 'broadleaf' },
-  'monterey-cypress': { height: 16, trunk: 0.58, crown: [5.8, 7.5, 4.8], bark: 0x50402f, leaf: 0x274b36, form: 'cypress' },
-  'douglas-fir': { height: 23, trunk: 0.50, crown: [5.2, 15.5, 5.2], bark: 0x59402c, leaf: 0x244b38, form: 'conifer' },
-  'loblolly-pine': { height: 24, trunk: 0.48, crown: [5.6, 12.5, 5.6], bark: 0x68462c, leaf: 0x31573b, form: 'conifer' },
-});
-const POLICY_DISTANCE = Object.freeze({ battery: 55, balanced: 75, quality: 100, ultra: 125 });
-
-export function proceduralTreeCanopyRadius(record) {
-  const spec = ARCHETYPES[record?.archetype];
-  if (!spec) throw new Error(`Unsupported synthetic tree archetype: ${record?.archetype ?? 'missing'}`);
-  return Math.max(spec.crown[0], spec.crown[2]) * record.scale;
+export function proceduralTreeCanopyRadius(record, definitions) {
+  const definition = definitions instanceof Map ? definitions.get(record?.definitionId)
+    : definitions?.find?.((candidate) => candidate.id === record?.definitionId);
+  if (!definition) throw new Error(`Missing procedural tree definition: ${record?.definitionId ?? 'missing'}`);
+  return estimateTreeCanopyRadius(definition) * record.scale;
 }
 
-// Explicit synthetic-tree source. It never participates in catalog resolution and
-// therefore cannot silently replace a failed GLB. All surface variation is geometry
-// or deterministic material colour; no photographic or generated texture is used.
+// A generated tree is an explicit authored source. It never participates in the
+// catalog resolver and therefore cannot mask a failed Poly Haven asset load.
 export class ProceduralTreeForest {
-  constructor({ placements, camera, terrain, seed = 1 } = {}) {
-    if (!Array.isArray(placements) || !placements.length || !camera || !terrain) throw new Error('ProceduralTreeForest requires placements, camera, and terrain.');
-    this.assetId = 'synthetic-tree'; this.camera = camera; this.seed = seed; this.records = placements.map((record) => ({
-      ...record, y: terrain.heightAt(record.x, record.z), band: 'near',
-    }));
-    this.group = new Group(); this.group.name = 'synthetic-tree-beauty';
-    this.shadowGroup = new Group(); this.shadowGroup.name = 'synthetic-tree-stable-shadow'; this.shadowGroup.layers.set(1);
-    this.batches = []; this.policy = 'ultra';
-    for (const archetype of Object.keys(ARCHETYPES)) {
-      const records = this.records.filter((record) => record.archetype === archetype);
-      if (records.length) this._buildBatch(archetype, records);
+  static async create(options = {}) {
+    const textures = await loadDefinitionTextures(options.definitions, options.renderer);
+    const prepared = new Map();
+    try {
+      for (const { definition, variant, key } of plantBatches(options.definitions, options.placements)) {
+        const seed = deriveSeed(options.seed ?? 1, `${definition.id}:${variant}`);
+        const result = await prepareTree(definition, seed, { signal: options.signal });
+        const geometryTiers = [];
+        for (const packed of result.tiers) { geometryTiers.push(unpackTreeGeometry(packed)); await yieldToRendering(); }
+        prepared.set(key, { ...result, geometryTiers });
+        options.signal?.throwIfAborted();
+        await yieldToRendering();
+      }
+      const forest = new ProceduralTreeForest({ ...options, textures, prepared, deferBuild: true });
+      try {
+        for (const { definition, variant, records, key } of plantBatches([...forest.definitions.values()], forest.records)) {
+          options.signal?.throwIfAborted();
+          forest._buildBatch(definition, variant, records, textures, key); await yieldToRendering();
+        }
+        forest.update(options.camera, true); return forest;
+      } catch (error) { forest.dispose(); throw error; }
+    } catch (error) {
+      for (const result of prepared.values()) for (const tier of result.geometryTiers) for (const geometry of Object.values(tier)) geometry.dispose();
+      for (const texture of textures.values()) texture.dispose(); throw error;
     }
-    this.shadow = {
-      mesh: this.shadowGroup,
-      update() {},
-      dispose: () => this._disposeShadow(),
-    };
+  }
+
+  constructor({ definitions, placements, camera, terrain, renderer = null, textures = new Map(), seed = 1, prepared = new Map(), deferBuild = false, environment = null, motionHistory = null } = {}) {
+    if (!Array.isArray(definitions) || !definitions.length || !Array.isArray(placements) || !placements.length || !camera || !terrain) throw new Error('ProceduralTreeForest requires definitions, placements, camera, and terrain.');
+    this.prepared = prepared; this.environment = environment; this.motionHistory = motionHistory; this.frustum = new Frustum(); this.projection = new Matrix4(); this.sphere = new Sphere();
+    this.assetId = 'procedural-tree'; this.camera = camera; this.seed = seed; this.renderer = renderer;
+    this.definitions = new Map(definitions.map((definition) => { const normalized = normalizeTreeDefinition(definition); return [normalized.id, normalized]; }));
+    this.records = placements.map((record, windIndex) => {
+      const definition = this.definitions.get(record.definitionId);
+      if (!definition) throw new Error(`Procedural tree placement "${record.id}" references missing definition "${record.definitionId}".`);
+      return { ...record, windIndex, lifeBaked: Boolean(definition.plant), y: terrain.heightAt(record.x, record.z), band: 'near', variant: deriveSeed(record.seed, record.definitionId) % definition.variantCount };
+    });
+    if (environment) {
+      this.windBuffer = new StorageBufferAttribute(this.records.length * 2, 4);
+      this.windSamples = storage(this.windBuffer, 'vec4', this.records.length * 2).toReadOnly();
+      this.windPosition = new Vector3(); this.windValue = new Vector3();
+      this.windActive = uniform(0);
+      this.previousWindActive = uniform(0);
+    }
+    this.rootSeating = buildRootSeating(terrain);
+    this.group = new Group(); this.group.name = 'procedural-tree-beauty';
+    this.shadowGroup = new Group(); this.shadowGroup.name = 'procedural-tree-stable-shadow'; this.shadowGroup.layers.set(1);
+    this.batches = []; this.textures = new Set(textures.values()); this.policy = 'ultra';
+    if (!deferBuild) for (const { definition, variant, records, key } of plantBatches([...this.definitions.values()], this.records)) this._buildBatch(definition, variant, records, textures, key);
+    this.shadow = { mesh: this.shadowGroup, update() {}, dispose: () => this._disposeShadow() };
     this.update(camera, true);
   }
 
-  _buildBatch(archetype, records) {
-    const spec = ARCHETYPES[archetype]; const broadleaf = spec.form === 'broadleaf';
-    const crownParts = broadleaf ? 3 : spec.form === 'cypress' ? 2 : 3;
-    const trunkNearGeometry = barkGeometry(spec, deriveSeed(this.seed, `${archetype}:bark`), 16, 10);
-    const trunkFarGeometry = barkGeometry(spec, deriveSeed(this.seed, `${archetype}:far-bark`), 8, 2);
-    const crownNearGeometry = crownGeometry(spec, false); const crownFarGeometry = crownGeometry(spec, true);
-    const barkMaterial = new MeshStandardMaterial({ color: spec.bark, roughness: 0.96, metalness: 0 });
-    const barkFarMaterial = barkMaterial.clone(); barkFarMaterial.color.offsetHSL(0, -0.04, -0.025);
-    const foliageMaterial = new MeshStandardMaterial({ color: spec.leaf, roughness: 0.91, metalness: 0, side: DoubleSide });
-    const foliageFarMaterial = foliageMaterial.clone(); foliageFarMaterial.color.offsetHSL(0, -0.06, -0.02);
-    const nearTrunks = mesh(trunkNearGeometry, barkMaterial, records.length, `${archetype}-synthetic-near-trunks`);
-    const nearCrowns = mesh(crownNearGeometry, foliageMaterial, records.length * crownParts, `${archetype}-synthetic-near-crowns`);
-    const farTrunks = mesh(trunkFarGeometry, barkFarMaterial, records.length, `${archetype}-synthetic-far-trunks`);
-    const farCrowns = mesh(crownFarGeometry, foliageFarMaterial, records.length, `${archetype}-synthetic-far-crowns`);
-    for (const draw of [nearTrunks, nearCrowns, farTrunks, farCrowns]) { draw.castShadow = false; draw.receiveShadow = true; draw.frustumCulled = false; this.group.add(draw); }
+  _buildBatch(definition, variant, records, textures, key) {
+    const prepared = this.prepared.get(key);
+    const skeleton = prepared?.skeleton ?? generateTreeSkeleton(definition, { seed: deriveSeed(this.seed, `${definition.id}:${variant}`) });
+    const tiers = prepared ? prepared.geometryTiers : [0, 1, 2].map(tier => compileTreeGeometry(skeleton, { radialSegments: Math.max(3, (definition.plant?.quality.radialSegments ?? 9) - tier * 3), leafStride: [1, 2, 4][tier], plant: definition.plant, includeRoots: tier === 0 }));
+    this.prepared.delete(key);
+    const bark = materialFor(definition.materials.bark, textures);
+    if (definition.plant && !definition.materials.bark.textureUrl) {
+      const spec = definition.plant.bark, coords = uv();
+      const noise = mx_noise_float(coords.mul(vec3(8, 0.7, 0).xy));
+      const ridges = sin(coords.x.mul(spec.ridgeFrequency * Math.PI * 2).add(noise.mul(4))).mul(0.5).add(0.5);
+      bark.colorNode = materialColor.mul(ridges.mul(spec.variation).add(1 - spec.variation));
+      if (!definition.materials.bark.normalUrl) {
+        const height = ridges.mul(spec.ridgeDepth);
+        const dx = positionView.dFdx(), dy = positionView.dFdy(), n = normalView;
+        const rx = dy.cross(n), ry = n.cross(dx), determinant = dx.dot(rx);
+        const gradient = rx.mul(height.dFdx()).add(ry.mul(height.dFdy())).mul(determinant.sign());
+        bark.normalNode = n.mul(determinant.abs()).sub(gradient).normalize();
+      }
+    }
+    const leaves = materialFor(definition.materials.leaves, textures, true);
+    if (definition.plant) { const life = definition.plant.life; leaves.color.lerp(new Color('#b48035'), Math.min(1, life.season * 2) * life.deciduous * 0.85); leaves.color.lerp(new Color('#806b46'), 1 - life.health); }
+    const blossoms = materialFor(definition.materials.blossoms, textures, true);
+    const capacity = records.length;
+    const draws = {};
+    tiers.forEach((geometry, tier) => {
+      for (const [part, material] of [['branches', bark], ['leaves', leaves], ['blossoms', blossoms]]) {
+        const draw = instance(geometry[part], material, capacity, `${definition.id}-${variant}-lod${tier}-${part}`);
+        draw.userData.tier = tier; draw.castShadow = false; draw.receiveShadow = true; draw.frustumCulled = false;
+        draw.onBeforeRender = (_renderer, _scene, camera) => this.update(camera);
+        draws[`${tier}:${part}`] = draw; this.group.add(draw);
+      }
+    });
+    const shadows = {};
+    for (const [part, spec] of [['branches', definition.materials.bark], ['leaves', definition.materials.leaves], ['blossoms', definition.materials.blossoms]]) {
+      if (!tiers[1][part].attributes.position.count) continue;
+      const material = materialFor(spec, textures, part !== 'branches');
+      const draw = instance(tiers[1][part].clone(), material, capacity, `${definition.id}-${variant}-shadow-${part}`);
+      draw.layers.set(1); draw.castShadow = true; draw.frustumCulled = false;
+      shadows[part] = draw; this.shadowGroup.add(draw);
+    }
+    if (definition.plant && this.environment) {
+      for (const draw of [...Object.values(draws), ...Object.values(shadows)]) {
+        // WebGPU caps a pipeline at eight vertex buffers. Wind exposure, wind index
+        // and yaw are all per-instance scalars, so they travel as one vec3 rather
+        // than burning three buffer slots between them.
+        for (const [name, size] of [['treeInstance', 3], ['treeOrigin', 3], ['treeScale', 3]]) draw.geometry.setAttribute(name, new InstancedBufferAttribute(new Float32Array(capacity * size), size));
+        const settings = definition.plant.wind;
+        const height = Math.max(0.1, skeleton.bounds.size[1]);
+        const raw = attribute('position'), local = raw.mul(attribute('treeScale'));
+        const treeInstance = attribute('treeInstance');
+        const yaw = treeInstance.z, c = cos(yaw), s = sin(yaw);
+        const placed = vec3(local.x.mul(c).add(local.z.mul(s)), local.y, local.z.mul(c).sub(local.x.mul(s))).add(attribute('treeOrigin'));
+        // One geometry serves placements standing on entirely different slopes, so the
+        // roots are seated per vertex against the terrain rather than being modelled
+        // into the mesh. `rootBlend` is 0 everywhere on the trunk and foliage, so only
+        // root stations move, easing in from the trunk collar to the tip.
+        const base = this.rootSeating
+          ? vec3(placed.x, this.rootSeating(placed, attribute('rootBlend')), placed.z)
+          : placed;
+        const weight = raw.y.max(0).div(height).pow(2).mul(treeInstance.x).mul(settings.strength * (1 - settings.stiffness * 0.8));
+        const foliage = !draw.name.endsWith('branches');
+        const motion = (time, previous = false) => Fn(() => {
+          const offset = vec3(0).toVar();
+          If((previous ? this.previousWindActive : this.windActive).greaterThan(0.5), () => {
+            const flow = this.windSamples.element(uint(treeInstance.y).mul(2).add(previous ? 1 : 0)).xyz;
+            const flutter = sin(time.mul(3).add(raw.x.mul(7)).add(raw.y.mul(5))).mul(foliage ? settings.flutter : 0).mul(weight);
+            offset.assign(flow.mul(weight).add(vec3(flutter, 0, flutter)));
+          });
+          return offset;
+        })();
+        const current = base.add(motion(this.environment.time));
+        draw.material.positionNode = current;
+        if (this.motionHistory && !draw.name.includes('-shadow-')) {
+          const mh = this.motionHistory;
+          const now = mh.currentProjection.mul(mh.currentView).mul(modelWorldMatrix).mul(vec4(current, 1));
+          const previous = mh.previousProjection.mul(mh.previousView).mul(modelWorldMatrix).mul(vec4(base.add(motion(this.environment.previousTime, true)), 1));
+          draw.material.mrtNode = mrt({ velocity: now.xy.div(now.w).sub(previous.xy.div(previous.w)).toVarying('vProceduralTreeVelocity') });
+        }
+        if (foliage) {
+          const amount = definition.materials.leaves.translucency ?? 0.2;
+          const backlight = normalWorld.dot(this.environment.keyDirection).negate().max(0).mul(this.environment.keyIlluminanceScale).mul(amount).clamp(0, 0.15);
+          draw.material.colorNode = materialColor.mul(backlight.add(1));
+        }
 
-    // Stable shadow residency is intentionally camera-independent. A simplified
-    // connected crown and trunk remain in the light-owned layer through all beauty
-    // LOD transitions, eliminating camera/ball-flight shadow popping.
-    const shadowMaterial = new MeshBasicMaterial({ color: 0xffffff, side: DoubleSide });
-    const shadowTrunks = mesh(trunkFarGeometry.clone(), shadowMaterial, records.length, `${archetype}-synthetic-shadow-trunks`);
-    const shadowCrowns = mesh(crownFarGeometry.clone(), shadowMaterial.clone(), records.length, `${archetype}-synthetic-shadow-crowns`);
-    for (const draw of [shadowTrunks, shadowCrowns]) { draw.layers.set(1); draw.castShadow = true; draw.receiveShadow = false; draw.frustumCulled = false; this.shadowGroup.add(draw); }
-    const batch = { archetype, spec, records, crownParts, nearTrunks, nearCrowns, farTrunks, farCrowns, shadowTrunks, shadowCrowns };
+      }
+    }
+    const batch = { definition, variant, records, skeleton, draws, shadows, tiers, shadowTier: 1, generationMs: prepared?.generationMs ?? 0, cacheHit: prepared?.cacheHit ?? false };
+    for (const draw of Object.values(shadows)) {
+      draw.onBeforeShadow = (_renderer, _object, _camera, shadowCamera) => this._writeStableShadows(batch, shadowCamera);
+    }
     this._writeStableShadows(batch); this.batches.push(batch);
   }
 
-  _writeStableShadows(batch) {
-    const dummy = new Object3D(); const { spec } = batch;
-    batch.records.forEach((record, index) => {
-      const dimensions = treeDimensions(spec, record);
-      setTransform(dummy, record, [dimensions.trunkScale, dimensions.height, dimensions.trunkScale], dimensions.height * 0.5);
-      batch.shadowTrunks.setMatrixAt(index, dummy.matrix);
-      setTransform(dummy, record, dimensions.crownScale, dimensions.crownY);
-      batch.shadowCrowns.setMatrixAt(index, dummy.matrix);
-    });
-    batch.shadowTrunks.instanceMatrix.needsUpdate = true; batch.shadowCrowns.instanceMatrix.needsUpdate = true;
-  }
-
-  update(camera = this.camera, force = false) {
-    this.camera = camera; const threshold = POLICY_DISTANCE[this.policy] ?? POLICY_DISTANCE.ultra; const hysteresis = 10;
-    for (const batch of this.batches) {
-      let nearTree = 0, nearCrown = 0, farTree = 0; const dummy = new Object3D();
-      for (const record of batch.records) {
-        const distance = Math.hypot(record.x - camera.position.x, record.y - camera.position.y, record.z - camera.position.z);
-        if (force || (record.band === 'near' ? distance > threshold + hysteresis : distance < threshold - hysteresis)) record.band = distance <= threshold ? 'near' : 'far';
-        const dimensions = treeDimensions(batch.spec, record);
-        if (record.band === 'near') {
-          setTransform(dummy, record, [dimensions.trunkScale, dimensions.height, dimensions.trunkScale], dimensions.height * 0.5);
-          batch.nearTrunks.setMatrixAt(nearTree++, dummy.matrix);
-          for (let part = 0; part < batch.crownParts; part += 1) {
-            const jitter = crownPart(batch.spec, record, part, batch.crownParts);
-            setTransform(dummy, { ...record, x: record.x + jitter.x, z: record.z + jitter.z }, jitter.scale, dimensions.crownY + jitter.y);
-            batch.nearCrowns.setMatrixAt(nearCrown++, dummy.matrix);
-          }
-        } else {
-          setTransform(dummy, record, [dimensions.trunkScale, dimensions.height, dimensions.trunkScale], dimensions.height * 0.5);
-          batch.farTrunks.setMatrixAt(farTree, dummy.matrix);
-          setTransform(dummy, record, dimensions.crownScale, dimensions.crownY);
-          batch.farCrowns.setMatrixAt(farTree++, dummy.matrix);
-        }
+  _writeStableShadows(batch, camera = null) {
+    const windMargin = (batch.definition.plant?.wind.strength ?? 0) * ((this.environment?.baseWind.value.length() ?? 0) * 3 + 4);
+    const projection = camera && new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    const signature = camera ? `${camera.uuid}:${projection.elements.join(',')}:${windMargin}` : '';
+    if (camera && signature === batch.shadowSignature) return;
+    batch.shadowSignature = signature;
+    const frustum = camera && new Frustum().setFromProjectionMatrix(projection, camera.coordinateSystem);
+    const sphere = new Sphere();
+    const dummy = new Object3D();
+    let count = 0;
+    // ponytail: scan resident source records; use a spatial chunk index when
+    // large-course streaming makes this CPU scan measurable.
+    for (const record of batch.records) {
+      setTreeTransform(dummy, record);
+      sphere.center.set(...batch.skeleton.bounds.center).applyMatrix4(dummy.matrix);
+      sphere.radius = Math.hypot(...batch.skeleton.bounds.size) * 0.5 * Math.max(dummy.scale.x, dummy.scale.y, dummy.scale.z) + windMargin;
+      if (frustum && !frustum.intersectsSphere(sphere)) continue;
+      for (const draw of Object.values(batch.shadows)) {
+        draw.setMatrixAt(count, dummy.matrix);
+        writePlantAttributes(draw, count, record, dummy);
       }
-      batch.nearTrunks.count = nearTree; batch.nearCrowns.count = nearCrown; batch.farTrunks.count = farTree; batch.farCrowns.count = farTree;
-      for (const draw of [batch.nearTrunks, batch.nearCrowns, batch.farTrunks, batch.farCrowns]) draw.instanceMatrix.needsUpdate = true;
+      count++;
+    }
+    for (const draw of Object.values(batch.shadows)) {
+      draw.count = count; draw.instanceMatrix.needsUpdate = true;
+      for (const [name, attribute] of Object.entries(draw.geometry.attributes)) if (name.startsWith('tree')) attribute.needsUpdate = true;
     }
   }
 
-  setWorkloadPolicy(policy = 'ultra') { this.policy = typeof policy === 'string' && POLICY_DISTANCE[policy] ? policy : 'ultra'; this.update(this.camera, true); return this.workloadDiagnostics(); }
-  workloadDiagnostics() {
-    const near = this.records.filter((record) => record.band === 'near').length;
-    return { generatedSource: true, proceduralMaterials: true, sourceCount: this.records.length, near, far: this.records.length - near, identities: this.batches.length, drawCalls: this.batches.length * 4, shadowDrawCalls: this.batches.length * 2, reductionSupported: true, sourceRecordsKept: true, lodHysteresisMeters: 10 };
+  update(camera = this.camera, force = false) {
+    // Wind at the tree origin is identical for every vertex and shadow pass.
+    // Reuse the existing CPU equivalent, retaining both times for motion vectors.
+    if (this.windBuffer) {
+      const signature = `${this.environment.time.value}:${this.environment.previousTime.value}`;
+      if (force || signature !== this._windSignature || this._windState !== this.environment._frameState) {
+        this._windSignature = signature;
+        this._windState = this.environment._frameState;
+        let active = false, previousActive = false;
+        for (const record of this.records) {
+          this.windPosition.set(record.x, record.y, record.z);
+          for (let previous = 0; previous < 2; previous++) {
+            this.environment.sampleWindCpu(this.windPosition, previous ? this.environment.previousTime.value : this.environment.time.value, this.windValue);
+            if (previous) previousActive ||= this.windValue.lengthSq() > 0;
+            else active ||= this.windValue.lengthSq() > 0;
+            this.windBuffer.setXYZ(record.windIndex * 2 + previous, this.windValue.x, this.windValue.y, this.windValue.z);
+          }
+        }
+        this.windBuffer.needsUpdate = true;
+        // Gate each history sample independently so starting/stopping flutter
+        // contributes to motion vectors.
+        this.windActive.value = active ? 1 : 0;
+        this.previousWindActive.value = previousActive ? 1 : 0;
+      }
+    }
+    this.camera = camera;
+    camera.updateMatrixWorld();
+    this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.projection, camera.coordinateSystem);
+    const signature = `${this.projection.elements.join(',')}:${this.policy}:${this.renderer?.domElement?.height ?? 1080}`;
+    if (!force && signature === this._signature) return;
+    this._signature = signature;
+    const dummy = new Object3D(), cameraPosition = new Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const viewportHeight = this.renderer?.domElement?.height ?? 1080;
+    for (const batch of this.batches) {
+      const counts = [0, 0, 0];
+      for (const record of batch.records) {
+        setTreeTransform(dummy, record);
+        this.sphere.center.set(...batch.skeleton.bounds.center).applyMatrix4(dummy.matrix);
+        this.sphere.radius = Math.hypot(...batch.skeleton.bounds.size) * 0.5 * record.scale + (batch.definition.plant?.wind.strength ?? 0) * ((this.environment?.baseWind.value.length() ?? 0) * 3 + 4);
+        const distance = Math.max(0.1, cameraPosition.distanceTo(this.sphere.center));
+        const pixels = batch.skeleton.bounds.size[1] * record.scale * viewportHeight * Math.abs(camera.projectionMatrix.elements[5]) / (camera.isOrthographicCamera ? 2 : 2 * distance);
+        const quality = batch.definition.plant?.quality ?? { nearPixels: 300, farPixels: 90 };
+        const detailScale = this.policy === 'battery' ? 1.5 : this.policy === 'balanced' ? 1.15 : 1;
+        const nearPixels = quality.nearPixels * detailScale, farPixels = quality.farPixels * detailScale;
+        let tier = this.policy === 'ultra' ? 0 : pixels >= nearPixels ? 0 : pixels >= farPixels ? 1 : 2;
+        const previous = force ? tier : record.tier ?? tier;
+        const boundary = tier > previous ? (previous === 0 ? nearPixels : farPixels) : (tier === 0 ? nearPixels : farPixels);
+        if (tier !== previous && Math.abs(pixels - boundary) < boundary * 0.12) tier = previous;
+        record.tier = tier; record.band = ['near', 'mid', 'far'][tier]; record.visible = this.frustum.intersectsSphere(this.sphere); record.pixels = pixels;
+        if (!record.visible) continue;
+        const target = counts[tier]++;
+        for (const part of ['branches', 'leaves', 'blossoms']) {
+          const draw = batch.draws[`${tier}:${part}`]; draw.setMatrixAt(target, dummy.matrix);
+          writePlantAttributes(draw, target, record, dummy);
+        }
+      }
+      for (const draw of Object.values(batch.draws)) { draw.count = counts[draw.userData.tier]; draw.instanceMatrix.needsUpdate = true; for (const [name, attribute] of Object.entries(draw.geometry.attributes)) if (name.startsWith('tree')) attribute.needsUpdate = true; }
+    }
   }
-  residencyEstimate() { const diagnostics = this.workloadDiagnostics(); return { assetId: this.assetId, sourceCount: diagnostics.sourceCount, counts: { lod0: diagnostics.near, lod1: diagnostics.far, impostor: 0, rejected: 0 }, projectedHeights: [], forcedFullLod: false, transitionCount: 0, classificationComplete: true }; }
+
+  setWorkloadPolicy(policy = 'ultra') {
+    this.policy = policy;
+    const tier = policy === 'battery' || policy === 'balanced' ? 2 : 1;
+    for (const batch of this.batches) {
+      if (batch.shadowTier === tier) continue;
+      for (const [part, draw] of Object.entries(batch.shadows)) {
+        const previous = draw.geometry, next = batch.tiers[tier][part].clone();
+        // Keep the complete, independently animated caster list when switching
+        // topology; beauty-camera visibility never controls these instances.
+        for (const [name, attribute] of Object.entries(previous.attributes)) {
+          if (name.startsWith('tree')) next.setAttribute(name, attribute);
+        }
+        draw.geometry = next;
+        previous.dispose();
+      }
+      batch.shadowTier = tier;
+    }
+    this.update(this.camera, true);
+    return this.workloadDiagnostics();
+  }
+  workloadDiagnostics() {
+    const draws = this.batches.flatMap(batch => Object.values(batch.draws));
+    return {
+      generatedSource: true, proceduralMaterials: true, sourceCount: this.records.length,
+      windActive: Boolean(this.windActive?.value),
+      near: this.records.filter(r => r.tier === 0).length, far: this.records.filter(r => r.tier > 0).length,
+      visible: this.records.filter(r => r.visible).length, identities: this.batches.length,
+      definitions: this.definitions.size, variants: this.batches.length,
+      branches: this.batches.reduce((sum, b) => sum + b.skeleton.segments.length, 0), leaves: this.batches.reduce((sum, b) => sum + b.skeleton.leaves.length, 0),
+      triangles: draws.reduce((sum, draw) => sum + geometryTriangles(draw.geometry) * draw.count, 0),
+      bufferBytes: draws.reduce((sum, draw) => sum + Object.values(draw.geometry.attributes).reduce((n, a) => n + a.array.byteLength, 0) + (draw.geometry.index?.array.byteLength ?? 0), 0),
+      generationMs: this.batches.reduce((sum, b) => sum + b.generationMs, 0),
+      cacheHits: this.batches.filter(b => b.cacheHit).length,
+      limitsReached: this.batches.flatMap(b => b.skeleton.diagnostics.limitsReached ?? []),
+      drawCalls: draws.filter(d => d.count && d.geometry.attributes.position.count).length,
+      shadowTriangles: this.batches.reduce((sum, batch) => sum + Object.values(batch.shadows).reduce((n, draw) => n + geometryTriangles(draw.geometry) * draw.count, 0), 0),
+      shadowTier: this.batches[0]?.shadowTier ?? null,
+      shadowDrawCalls: this.batches.reduce((n, b) => n + Object.keys(b.shadows).length, 0),
+      reductionSupported: true, sourceRecordsKept: true, completeTreeResidency: true,
+    };
+  }
+  residencyEstimate() {
+    return { assetId: this.assetId, ...this.workloadDiagnostics(), counts: { lod0: this.records.filter(r => r.tier === 0).length, lod1: this.records.filter(r => r.tier === 1).length, lod2: this.records.filter(r => r.tier === 2).length, impostor: 0, rejected: 0 }, projectedHeights: this.records.map(r => r.pixels), forcedFullLod: this.policy === 'ultra', transitionCount: 0, classificationComplete: true };
+  }
+
   async readDiagnostics() { return this.workloadDiagnostics(); }
-  dispose() { for (const batch of this.batches) for (const draw of [batch.nearTrunks, batch.nearCrowns, batch.farTrunks, batch.farCrowns]) { draw.geometry.dispose(); draw.material.dispose(); } this._disposeShadow(); }
-  _disposeShadow() { if (this._shadowDisposed) return; this._shadowDisposed = true; for (const batch of this.batches) for (const draw of [batch.shadowTrunks, batch.shadowCrowns]) { draw.geometry.dispose(); draw.material.dispose(); } }
+  dispose() {
+    if (this._disposed) return; this._disposed = true;
+    const materials = new Set();
+    for (const batch of this.batches) for (const draw of Object.values(batch.draws)) { draw.geometry.dispose(); materials.add(draw.material); }
+    for (const material of materials) { for (const texture of material.userData.ownedTextures ?? []) texture.dispose(); material.dispose(); }
+    this._disposeShadow(); for (const texture of this.textures) texture.dispose();
+    if (this.windBuffer) disposeWebGPUAttributes(this.renderer, [this.windBuffer]);
+  }
+  _disposeShadow() { if (this._shadowDisposed) return; this._shadowDisposed = true; for (const batch of this.batches) for (const draw of Object.values(batch.shadows)) { draw.geometry.dispose(); for (const texture of draw.material.userData.ownedTextures ?? []) texture.dispose(); draw.material.dispose(); } }
 }
 
-function mesh(geometry, material, count, name) { const value = new InstancedMesh(geometry, material, Math.max(1, count)); value.name = name; value.count = 0; return value; }
-function treeDimensions(spec, record) { const maturity = 0.62 + record.age * 0.38; const health = 0.82 + record.health * 0.18; const height = spec.height * record.scale * maturity; return { height, trunkScale: spec.trunk * record.scale * (0.76 + record.age * 0.24), crownY: height * (spec.form === 'conifer' ? 0.61 : 0.72), crownScale: [spec.crown[0] * record.scale * health, spec.crown[1] * record.scale * maturity, spec.crown[2] * record.scale * health] }; }
-function setTransform(dummy, record, scale, y) { dummy.position.set(record.x, record.y + y, record.z); dummy.rotation.set(0, record.rotationY, 0); dummy.scale.set(scale[0], scale[1], scale[2]); dummy.updateMatrix(); }
-function crownPart(spec, record, part, count) { const rng = createRng(deriveSeed(record.seed, `crown:${part}`)); const angle = record.rotationY + part * Math.PI * 2 / count + (rng() - .5) * .55; const radius = spec.crown[0] * record.scale * (count === 3 ? .18 : .10); return { x: Math.sin(angle) * radius, z: Math.cos(angle) * radius, y: (rng() - .46) * spec.crown[1] * record.scale * .17, scale: [spec.crown[0] * record.scale * .63, spec.crown[1] * record.scale * .66, spec.crown[2] * record.scale * .63] }; }
-function crownGeometry(spec, far) { if (spec.form === 'conifer') return new ConeGeometry(1, 1, far ? 7 : 12, far ? 2 : 5); const geometry = new IcosahedronGeometry(1, far ? 1 : 2); const position = geometry.attributes.position; for (let index = 0; index < position.count; index += 1) { const x = position.getX(index), y = position.getY(index), z = position.getZ(index); const warp = 1 + Math.sin(x * 7.1 + y * 4.3 + z * 5.7) * (far ? .035 : .075); position.setXYZ(index, x * warp, y * (1 + Math.cos(x * 5.2 + z * 4.7) * .055), z * warp); } position.needsUpdate = true; geometry.computeVertexNormals(); return geometry; }
-function barkGeometry(spec, seed, radialSegments, heightSegments) { const geometry = new CylinderGeometry(1, .72, 1, radialSegments, heightSegments, false); const position = geometry.attributes.position; const color = new Color(spec.bark); const rng = createRng(seed); const phase = rng() * Math.PI * 2; for (let index = 0; index < position.count; index += 1) { const x = position.getX(index), y = position.getY(index), z = position.getZ(index); const angle = Math.atan2(z, x); const ridge = 1 + .045 * Math.sin(angle * 11 + y * 13 + phase) + .018 * Math.sin(angle * 23 - y * 7); position.setXYZ(index, x * ridge, y, z * ridge); } position.needsUpdate = true; geometry.computeVertexNormals(); geometry.userData.proceduralBark = { geometricRelief: true, textureDependency: false, baseColor: `#${color.getHexString()}` }; return geometry; }
+async function loadDefinitionTextures(definitions = [], renderer) {
+  const urls = [...new Set(definitions.flatMap((definition) => Object.values(definition.materials ?? {}).flatMap(spec => ['textureUrl', 'normalUrl', 'roughnessUrl', 'aoUrl'].map(key => spec[key]))).filter(Boolean))];
+  if (!urls.length) return new Map();
+  const pngLoader = new TextureLoader();
+  const ktxLoader = new KTX2Loader().setTranscoderPath('/assets/transcoders/basis/');
+  if (urls.some((url) => url.endsWith('.ktx2'))) {
+    if (!renderer) throw new Error('KTX2 procedural leaf textures require the production renderer.');
+    ktxLoader.detectSupport(renderer);
+  }
+  try {
+    const results = await Promise.allSettled(urls.map(async (url) => {
+      const texture = url.endsWith('.ktx2') ? await ktxLoader.loadAsync(url) : await pngLoader.loadAsync(url);
+      texture.colorSpace = definitions.some(d => Object.values(d.materials).some(m => m.textureUrl === url)) ? SRGBColorSpace : ''; texture.name = `procedural-tree:${url}`; return [url, texture];
+    }));
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure) { for (const result of results) if (result.status === 'fulfilled') result.value[1].dispose(); throw failure.reason; }
+    return new Map(results.map(result => result.value));
+  } finally { ktxLoader.dispose(); }
+}
+
+function materialFor(spec, textures, alpha = false) {
+  const material = new MeshStandardNodeMaterial({ color: new Color(spec.color), roughness: spec.roughness, metalness: 0, vertexColors: alpha, ...(alpha && spec.doubleSided !== false ? { side: DoubleSide } : {}) });
+  const texture = textures.get(spec.textureUrl); if (texture) material.map = texture;
+  if (alpha && texture) { material.transparent = false; material.alphaTest = spec.alphaCutoff ?? 0.32; }
+  for (const [key, slot] of [['normalUrl', 'normalMap'], ['roughnessUrl', 'roughnessMap'], ['aoUrl', 'aoMap']]) if (textures.has(spec[key])) material[slot] = textures.get(spec[key]);
+  if (spec.textureScale) {
+    material.userData.ownedTextures = [];
+    for (const slot of ['map', 'normalMap', 'roughnessMap', 'aoMap']) if (material[slot]) {
+      const copy = material[slot].clone(); copy.wrapS = copy.wrapT = RepeatWrapping; copy.repeat.setScalar(spec.textureScale);
+      material[slot] = copy; material.userData.ownedTextures.push(copy);
+    }
+  }
+  return material;
+}
+
+// Roots have to lie on the surface each tree actually stands on, and one shared
+// geometry cannot be modelled for every slope. Terrain owns the authoritative GPU
+// height image (Grass samples the same one), so the seat is resolved per vertex here
+// with the bilinear filter that matches the CPU heightfield used by physics.
+const ROOT_EMBED_M = 0.04;
+function buildRootSeating(terrain) {
+  const heightTex = terrain?.heightTexture;
+  if (!heightTex || !terrain.nx || !terrain.nz) return null;
+  const { minX, minZ, maxX, maxZ } = terrain.bounds;
+  const sizeX = maxX - minX, sizeZ = maxZ - minZ;
+  const load = (x, z) => textureLoad(heightTex, ivec2(int(x), int(z))).x;
+  return (world, blend) => {
+    const gx = world.x.sub(minX).div(sizeX).mul(terrain.nx - 1).clamp(0, terrain.nx - 1.001);
+    const gz = world.z.sub(minZ).div(sizeZ).mul(terrain.nz - 1).clamp(0, terrain.nz - 1.001);
+    const ix = gx.floor(), iz = gz.floor();
+    const fx = gx.sub(ix), fz = gz.sub(iz);
+    const ground = mix(
+      mix(load(ix, iz), load(ix.add(1), iz), fx),
+      mix(load(ix, iz.add(1)), load(ix.add(1), iz.add(1)), fx), fz);
+    // Sink the tip slightly so a root ends in soil rather than sitting on the surface.
+    return mix(world.y, ground.sub(ROOT_EMBED_M), blend.clamp(0, 1));
+  };
+}
+
+function instance(geometry, material, capacity, name) { const mesh = new InstancedMesh(geometry, material, Math.max(1, capacity)); mesh.name = name; mesh.count = 0; mesh.visible = (geometry.getAttribute('position')?.count ?? 0) > 0; return mesh; }
+function setTreeTransform(dummy, record) { const maturity = record.lifeBaked ? 1 : 0.62 + record.age * 0.38, health = record.lifeBaked ? 1 : 0.82 + record.health * 0.18; dummy.position.set(record.x, record.y, record.z); dummy.rotation.set(0, record.rotationY, 0); dummy.scale.set(record.scale * health, record.scale * maturity, record.scale * health); dummy.updateMatrix(); }
+function geometryTriangles(geometry) { return geometry.index ? geometry.index.count / 3 : (geometry.attributes.position?.count ?? 0) / 3; }
+
+function writePlantAttributes(draw, index, record, dummy) {
+  const a = draw.geometry.attributes; if (!a.treeInstance) return;
+  a.treeInstance.setXYZ(index, record.windExposure, record.windIndex, record.rotationY);
+  a.treeOrigin.setXYZ(index, record.x, record.y, record.z); a.treeScale.setXYZ(index, dummy.scale.x, dummy.scale.y, dummy.scale.z);
+}
+
+// Three authored ages and two health states, shared across all placements.
+// Seeds stay independent of life stage so a sapling retains its branch identity.
+function plantBatches(definitions, placements) {
+  const groups = new Map(), byId = new Map(definitions.map(d => [d.id, d]));
+  for (const record of placements) {
+    const source = byId.get(record.definitionId);
+    if (!source) throw new Error(`Missing plant definition ${record.definitionId}`);
+    const variant = deriveSeed(record.seed, record.definitionId) % source.variantCount;
+    const age = source.plant ? Math.round(record.age * 2) / 2 : 1;
+    const health = source.plant && record.health < 0.7 ? 0.5 : 1;
+    const key = `${source.id}:${variant}:${age}:${health}`;
+    if (!groups.has(key)) {
+      const definition = structuredClone(source);
+      if (definition.plant) { definition.plant.life.age *= age; definition.plant.life.health *= health; }
+      groups.set(key, { key, definition, variant, records: [] });
+    }
+    groups.get(key).records.push(record);
+  }
+  return groups.values();
+}

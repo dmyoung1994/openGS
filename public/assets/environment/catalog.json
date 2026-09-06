@@ -3,6 +3,170 @@
   "catalogId": "claude-golfsim-cc0-environment",
   "assets": [
     {
+      "id": "polyhaven-pine-sapling-small",
+      "category": "tree",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/pine_sapling_small"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-pine-sapling-small",
+        "sourceUrl": "https://polyhaven.com/a/pine_sapling_small",
+        "sourceHash": "f358c01926861dd082f32dba60f7c9fba232b585a985cf38c0d2229eecf4bc48",
+        "pipelineVersion": "polyhaven-pine-sapling-small-whole-component-lods@3:three-tier-course-spray-budgets"
+      },
+      "dimensions": {
+        "width": 0.788,
+        "height": 1.299,
+        "depth": 0.727
+      },
+      "bounds": {
+        "radius": 0.54,
+        "baseY": -0.0155,
+        "topY": 1.2835
+      },
+      "placement": {
+        "minSpacing": 1.8,
+        "maxSlopeDegrees": 28,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0
+      },
+      "transitionHabitats": [
+        "managed-course",
+        "montane-forest"
+      ],
+      "alphaMaps": [],
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/pine_sapling_small_course_lod0.glb",
+          "sha256": "140b1520d9e49da3688dbfb8cc030ead178203aa7f8b2a2d5c4ed2f5686f342d",
+          "maxDistance": 75,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/pine_sapling_small_course_lod1.glb",
+          "sha256": "b5a7a4e3bb77ef399ef1cba4470cbb226a26e88373b0434ca2caacc35a96ca4c",
+          "maxDistance": 4000,
+          "visualMaxProjectedPixels": 24,
+          "geometry": "glb"
+        },
+        {
+          "level": 2,
+          "url": "/assets/trees/pine_sapling_small_course_lod2.glb",
+          "sha256": "348ea7ccc90410c22844d62d08884718d55e07d3714e1a0e408497cea645f331",
+          "maxDistance": 8000,
+          "visualMaxProjectedPixels": 0,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.92,
+        "branchStiffness": 0.68,
+        "leafStiffness": 0.24,
+        "gustResponse": 0.58
+      }
+    },
+    {
+      "id": "polyhaven-fir-sapling-medium",
+      "category": "tree",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/fir_sapling_medium"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-fir-sapling-medium",
+        "sourceUrl": "https://polyhaven.com/a/fir_sapling_medium",
+        "sourceHash": "2e80cd49d716c99bdead5a42aa6441e89443044d9a0edc31b56b5dbf87fc41de",
+        "pipelineVersion": "polyhaven-fir-sapling-medium-whole-component-lods@4:three-tier-course-spray-budgets"
+      },
+      "dimensions": {
+        "width": 4.979,
+        "height": 8.826,
+        "depth": 5.247
+      },
+      "bounds": {
+        "radius": 3.8,
+        "baseY": -0.08825,
+        "topY": 8.73808
+      },
+      "placement": {
+        "minSpacing": 7,
+        "maxSlopeDegrees": 30,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0
+      },
+      "transitionHabitats": [
+        "managed-course",
+        "montane-forest"
+      ],
+      "alphaMaps": [],
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/fir_sapling_medium_course_lod0.glb",
+          "sha256": "d6a9557a0936a857674bed66367a511d253e610495e7401d746cfe1416c6c137",
+          "maxDistance": 75,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/fir_sapling_medium_course_lod1.glb",
+          "sha256": "2a41ab4b760f212a285b82d53c2ba0420243976aa4325897e30e17febe9e7437",
+          "maxDistance": 4000,
+          "visualMaxProjectedPixels": 24,
+          "geometry": "glb"
+        },
+        {
+          "level": 2,
+          "url": "/assets/trees/fir_sapling_medium_course_lod2.glb",
+          "sha256": "8eb77805c930bcf7b105ce64a5f61ada2afacaffc5acf0923a930c4784a4f09f",
+          "maxDistance": 8000,
+          "visualMaxProjectedPixels": 0,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.93,
+        "branchStiffness": 0.69,
+        "leafStiffness": 0.28,
+        "gustResponse": 0.54
+      }
+    },
+    {
       "id": "polyhaven-tree-small-02",
       "category": "tree",
       "biomes": [
@@ -64,8 +228,8 @@
         },
         {
           "level": 1,
-          "url": "/assets/trees/tree_small_02_lod1.glb",
-          "sha256": "ac3e7ab2bbec249e55ce330c24d7460d01ce10e8ce2435ce11c84e186616a211",
+          "url": "/assets/trees/tree_small_02_silhouette_lod1.glb",
+          "sha256": "a5ed2f596ccc0ff5e304a6d55c0b0789f9e891de1bee9403a5f266fbe5cd8ca9",
           "maxDistance": 4000,
           "geometry": "glb"
         }
@@ -106,7 +270,7 @@
         "sourceAssetId": "polyhaven-tree-small-02",
         "sourceUrl": "https://polyhaven.com/a/tree_small_02",
         "sourceHash": "3062a709614c05b80fdc1e56583998bc3cb1027b0d52f956c8ecfb882ff8ca6d",
-        "pipelineVersion": "polyhaven-source-gltf-1k@1"
+        "pipelineVersion": "polyhaven-source-gltf-1k@1+source-derived-middle-lod@1"
       },
       "dimensions": {
         "width": 2.917,
@@ -150,6 +314,13 @@
           "sha256": "3c4ff8f5b0fe8359b732fb5bd1b540aaf1282b834869eb5ee93839e69e38a45b",
           "maxDistance": 240,
           "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/tree_small_02_lod0.glb",
+          "sha256": "1566c2de9c40cfa4d144089c818f7c67b4cd4283a237e89a3a05b5464f895813",
+          "maxDistance": 4000,
+          "geometry": "glb"
         }
       ],
       "impostor": {
@@ -157,6 +328,175 @@
       },
       "wind": {
         "model": "none"
+      }
+    },
+    {
+      "id": "polyhaven-pine-tree-01",
+      "category": "tree",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/pine_tree_01"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-pine-tree-01",
+        "sourceUrl": "https://polyhaven.com/a/pine_tree_01",
+        "sourceHash": "c81e8eebbda722313f07bed37b8b9156ce520f7fa95488d83a694d02fffdb469",
+        "pipelineVersion": "process-pine-tree-blender-5.2-material-preserving-spray-lods@9-three-tier-course-spray-budgets"
+      },
+      "dimensions": {
+        "width": 7.153,
+        "height": 14.858,
+        "depth": 7.535
+      },
+      "bounds": {
+        "radius": 4.9,
+        "baseY": 0,
+        "topY": 14.858
+      },
+      "placement": {
+        "minSpacing": 8,
+        "maxSlopeDegrees": 32,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0
+      },
+      "transitionHabitats": [
+        "managed-course",
+        "montane-forest"
+      ],
+      "alphaMaps": [
+        {
+          "material": "pine_tree_01_twig.001",
+          "url": "/assets/trees/pine_tree_01_twig_alpha_1k.png",
+          "sha256": "6f91aa99f2c27108d6f817f874954aa7df8bfbb4dea2673e9322555a6ae79d99"
+        }
+      ],
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/pine_tree_01_course_lod0.glb",
+          "sha256": "29b1c29a20b6bbb8cb3349edd224ee803eba2ee2e966cbfa9bc5fe4753ef6679",
+          "maxDistance": 90,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/pine_tree_01_course_lod1.glb",
+          "sha256": "5284d2e172100c68b954ef0ca658c04607dd4167ca4c52e4f47ca39878bdee0f",
+          "maxDistance": 2400,
+          "visualMaxProjectedPixels": 24,
+          "geometry": "glb"
+        },
+        {
+          "level": 2,
+          "url": "/assets/trees/pine_tree_01_course_lod2.glb",
+          "sha256": "910bfef5a29f6d2faadd73c0a50fa20b13840c4a8e8eef2c67cca5f026675123",
+          "maxDistance": 4800,
+          "visualMaxProjectedPixels": 0,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.96,
+        "branchStiffness": 0.76,
+        "leafStiffness": 0.42,
+        "gustResponse": 0.48
+      }
+    },
+    {
+      "id": "polyhaven-fir-tree-01",
+      "category": "tree",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/fir_tree_01"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "polyhaven-fir-tree-01",
+        "sourceUrl": "https://polyhaven.com/a/fir_tree_01",
+        "sourceHash": "72e49eefb4ed4db6a8ca5e17fb10980f8463dd300d94589ac774cde95ade7709",
+        "pipelineVersion": "build_fir_tree_source_candidate@7-nested-source-faithful-three-tier-course-spray-budgets:variant-b"
+      },
+      "dimensions": {
+        "width": 5.56,
+        "height": 14.055,
+        "depth": 6.038
+      },
+      "bounds": {
+        "radius": 3.2,
+        "baseY": 0,
+        "topY": 14.055
+      },
+      "placement": {
+        "minSpacing": 8,
+        "maxSlopeDegrees": 32,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0
+      },
+      "transitionHabitats": [
+        "managed-course",
+        "montane-forest"
+      ],
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/trees/fir_tree_01_course_lod0.glb",
+          "sha256": "a18e39d5f2be69a60c0bd7ba4e9692f5c06579c737c9011b2fcad7726ea55bfc",
+          "maxDistance": 75,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/fir_tree_01_course_lod1.glb",
+          "sha256": "7b115487fb22a905c127bf8b6dd70526d99c98aa7cf18ac32f42611b5d5cbb06",
+          "maxDistance": 4000,
+          "visualMaxProjectedPixels": 24,
+          "geometry": "glb"
+        },
+        {
+          "level": 2,
+          "url": "/assets/trees/fir_tree_01_course_lod2.glb",
+          "sha256": "a4b133ce4729d3aaf862fa85b183f55dab0373c1999275a78f9bb0ea30b21a9c",
+          "maxDistance": 8000,
+          "visualMaxProjectedPixels": 0,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.95,
+        "branchStiffness": 0.72,
+        "leafStiffness": 0.38,
+        "gustResponse": 0.52
       }
     },
     {
@@ -174,7 +514,7 @@
         "sourceAssetId": "polyhaven-island-tree-02",
         "sourceUrl": "https://polyhaven.com/a/island_tree_02",
         "sourceHash": "d8c5d9ead41cdbef91a648f40ff60470faa19eb3a7010e59e44cb1a01250f75d",
-        "pipelineVersion": "polyhaven-source-gltf-1k@1"
+        "pipelineVersion": "island-tree-02-blender-5.2-whole-component-lod@2"
       },
       "dimensions": {
         "width": 4.208,
@@ -215,7 +555,14 @@
           "level": 0,
           "url": "/assets/trees/island_tree_02_lod0.glb",
           "sha256": "6281dace4ca5a75c8799276724a8e4d01bfb969942977018ceb1620801b06b91",
-          "maxDistance": 240,
+          "maxDistance": 75,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/island_tree_02_lod1.glb",
+          "sha256": "0a74543d0d49d3f1abe9a464527986edd425465adf6bd64a02680ce25bf64fd9",
+          "maxDistance": 2400,
           "geometry": "glb"
         }
       ],
@@ -241,7 +588,7 @@
         "sourceAssetId": "polyhaven-island-tree-01",
         "sourceUrl": "https://polyhaven.com/a/island_tree_01",
         "sourceHash": "78e905a40670bfabb2760601d4d9a6c17193a50d68e6271c66893eb7bd75906d",
-        "pipelineVersion": "polyhaven-source-gltf-1k@1"
+        "pipelineVersion": "process-tree-multimaterial-blender-5.2@1+exact-gpu-lod-pair@1"
       },
       "dimensions": {
         "width": 4.755,
@@ -270,19 +617,20 @@
       "transitionHabitats": [
         "managed-course"
       ],
-      "alphaMaps": [
-        {
-          "material": "island_tree_01_leaves",
-          "url": "/assets/trees/island_tree_01_leaves_alpha_1k.png",
-          "sha256": "f4341f147988dbe6b58d9ca841a8f0e4bcff25bc40d05f9877da82006d489c39"
-        }
-      ],
+      "alphaMaps": [],
       "lods": [
         {
           "level": 0,
-          "url": "/assets/trees/island_tree_01_lod0.glb",
-          "sha256": "04352129b531b887b297e532893480374d381167cb7e1c6b161e3321266193d6",
-          "maxDistance": 240,
+          "url": "/assets/trees/island_tree_01.glb",
+          "sha256": "4206c8fc183a13a79818dbb44499b7fae5b29b09a7005e842e37a57746442dc8",
+          "maxDistance": 75,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/trees/island_tree_01.glb",
+          "sha256": "4206c8fc183a13a79818dbb44499b7fae5b29b09a7005e842e37a57746442dc8",
+          "maxDistance": 2400,
           "geometry": "glb"
         }
       ],
@@ -356,7 +704,11 @@
         "kind": "none"
       },
       "wind": {
-        "model": "none"
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.91,
+        "branchStiffness": 0.55,
+        "leafStiffness": 0.16,
+        "gustResponse": 0.65
       }
     },
     {
@@ -655,6 +1007,147 @@
       },
       "wind": {
         "model": "none"
+      }
+    },
+    {
+      "id": "grasslands-clubhouse",
+      "category": "building",
+      "biomes": [
+        "temperate-maritime",
+        "temperate-alpine"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "grasslands-clubhouse",
+        "sourceUrl": "/assets/environment/grasslands-clubhouse/grasslands-clubhouse.blend",
+        "sourceHash": "cf0b741576a6d20067af16a7aba132f96ffcd78b6e64b0426d2ef357e8893508",
+        "pipelineVersion": "original-grasslands-clubhouse-blender-5.2@1"
+      },
+      "dimensions": {
+        "width": 39,
+        "height": 7.48,
+        "depth": 12.12
+      },
+      "bounds": {
+        "radius": 20.5,
+        "baseY": 0,
+        "topY": 7.48
+      },
+      "placement": {
+        "minSpacing": 42,
+        "maxSlopeDegrees": 12,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0
+      },
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/environment/grasslands-clubhouse/grasslands-clubhouse.glb",
+          "sha256": "14d57130048c6720ca044e51a143c5a6ab34700378d2a644f3bebf4285f92903",
+          "maxDistance": 1200,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "none"
+      }
+    },
+    {
+      "id": "polyhaven-jacaranda-tree",
+      "category": "tree",
+      "biomes": [
+        "temperate-maritime"
+      ],
+      "license": {
+        "spdx": "CC0-1.0",
+        "sourceUrl": "https://polyhaven.com/a/jacaranda_tree"
+      },
+      "derivativeLineage": {
+        "sourceAssetId": "jacaranda-tree",
+        "sourceUrl": "https://polyhaven.com/a/jacaranda_tree",
+        "sourceHash": "ba4aa8ab4c3e3741ce3699604d6ec1607cd6b126ae2d32abbcc0d98e8edb3be4",
+        "pipelineVersion": "gltf-transform-4.2-exact-source-pack@1"
+      },
+      "dimensions": {
+        "width": 24.41705,
+        "height": 19.468875,
+        "depth": 19.154574
+      },
+      "bounds": {
+        "radius": 15.8,
+        "baseY": -0.146615,
+        "topY": 19.32226
+      },
+      "placement": {
+        "minSpacing": 23,
+        "maxSlopeDegrees": 28,
+        "clearance": {
+          "tee": 12,
+          "green": 18,
+          "bunker": 8,
+          "water": 6,
+          "fairway": 10
+        }
+      },
+      "grounding": {
+        "burialFraction": 0
+      },
+      "transitionHabitats": [
+        "managed-course"
+      ],
+      "alphaMaps": [
+        {
+          "material": "jacaranda_tree_leaves",
+          "url": "/assets/environment/jacaranda-tree/jacaranda-tree-leaves-alpha.png",
+          "sha256": "c708a7e928a2e4d26981b021a22deeefc0ebb0e467f60b53cfa636a7e24d68f7"
+        }
+      ],
+      "lods": [
+        {
+          "level": 0,
+          "url": "/assets/environment/jacaranda-tree/jacaranda-tree-course-lod0.glb",
+          "sha256": "ebbed22b5aea017e147ce5ec4dacfe0b83c750b2894b1fa9bf7eaee99cfc0c33",
+          "maxDistance": 75,
+          "geometry": "glb"
+        },
+        {
+          "level": 1,
+          "url": "/assets/environment/jacaranda-tree/jacaranda-tree-course-lod1.glb",
+          "sha256": "e95662c5673d62d142d26db1a97f0ae5e6aa1dbbf13e1f29670599a5a551ee9b",
+          "maxDistance": 300,
+          "geometry": "glb"
+        },
+        {
+          "level": 2,
+          "url": "/assets/environment/jacaranda-tree/jacaranda-tree-course-lod2.glb",
+          "sha256": "e9d6f1e8399b34b73e6d6950f53c5ff1a0e68e629b595756dc440afd3c8b662c",
+          "maxDistance": 1200,
+          "geometry": "glb"
+        }
+      ],
+      "impostor": {
+        "kind": "none"
+      },
+      "wind": {
+        "model": "hierarchical-tree-v1",
+        "trunkStiffness": 0.94,
+        "branchStiffness": 0.68,
+        "leafStiffness": 0.3,
+        "gustResponse": 0.5
       }
     }
   ]

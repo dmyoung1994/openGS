@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Build an isolated, source-faithful Fir Tree 01 candidate.
+"""Build source-faithful production LODs from Poly Haven Fir Tree 01.
 
 The production converter historically sampled individual twig triangles and
 replaced the source materials with role colours.  This candidate keeps complete
 connected twig-card components, source UVs/normals/vertex colours, and the
-licensed diffuse/normal/roughness maps.  It is deliberately written to a
-candidate directory and is not a runtime/catalog asset.
+licensed diffuse/normal/roughness maps. The resulting GLBs are eligible for the
+runtime catalog only after their hashes, topology, and production render path
+have passed the repository's fail-closed checks.
 """
 
 from __future__ import annotations
@@ -27,12 +28,15 @@ from PIL import Image
 ROLE_PRIMITIVES = (("bark", 0), ("trunk", 1), ("foliage", 2), ("branches", 3))
 ROLE_MATERIALS = {"bark": 0, "trunk": 1, "foliage": 2, "branches": 3}
 COMPONENT_BANDS = {"bark": 32, "trunk": 40, "foliage": 96, "branches": 32}
-# Whole-component quotas. Foliage components average 5.7 vertices in source A;
-# these totals keep the candidate below the isolated viewer budgets while
-# retaining a vertically stratified crown instead of a sparse top/bottom sample.
+# Whole-component foliage quotas. The former 250/120 per-band experiment
+# retained only 88,874/42,647 foliage faces from variant B and read as a
+# skeletal pole line in golfer views. Structural roles are never sampled: both
+# LODs retain the complete authored bark, trunk, and dead-branch component set.
+# Foliage uses one LOD-independent ranking, so the lower quota is a strict
+# connected-component subset of the higher quota.
 LOD_COMPONENT_QUOTAS = {
-    0: {"bark": 4, "trunk": 5, "foliage": 85, "branches": 5},
-    1: {"bark": 2, "trunk": 2, "foliage": 20, "branches": 3},
+    0: {"bark": None, "trunk": None, "foliage": 1400, "branches": None},
+    1: {"bark": None, "trunk": None, "foliage": 850, "branches": None},
 }
 SEED = 0xF1A701
 
@@ -41,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--variant", choices=("a", "b", "c"), default="a")
     return parser.parse_args()
 
 
@@ -59,6 +64,7 @@ def hash32(value: int) -> int:
 
 @dataclass
 class Component:
+    source_index: int
     triangles: list[int]
     vertices: list[int]
     min_y: float
@@ -108,7 +114,7 @@ def iter_components(source: Source, primitive: dict) -> list[Component]:
         ids = [source.value(index_setup, triangle * 3 + offset)[0] for offset in range(3)]
         shared = vertices.intersection(ids)
         if triangles and not shared:
-            components.append(Component(triangles, sorted(vertices), min_y, max_y))
+            components.append(Component(len(components), triangles, sorted(vertices), min_y, max_y))
             triangles = []
             vertices = set()
             min_y = math.inf
@@ -119,7 +125,7 @@ def iter_components(source: Source, primitive: dict) -> list[Component]:
             min_y = min(min_y, source.value(position_setup, index)[1])
             max_y = max(max_y, source.value(position_setup, index)[1])
     if triangles:
-        components.append(Component(triangles, sorted(vertices), min_y, max_y))
+        components.append(Component(len(components), triangles, sorted(vertices), min_y, max_y))
     return components
 
 
@@ -132,12 +138,12 @@ def select_components(source: Source, primitive: dict, role: str, lod: int) -> l
     minimum = min(component.min_y for component in components)
     maximum = max(component.max_y for component in components)
     buckets: list[list[tuple[int, int, Component]]] = [[] for _ in range(bands)]
-    for component_index, component in enumerate(components):
+    for component in components:
         centre = (component.min_y + component.max_y) * 0.5
         band = max(0, min(bands - 1, int((centre - minimum) / max(maximum - minimum, 1.0) * bands)))
-        score = hash32(SEED ^ component_index ^ (lod * 0x9E3779B9))
+        score = hash32(SEED ^ component.source_index)
         heap = buckets[band]
-        heapq.heappush(heap, (-score, component_index, component))
+        heapq.heappush(heap, (-score, component.source_index, component))
         if len(heap) > quota:
             heapq.heappop(heap)
     selected = [entry[2] for bucket in buckets for entry in bucket]
@@ -151,6 +157,21 @@ def flatten_indices(source: Source, primitive: dict, components: list[Component]
             for component in components
             for triangle in component.triangles
             for offset in range(3)]
+
+
+def source_mesh_base_y(source: Source, mesh: dict) -> float:
+    """Return the authored mesh grounding, independent of an LOD selection."""
+    minima = []
+    for _role, primitive_index in ROLE_PRIMITIVES:
+        primitive = mesh["primitives"][primitive_index]
+        accessor_index = primitive["attributes"]["POSITION"]
+        accessor = source.gltf["accessors"][accessor_index]
+        if "min" in accessor:
+            minima.append(float(accessor["min"][1]))
+            continue
+        setup = source.setup(accessor_index)
+        minima.append(min(source.value(setup, index)[1] for index in range(accessor["count"])))
+    return min(minima)
 
 
 def add_view(binary: bytearray, views: list[dict], payload: bytes, target: int | None = None) -> int:
@@ -192,19 +213,15 @@ def source_texture_bytes(root: pathlib.Path, uri: str) -> bytes:
     return (root / uri).read_bytes()
 
 
-def build_candidate(source: Source, output: pathlib.Path, lod: int) -> dict:
-    mesh = source.gltf["meshes"][0]
+def build_candidate(source: Source, output: pathlib.Path, lod: int, variant: str) -> dict:
+    mesh = source.gltf["meshes"][("a", "b", "c").index(variant)]
     role_data = []
     for role, primitive_index in ROLE_PRIMITIVES:
         primitive = mesh["primitives"][primitive_index]
         components = select_components(source, primitive, role, lod)
         role_data.append((role, primitive, components, flatten_indices(source, primitive, components)))
 
-    all_positions = []
-    for _role, primitive, _components, old_indices in role_data:
-        pos_setup = source.setup(primitive["attributes"]["POSITION"])
-        all_positions.extend(source.value(pos_setup, index) for index in old_indices)
-    base_y = min(position[1] for position in all_positions)
+    base_y = source_mesh_base_y(source, mesh)
 
     binary = bytearray()
     views: list[dict] = []
@@ -260,7 +277,7 @@ def build_candidate(source: Source, output: pathlib.Path, lod: int) -> dict:
         role_vertex_counts[role] = len(positions)
         vertex_total += len(positions)
 
-    if (lod == 0 and vertex_total > 120_000) or (lod == 1 and vertex_total > 35_000):
+    if (lod == 0 and vertex_total > 800_000) or (lod == 1 and vertex_total > 550_000):
         raise ValueError(f"candidate LOD{lod} exceeds vertex budget: {vertex_total}")
 
     root = source.path.parent
@@ -311,7 +328,7 @@ def build_candidate(source: Source, output: pathlib.Path, lod: int) -> dict:
     ]
 
     document = {
-        "asset": {"version": "2.0", "generator": "build_fir_tree_source_candidate@1"},
+        "asset": {"version": "2.0", "generator": "build_fir_tree_source_candidate@5-nested-source-faithful-lods"},
         "scene": 0, "scenes": [{"nodes": [0]}],
         "nodes": [{"name": f"fir_tree_01_source_candidate_lod{lod}", "mesh": 0}],
         "meshes": [{"name": f"fir_tree_01_source_candidate_lod{lod}", "primitives": primitives}],
@@ -319,9 +336,9 @@ def build_candidate(source: Source, output: pathlib.Path, lod: int) -> dict:
         "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}],
         "buffers": [{"byteLength": len(binary)}], "bufferViews": views, "accessors": accessors,
         "extras": {
-            "candidateOnly": True, "sourceAsset": "fir_tree_01_1k.gltf", "sourceMesh": "variant-a",
+            "productionDerivative": True, "sourceAsset": "fir_tree_01_1k.gltf", "sourceMesh": f"variant-{variant}",
             "sourceSha256": hashlib.sha256(source.path.read_bytes()).hexdigest(),
-            "selection": "deterministic vertically stratified complete connected components",
+            "selection": "complete structural roles; foliage uses one deterministic per-band connected-component ranking shared by all LODs",
             "lod": lod, "vertices": vertex_total, "roleVertices": role_vertex_counts,
             "baseY": base_y, "boundsMin": position_min, "boundsMax": position_max,
             "alphaSource": "fir_tree_01_twig_alpha_1k.png", "diffuseSource": "fir_tree_01_twig_diff_1k.jpg",
@@ -335,7 +352,16 @@ def build_candidate(source: Source, output: pathlib.Path, lod: int) -> dict:
         handle.write(struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(json_chunk) + 8 + len(binary_chunk)))
         handle.write(struct.pack("<II", len(json_chunk), 0x4E4F534A)); handle.write(json_chunk)
         handle.write(struct.pack("<II", len(binary_chunk), 0x004E4942)); handle.write(binary_chunk)
-    return {"lod": lod, "vertices": vertex_total, "triangles": sum(len(p[3]) // 3 for p in role_data), "bytes": output.stat().st_size, "roleVertices": role_vertex_counts}
+    return {
+        "lod": lod,
+        "vertices": vertex_total,
+        "triangles": sum(len(p[3]) // 3 for p in role_data),
+        "bytes": output.stat().st_size,
+        "roleVertices": role_vertex_counts,
+        "roleComponents": {role: len(components) for role, _primitive, components, _indices in role_data},
+        "roleTriangles": {role: len(indices) // 3 for role, _primitive, _components, indices in role_data},
+        "baseY": base_y,
+    }
 
 
 def main() -> None:
@@ -344,8 +370,12 @@ def main() -> None:
     try:
         output_dir = pathlib.Path(parsed.output_dir).resolve()
         for lod in (0, 1):
-            output = output_dir / f"fir_tree_01_source_candidate_lod{lod}.glb"
-            print("FIR_SOURCE_CANDIDATE", json.dumps(build_candidate(source, output, lod), sort_keys=True))
+            # Variant B won the production crown review. Keep the runtime
+            # filename canonical while retaining the exact variant in extras.
+            stem = "fir_tree_01_source" if parsed.variant == "b" else f"fir_tree_01_variant_{parsed.variant}_source"
+            output = output_dir / f"{stem}_lod{lod}.glb"
+            report = build_candidate(source, output, lod, parsed.variant)
+            print("FIR_SOURCE_CANDIDATE", json.dumps({"variant": parsed.variant, **report}, sort_keys=True))
     finally:
         source.close()
 

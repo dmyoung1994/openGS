@@ -16,6 +16,22 @@ function run(system, env, frames = 480) {
   for (let frame = 0; frame < frames; frame++) { env.time.value += 1 / 120; system.update(); }
 }
 
+test('cloth motion history retains the last presented shape across multiple physics steps', () => {
+  const env = environment({ x: 8, y: 0.3, z: 3 });
+  const cloth = new FlagClothSystem({ anchors: [{ x: 0, y: 2.3, z: 0 }], environment: env });
+  const initial = cloth.positions.slice();
+  env.time.value += 1 / 30;
+  cloth.update();
+  assert.deepEqual(cloth.renderPrevious.array, initial);
+  assert.notDeepEqual(cloth.positions, initial);
+  assert.notDeepEqual(cloth.renderPrevious.array, cloth.previous, 'solver history is not render history');
+  const lastPresented = cloth.positions.slice();
+  cloth.update();
+  assert.deepEqual(cloth.renderPrevious.array, lastPresented, 'a frozen frame must retire old motion');
+  assert.ok(cloth.material.positionNode);
+  cloth.dispose();
+});
+
 test('merged flag cloth is deterministic, finite, pinned, and bounded in strong wind', () => {
   assert.equal(FLAGSTICK_COLLISION_RADIUS, 0.0075);
   const aEnv = environment({ x: 11, y: 0.4, z: 4 });

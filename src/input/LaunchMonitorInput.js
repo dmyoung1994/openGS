@@ -15,6 +15,7 @@ export const LAUNCH_MONITOR_STATES = Object.freeze({
 
 export const CANONICAL_LAUNCH_UNITS = Object.freeze({
   ballSpeed: 'mph',
+  clubSpeed: 'mph',
   launchAngle: 'deg',
   launchDirection: 'deg',
   spinRate: 'rpm',
@@ -30,7 +31,7 @@ export const REQUIRED_LAUNCH_METRICS = Object.freeze([
   'spinAxis',
 ]);
 
-export const OPTIONAL_LAUNCH_METRICS = Object.freeze(['clubLabel', 'deviceShotId']);
+export const OPTIONAL_LAUNCH_METRICS = Object.freeze(['clubSpeed', 'clubLabel', 'deviceShotId']);
 
 const VALID_STATES = new Set(Object.values(LAUNCH_MONITOR_STATES));
 const VALID_METRICS = new Set(REQUIRED_LAUNCH_METRICS);
@@ -57,7 +58,8 @@ const SPIN_TO_RPM = Object.freeze({
 const TIMESTAMP_TO_MS = Object.freeze({ ms: 1, s: 1000 });
 
 const FIELD_LIMITS = Object.freeze({
-  ballSpeed: Object.freeze([1, 250]),
+  ballSpeed: Object.freeze([0, 250]),
+  clubSpeed: Object.freeze([0, 180]),
   launchAngle: Object.freeze([-20, 90]),
   launchDirection: Object.freeze([-90, 90]),
   spinRate: Object.freeze([0, 20000]),
@@ -79,6 +81,7 @@ function assertFinite(name, value) {
 
 function assertRange(name, value) {
   const [minimum, maximum] = FIELD_LIMITS[name];
+  if (name === 'ballSpeed' && value === 0) throw new RangeError('ballSpeed must be greater than zero mph');
   if (value < minimum || value > maximum) {
     throw new RangeError(`${name} must be between ${minimum} and ${maximum} ${CANONICAL_LAUNCH_UNITS[name]}`);
   }
@@ -115,16 +118,20 @@ function optionalString(name, value, maximumLength) {
   return normalized;
 }
 
-function normalizeOptional(optional) {
+function normalizeOptional(optional, resolvedUnits) {
   if (optional === undefined) return undefined;
   assertPlainObject('optional', optional);
   for (const key of Object.keys(optional)) {
     if (!VALID_OPTIONAL_METRICS.has(key)) throw new TypeError(`unsupported optional launch field: ${key}`);
   }
+  const clubSpeed = optional.clubSpeed === undefined || optional.clubSpeed === null
+    ? undefined
+    : assertRange('clubSpeed', convert('clubSpeed', optional.clubSpeed, resolvedUnits.clubSpeed, BALL_SPEED_TO_MPH));
   const clubLabel = optionalString('clubLabel', optional.clubLabel, 80);
   const deviceShotId = optionalString('deviceShotId', optional.deviceShotId, 128);
-  if (clubLabel === undefined && deviceShotId === undefined) return undefined;
+  if (clubSpeed === undefined && clubLabel === undefined && deviceShotId === undefined) return undefined;
   return Object.freeze({
+    ...(clubSpeed === undefined ? {} : { clubSpeed }),
     ...(clubLabel === undefined ? {} : { clubLabel }),
     ...(deviceShotId === undefined ? {} : { deviceShotId }),
   });
@@ -149,7 +156,7 @@ export function normalizeLaunchShot(input, { units = CANONICAL_LAUNCH_UNITS } = 
     timestamp: normalizeTimestamp(input.timestamp, resolvedUnits.timestamp),
   };
   for (const name of Object.keys(shot)) shot[name] = assertRange(name, shot[name]);
-  const optional = normalizeOptional(input.optional);
+  const optional = normalizeOptional(input.optional, resolvedUnits);
   return Object.freeze({ ...shot, ...(optional ? { optional } : {}) });
 }
 
@@ -162,6 +169,7 @@ export function launchShotToBallParams(shot) {
     azimuth: canonical.launchDirection,
     spinRate: canonical.spinRate,
     spinAxis: canonical.spinAxis,
+    ...(canonical.optional?.clubSpeed === undefined ? {} : { clubSpeed: canonical.optional.clubSpeed }),
     ...(canonical.optional?.clubLabel ? { club: canonical.optional.clubLabel } : {}),
   });
 }
@@ -188,6 +196,7 @@ export function createLaunchMonitorCapabilities({
   const normalizedUnits = Object.freeze({ ...CANONICAL_LAUNCH_UNITS, ...assertPlainObject('units', units) });
   // Exercise unit validation now, before a provider reports itself ready.
   convert('ballSpeed', 1, normalizedUnits.ballSpeed, BALL_SPEED_TO_MPH);
+  convert('clubSpeed', 1, normalizedUnits.clubSpeed, BALL_SPEED_TO_MPH);
   convert('launchAngle', 1, normalizedUnits.launchAngle, ANGLE_TO_DEGREES);
   convert('launchDirection', 1, normalizedUnits.launchDirection, ANGLE_TO_DEGREES);
   convert('spinRate', 1, normalizedUnits.spinRate, SPIN_TO_RPM);

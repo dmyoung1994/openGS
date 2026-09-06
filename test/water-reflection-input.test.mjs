@@ -65,7 +65,7 @@ test('reflection profiles encode the scalable premium workload', () => {
   assert.equal(WATER_REFLECTION_PROFILES.ultra.updateIntervalFrames, 1);
   assert.equal(WATER_REFLECTION_PROFILES.quality.source, 'planar');
   assert.equal(WATER_REFLECTION_PROFILES.quality.resolutionScale, 0.25);
-  assert.equal(WATER_REFLECTION_PROFILES.quality.updateIntervalFrames, 2);
+  assert.equal(WATER_REFLECTION_PROFILES.quality.updateIntervalFrames, 3);
   assert.equal(WATER_REFLECTION_PROFILES.mobile.source, 'analytic-local-probe');
   assert.equal(WATER_REFLECTION_PROFILES.mobile.resolutionScale, 0);
 });

@@ -57,6 +57,50 @@ const renderer = () => ({
   },
 });
 
+test('cloud shade normalizes invocation IDs in floating point before sampling the volume', async () => {
+  const source = await readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8');
+  assert.match(source, /const mapUv = vec2\(globalId\.xy\)\.add\(0\.5\)\.div\(CLOUD_SHADOW_SIZE\)/,
+    'unsigned division collapses every shadow texel onto one cloud sample');
+});
+
+test('cloud shade refreshes paused weather edits and resumes after being disabled', () => {
+  const bindings = new EnvironmentGpuBindings(state());
+  let dispatches = 0;
+  const sky = Object.create(WeatherSky.prototype);
+  Object.assign(sky, {
+    environment: bindings, cloudsEnabled: true,
+    renderer: { compute() { dispatches++; } }, _cloudShadowCompute: {},
+  });
+  const lighting = { _sunDirection: { y: 0.6 }, cloudShadowEnabled: { value: 0 } };
+  sky.updateCloudShadow(lighting);
+  sky.updateCloudShadow(lighting);
+  assert.equal(dispatches, 1, 'unchanged frozen state reuses its texture');
+  bindings.update(state(0.7));
+  sky.updateCloudShadow(lighting);
+  assert.equal(dispatches, 2, 'coverage edit at the same time invalidates shade');
+  bindings.update(new EnvironmentFrameState({
+    ...bindings._frameState.config,
+    wind: { ...bindings._frameState.config.wind, speed: 9 },
+  }));
+  sky.updateCloudShadow(lighting);
+  assert.equal(dispatches, 3, 'wind edit also invalidates shade');
+  bindings._frameState.advanceFixedTicks(1);
+  bindings.update(bindings._frameState);
+  sky.updateCloudShadow(lighting);
+  assert.equal(dispatches, 4, 'the live clock advances shade');
+  for (const disable of ['clouds', 'horizon']) {
+    sky.cloudsEnabled = disable !== 'clouds';
+    lighting._sunDirection.y = disable === 'horizon' ? 0 : 0.6;
+    sky.updateCloudShadow(lighting);
+    assert.equal(lighting.cloudShadowEnabled.value, 0);
+    sky.cloudsEnabled = true;
+    lighting._sunDirection.y = 0.6;
+    sky.updateCloudShadow(lighting);
+    assert.equal(lighting.cloudShadowEnabled.value, 1);
+    assert.equal(dispatches, 4, 'reenabling reuses still-valid shade');
+  }
+});
+
 test('WeatherSky accepts only the authoritative GPU environment bridge and exposes a background node', async () => {
   const bindings = new EnvironmentGpuBindings(state());
   const gpu = renderer();
@@ -307,10 +351,12 @@ test('cloud graph is a true global AABB view-ray volume with front-to-back trans
   assert.match(source, /clouds\.w/);
   assert.match(source, /cloudAdvectionScale/);
   assert.match(source, /sunProbe = this\._cloudVolumeSample/);
-  assert.match(source, /const sunPath = cloudTop\.sub\(position\.y\)[\s\S]*\.clamp\(240, 1400\)/,
+  assert.match(source, /const sunPath = cloudTop\.sub\(position\.y\)[\s\S]*\.div\(keyDirection\.y\.max\(0\.04\)\)\.max\(0\)/,
     'cloud self-shadowing must use the height-aware Beer path through the slab');
-  assert.match(source, /const sunProbeDistance = sunPath\.mul\(0\.45\)\.min\(600\)/,
-    'the paired probe must remain a bounded fraction of the physical sun path');
+  assert.match(source, /keyDirection\.mul\(sunPath\.mul\(probeFraction\)\)/,
+    'probe quadrature must cover the same interval used for optical depth');
+  assert.match(source, /sunProbe, probeHeight, clouds, true/,
+    'self-shadowing must retain the same density erosion as visible clouds');
   assert.match(source, /neighborDensity\.mul\(sunPath\)\.mul\(SUN_EXTINCTION\)/,
     'sun transmittance must vary with the sampled Beer path length');
   assert.doesNotMatch(source, /sunDirection\.mul\(240\)/,

@@ -53,7 +53,7 @@ export async function buildEnvironmentProps({ catalog, placements, environmentSe
       mesh.instanceMatrix.setUsage(StaticDrawUsage);
       mesh.castShadow = asset.category === 'tree'
         ? !thinTreeFoliageName.test(partName)
-        : asset.category === 'rock' || asset.category === 'deadwood';
+        : ['rock', 'deadwood', 'wall', 'building'].includes(asset.category);
       mesh.receiveShadow = true;
       // Layer 2 marks solid geometry eligible for the selective contact-depth
       // pass; layer 0 remains enabled for normal beauty rendering. Thin alpha-cut
@@ -124,6 +124,9 @@ function prepareMaterial(source, category, name) {
     value.needsUpdate = true;
   }
   if (material.map) material.map.colorSpace = SRGBColorSpace;
+  // Architecture includes glass, metal and luminous fixtures: its authored PBR
+  // response must not inherit the vegetation/stone treatment below.
+  if (category === 'building' || category === 'wall') return material;
   material.metalness = 0;
   const roughnessFloor = category === 'rock' ? 0.86
     : category === 'deadwood' ? 0.9
@@ -158,6 +161,7 @@ function prepareMaterial(source, category, name) {
 }
 
 export function placementTint(target, category, seed, sourceId, habitat = null) {
+  if (category === 'building' || category === 'wall') return target.setRGB(1, 1, 1);
   const random = createRng(deriveSeed(seed, `${sourceId}:prop-tint`));
   const brightness = 0.95 + random() * 0.07;
   if (category === 'groundcover' || category === 'shrub' || category === 'tree') {

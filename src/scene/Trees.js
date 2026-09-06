@@ -10,15 +10,16 @@ import {
   disposeComputeNodes, disposeMaterialTextures, disposeWebGPUAttributes, disposeWebGPUGeometries,
 } from './WebGPUResourceDisposal.js';
 import {
-  texture, materialColor, saturation, positionLocal, normalLocal,
-  cameraWorldMatrix, cameraPosition, mix, smoothstep, oneMinus, vec2, vec3, float, max, vertexColor,
+  texture, materialColor, normalMap, saturation, positionLocal, normalLocal,
+  cameraWorldMatrix, cameraPosition, mix, smoothstep, oneMinus, vec2, vec3, float, max, min, vertexColor,
   Fn, If, atomicAdd, atomicLoad, atomicOr, atomicStore,
   cameraViewMatrix, instanceIndex, mrt, positionGeometry, positionWorld,
   storage, uint, uniform, uv, atan, vec4, BRDF_Lambert, diffuseColor,
 } from 'three/tsl';
 import {
   BufferAttribute, EnvironmentNode, InstancedBufferGeometry, Mesh, MeshBasicMaterial,
-  MeshBasicNodeMaterial, MeshPhongNodeMaterial, PhongLightingModel,
+  MeshBasicNodeMaterial, MeshLambertNodeMaterial, MeshPhongNodeMaterial, MeshStandardNodeMaterial,
+  PhongLightingModel,
   IndirectStorageBufferAttribute, StorageBufferAttribute, StorageInstancedBufferAttribute,
 } from 'three/webgpu';
 import { foliageTint } from './Vegetation.js';
@@ -75,6 +76,70 @@ class SharedEnvironmentTreePhongMaterial extends MeshPhongNodeMaterial {
   }
 }
 
+// Source structural meshes keep their complete glTF metallic/roughness contract,
+// but still need the same PMREM and aerial-perspective ownership as the custom
+// foliage paths. Without this wrapper, reduced middle-LOD foliage exposes bark
+// rendered through a materially different environment path, making intact fir
+// trunks and dead limbs disappear against the alpine backdrop.
+class SharedEnvironmentTreeStandardMaterial extends MeshStandardNodeMaterial {
+  setupOutput(builder, outputNode) {
+    if (!this.treeEnvironment) return super.setupOutput(builder, outputNode);
+    const toCamera = cameraPosition.sub(positionWorld);
+    const aerialRgb = this.treeEnvironment.aerialPerspective(
+      outputNode.rgb,
+      toCamera,
+      toCamera.length(),
+    );
+    return vec4(aerialRgb, outputNode.a);
+  }
+
+  setupEnvironment(builder) {
+    const environment = builder.environmentNode || this.envNode;
+    return environment ? new EnvironmentNode(environment) : null;
+  }
+}
+
+// Pine sprays are matte dielectric foliage. The authored middle LOD does not
+// benefit from evaluating a Blinn-Phong specular lobe for every surviving
+// needle fragment, but it still needs the real course lights, cached directional
+// shadow, PMREM fill and shared aerial perspective. This Lambert specialization
+// keeps those production inputs while removing only the specular branch.
+class SharedEnvironmentTreeLambertLightingModel extends PhongLightingModel {
+  constructor() {
+    super(false);
+  }
+
+  indirect(builder) {
+    super.indirect(builder);
+    const { iblIrradiance, reflectedLight } = builder.context;
+    reflectedLight.indirectDiffuse.addAssign(
+      iblIrradiance.mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })),
+    );
+  }
+}
+
+class SharedEnvironmentTreeLambertMaterial extends MeshLambertNodeMaterial {
+  setupOutput(builder, outputNode) {
+    if (!this.treeEnvironment) return super.setupOutput(builder, outputNode);
+    const toCamera = cameraPosition.sub(positionWorld);
+    const aerialRgb = this.treeEnvironment.aerialPerspective(
+      outputNode.rgb,
+      toCamera,
+      toCamera.length(),
+    );
+    return vec4(aerialRgb, outputNode.a);
+  }
+
+  setupEnvironment(builder) {
+    const environment = builder.environmentNode || this.envNode;
+    return environment ? new EnvironmentNode(environment) : null;
+  }
+
+  setupLightingModel() {
+    return new SharedEnvironmentTreeLambertLightingModel();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tree prototypes & instancing  (WebGPU / TSL).
 //
@@ -114,7 +179,7 @@ const _treeRoleForName = (n = '') => {
 };
 const TREE_ROLE_ORDER = ['trunk', 'branches', 'foliage'];
 
-const TREE_ALPHA_CUTOFF = 0.05;
+const TREE_ALPHA_CUTOFF = 0.10;
 // Atlas mip generation averages a source-authored 3–6 px trunk toward transparent
 // at address distance. A lower far-only threshold preserves that real thin feature;
 // geometry retains the crisper cutoff above.
@@ -124,10 +189,23 @@ const TREE_IMPOSTOR_ALPHA_CUTOFF = 0.06;
 // needle hairs. A fixed measured cutoff remains depth-writing, deterministic, and
 // stable on moving crowns; alpha hashing was reviewed here but produced persistent
 // stipple under wind even after TRAA accumulation.
-const TREE_FOLIAGE_ALPHA_CUTOFF = 0.05;
-function useStableFoliageCoverage(material, alphaNode) {
+const TREE_FOLIAGE_ALPHA_CUTOFF = 0.10;
+// LOD1's retained sprays are a nested authored subset. At middle distance the
+// source alpha fringe is still valid needle coverage, but the hero cutoff can
+// erase it after projection and make the subset look sparser than its geometry.
+// Keep a binary/depth-writing cutoff—never blend or dither—while accepting more
+// of the source mask only on that cheaper middle representation.
+const TREE_MIDDLE_FOLIAGE_ALPHA_CUTOFF = 0.06;
+// LOD2 is reserved for genuinely tiny silhouettes. Preserve more of the authored
+// coverage mask there so thinning connected sprays reduces overdraw without making
+// the crown fade away before its remaining shape becomes subpixel detail.
+const TREE_FAR_FOLIAGE_ALPHA_CUTOFF = 0.035;
+function certifiedProjectedPixels(value) {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+function useStableFoliageCoverage(material, alphaNode, cutoff = TREE_FOLIAGE_ALPHA_CUTOFF) {
   material.opacityNode = alphaNode;
-  material.alphaTest = TREE_FOLIAGE_ALPHA_CUTOFF;
+  material.alphaTest = cutoff;
   material.alphaHash = false;
   material.transparent = false;
   material.depthWrite = true;
@@ -160,11 +238,11 @@ const TREE_LOD_FAR = 20;
 // lab estimate below.  These are deliberately conservative: source-derived
 // geometry remains visible until the authored silhouette is small enough that
 // the baked atlas can take over without a perceptible crown change.
-// LOD1 is a source-derived mesh (56.2% of LOD0's indexed triangles), so its
-// measured silhouette remains stable above this handoff. At the fixed 720 px
-// camera this is about 270 px of full-tree height; keeping LOD0 through that
-// measured band preserves hero and midground crown continuity.
+// Default catalog handoff. Mature course overstory receives its stricter
+// source-specific threshold in treeResidencyThresholds below; smaller saplings
+// keep this default so their complete geometry is not spent at subpixel scale.
 const TREE_LOD0_PROJECTED_HEIGHT = 0.75;
+const MATURE_FOREST_LOD0_PROJECTED_HEIGHT = 0.33;
 // The promoted resort palm LOD1 deliberately removes roughly half of the source
 // triangles.  It is useful once the whole palm is a small background silhouette,
 // but its long separated fronds visibly open up if it is selected in the
@@ -213,24 +291,24 @@ const TREE_WORKLOAD_PROFILES = Object.freeze({
   }),
   quality: Object.freeze({
     mode: 'quality',
-    lodNearScale: 0.78,
-    lodFarScale: 0.78,
-    transitionScale: 0.90,
-    projectedLod0Scale: 1.15,
+    lodNearScale: 0.90,
+    lodFarScale: 0.86,
+    transitionScale: 0.94,
+    projectedLod0Scale: 1.05,
   }),
   balanced: Object.freeze({
     mode: 'balanced',
-    lodNearScale: 0.60,
-    lodFarScale: 0.60,
-    transitionScale: 0.78,
-    projectedLod0Scale: 1.50,
+    lodNearScale: 0.78,
+    lodFarScale: 0.72,
+    transitionScale: 0.86,
+    projectedLod0Scale: 1.20,
   }),
   battery: Object.freeze({
     mode: 'battery',
-    lodNearScale: 0.42,
-    lodFarScale: 0.48,
-    transitionScale: 0.68,
-    projectedLod0Scale: 2.00,
+    lodNearScale: 0.60,
+    lodFarScale: 0.58,
+    transitionScale: 0.76,
+    projectedLod0Scale: 1.50,
   }),
 });
 
@@ -299,13 +377,32 @@ function treeWorkloadStateSnapshot(state) {
 function treeResidencyThresholds(proto, assetId = null) {
   const candidateV8 = _isConiferV8Prototype(proto);
   const palm = assetId === PALM_TREE_ASSET_ID;
+  const matureCourseOverstory = assetId === 'polyhaven-fir-tree-01'
+    || assetId === 'polyhaven-pine-tree-01';
+  const nativeSapling = assetId === 'polyhaven-fir-sapling-medium'
+    || assetId === 'polyhaven-pine-sapling-small';
   return Object.freeze({
-    candidate: candidateV8 ? 'conifer_v8' : palm ? 'resort_palm' : 'production',
+    candidate: candidateV8 ? 'conifer_v8'
+      : palm ? 'resort_palm'
+        : matureCourseOverstory ? 'mature-course-overstory'
+          : nativeSapling ? 'native-sapling' : 'production',
     lod0: candidateV8 ? TREE_V8_LOD0_PROJECTED_HEIGHT
-      : palm ? PALM_LOD0_PROJECTED_HEIGHT : TREE_LOD0_PROJECTED_HEIGHT,
+      : palm ? PALM_LOD0_PROJECTED_HEIGHT
+        : matureCourseOverstory ? MATURE_FOREST_LOD0_PROJECTED_HEIGHT
+          : nativeSapling ? 0.65 : TREE_LOD0_PROJECTED_HEIGHT,
     lod1: TREE_LOD1_PROJECTED_HEIGHT,
     projectedStructureRatio: TREE_PROJECTED_STRUCTURE_RATIO,
     impostorStructure: candidateV8 ? TREE_V8_IMPOSTOR_PROJECTED_STRUCTURE : TREE_IMPOSTOR_PROJECTED_STRUCTURE,
+    // The Pineglass mature overstory is the course wall and strategic separator,
+    // so its complete authored geometry owns the foreground and midground. Native
+    // saplings are understory/regeneration: raise their old near band modestly, but
+    // do not spend their enormous source mesh when the whole plant is background-
+    // scale. These multipliers alter residency only; every source record and GLB
+    // remains intact and the exclusive handoff still has one owner.
+    lodNearMultiplier: matureCourseOverstory ? 2.60 : nativeSapling ? 1.25 : 1.0,
+    lodFarMultiplier: matureCourseOverstory ? 2.60 : nativeSapling ? 1.25 : 1.0,
+    lodNearPolicyFloor: matureCourseOverstory ? 0.90 : 0.10,
+    lodFarPolicyFloor: matureCourseOverstory ? 0.86 : 0.10,
   });
 }
 
@@ -320,10 +417,12 @@ export function classifyAuthoredTreeLod({
   lodNear,
   lodFar,
   projectedLod0Threshold,
+  projectedLod2Threshold = 0,
   forceFullLod = false,
 }) {
-  return forceFullLod || (distance < lodFar
-    && (distance < lodNear || projectedHeight >= projectedLod0Threshold)) ? 0 : 1;
+  if (forceFullLod || (distance < lodFar
+    && (distance < lodNear || projectedHeight >= projectedLod0Threshold))) return 0;
+  return projectedHeight < projectedLod2Threshold ? 2 : 1;
 }
 // v8 atlas calibration, measured in the authored PNG before
 // runtime lighting: bark tile-0 mean sRGB [72.76, 66.35, 56.51] => linear
@@ -343,6 +442,11 @@ const CONIFER_CANDIDATE_NEEDLE_SOURCE_MEDIAN_LINEAR = Object.freeze([0.0561, 0.0
 const CONIFER_CANDIDATE_NEEDLE_TARGET_MEDIAN_LINEAR = Object.freeze([0.080, 0.115, 0.030]);
 const CONIFER_CANDIDATE_BARK_LINEAR_NORMALIZATION = vec3(1.21, 1.18, 1.19);
 const CONIFER_CANDIDATE_NEEDLE_LINEAR_NORMALIZATION = vec3(1.43, 1.51, 1.55);
+// Official Fir Tree 01 structural maps average only [0.066, 0.055, 0.041]
+// in linear light. Apply one neutral exposure lift—never a hue tint or emitted
+// fill—to keep the authored bark readable when LOD1 reveals more of it. Both
+// authored mesh LODs use the same factor so the material cannot pop at handoff.
+const FIR_SOURCE_STRUCTURE_LINEAR_NORMALIZATION = vec3(1.45);
 // v8 response compression. The source median above is the measured
 // linear target, not a baked light value: blending toward it keeps low-alpha
 // interior needles from collapsing to black while pulling bright tips back into
@@ -419,6 +523,17 @@ function prepMaterial(m, { alphaCutout = false } = {}) {
   m.side = DoubleSide;
   if (m.map) {
     m.map.colorSpace = SRGBColorSpace;
+    if (alphaCutout) {
+      // Foliage coverage is intentionally binary. Colour mip generation averages
+      // authored needles into their transparent gutters, which makes distant
+      // conifers look soft before the geometry LOD has changed. Keep the source
+      // texels crisp and let reactive TRAA integrate the resulting subpixel edge.
+      m.map.minFilter = LinearFilter;
+      m.map.magFilter = LinearFilter;
+      m.map.generateMipmaps = false;
+      m.map.anisotropy = 8;
+      m.map.needsUpdate = true;
+    }
     m.alphaTest = alphaCutout ? Math.max(m.alphaTest || 0, TREE_ALPHA_CUTOFF) : 0;
     m.transparent = false;
     m.depthWrite = true;
@@ -437,9 +552,10 @@ function prepMaterial(m, { alphaCutout = false } = {}) {
 // }
 // `offsetY` remains explicit so all LODs share one transform contract.
 export async function loadTreePrototype(url, { alphaMaps = [] } = {}) {
-  // Poly Haven's source GLTFs keep foliage RGB and coverage as separate
-  // authored maps. The GLB itself therefore has the correct BLEND material but
-  // no alpha channel in its JPEG base-colour map. Load the declared coverage
+  // Some Poly Haven source packages keep foliage RGB and coverage as separate
+  // authored maps. Pine Tree 01's official glTF references only the JPEG PBR
+  // maps and declares OPAQUE, while its files manifest supplies the companion
+  // twig-alpha PNG. Load the catalog-declared coverage
   // maps beside the GLB and attach them by material name before cloning the
   // source materials. This keeps the original RGB, normals, roughness, UVs,
   // and geometry intact while making the production cutout match the source
@@ -447,6 +563,9 @@ export async function loadTreePrototype(url, { alphaMaps = [] } = {}) {
   const alphaTextures = new Map();
   await Promise.all(alphaMaps.map(async (alphaMap) => {
     const textureMap = await _textureLoader.loadAsync(alphaMap.url);
+    // Sidecar coverage shares the GLTF material's UV origin, not TextureLoader's
+    // default image-space Y orientation.
+    textureMap.flipY = false;
     textureMap.colorSpace = NoColorSpace;
     textureMap.minFilter = LinearFilter;
     textureMap.magFilter = LinearFilter;
@@ -568,8 +687,8 @@ export async function loadTreePrototype(url, { alphaMaps = [] } = {}) {
   const plantBaseY = structuralY.length
     ? structuralY[Math.min(structuralY.length - 1, Math.floor(structuralY.length * 0.05))]
     : bbox.min.y;
-  // Lower the scan's unusually high first branch tier into the trunk silhouette.
-  for (const part of parts) if (part.isFoliage) part.offsetY = -height * 0.075;
+  // Catalog parts retain one rigid authored frame. Moving foliage independently
+  // covers the trunk/branch scaffold and detaches its source attachment points.
   return { parts, height, baseY: bbox.min.y, plantBaseY };
 }
 
@@ -646,6 +765,15 @@ function authoredMeshLodUsable(near, middle) {
   });
 }
 
+function prototypeRoleTriangles(proto) {
+  const result = {};
+  for (const part of proto.parts) {
+    const role = part.role ?? (part.isFoliage ? 'foliage' : 'structure');
+    result[role] = (result[role] ?? 0) + (part.geometry.index?.count ?? 0) / 3;
+  }
+  return Object.freeze(result);
+}
+
 // The catalog loader verifies every declared binary digest before Range builds a
 // tree. Keep this second, renderer-side contract explicit: production mesh LOD is
 // never allowed to silently fall back to LOD0 when the catalog has no verified
@@ -673,6 +801,18 @@ export function getVerifiedTreeLodPair(asset) {
     throw new Error(`${asset.id} requires authored LOD distances in ascending order.`);
   }
   return Object.freeze({ lod0, lod1 });
+}
+
+export function getVerifiedTreeLods(asset) {
+  const { lod0, lod1 } = getVerifiedTreeLodPair(asset);
+  const lod2 = asset.lods.find((lod) => lod.level === 2) ?? null;
+  if (lod2 && (!(lod2.geometry === 'glb')
+    || typeof lod2.url !== 'string' || !lod2.url.startsWith('/assets/')
+    || typeof lod2.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(lod2.sha256)
+    || !Number.isFinite(lod2.maxDistance) || lod2.maxDistance <= lod1.maxDistance)) {
+    throw new Error(`${asset.id} has an invalid authored catalog LOD2 derivative.`);
+  }
+  return Object.freeze({ lod0, lod1, lod2 });
 }
 
 // Some licensed catalog trees currently have only their exact authored LOD0 GLB.
@@ -1022,7 +1162,6 @@ export class TreeBeautyLod0 {
 
   setWorkloadPolicy(policy = undefined) {
     this._workloadPolicy = normalizeTreeWorkloadPolicy(policy);
-    this._shadowPolicyOwner?.light?.shadow && (this._shadowPolicyOwner.light.shadow.needsUpdate = true);
     return this;
   }
 
@@ -1232,7 +1371,6 @@ export class TreeShadowLod0 {
 
   setWorkloadPolicy(policy = undefined) {
     this.beauty.setWorkloadPolicy(policy);
-    this.light.shadow.needsUpdate = true;
     return this;
   }
 
@@ -1272,7 +1410,7 @@ export class TreeShadowLod0 {
 // per-frame upload, or readback. Source slots retain stable IDs while output slots
 // compact and reorder independently.
 export class TreeBeautyLod {
-  constructor({ renderer, camera, motionHistory, environment, wind, proto, midProto, impostor = null, impostorTexture = null, placements, seed, assetId = null, lodNear = TREE_LOD_NEAR, lodFar = TREE_LOD_FAR, lodTransitionDistance = Math.max(TREE_LOD_TRANSITION_MIN_DISTANCE, lodNear * TREE_LOD_TRANSITION_DISTANCE_RATIO), lodTransitionProjectedHeight = TREE_LOD_TRANSITION_PROJECTED_HEIGHT, forceFullLod = false, authoredMeshOnly = false }) {
+  constructor({ renderer, camera, motionHistory, environment, wind, proto, midProto, farProto = null, impostor = null, impostorTexture = null, placements, seed, assetId = null, lodNear = TREE_LOD_NEAR, lodFar = TREE_LOD_FAR, lodTransitionDistance = Math.max(TREE_LOD_TRANSITION_MIN_DISTANCE, lodNear * TREE_LOD_TRANSITION_DISTANCE_RATIO), lodTransitionProjectedHeight = TREE_LOD_TRANSITION_PROJECTED_HEIGHT, forceFullLod = false, authoredMeshOnly = false, visualLodCertification = {} }) {
     if (!renderer?.isWebGPURenderer) throw new Error('TreeBeautyLod requires WebGPU; no compatibility tree path exists.');
     if (!camera) throw new Error('TreeBeautyLod requires the active camera.');
     if (!motionHistory) throw new Error('TreeBeautyLod requires SceneManager motion history for TRAA velocity.');
@@ -1290,6 +1428,7 @@ export class TreeBeautyLod {
     if (!proto?.parts?.length) throw new Error('TreeBeautyLod requires a catalog LOD0 prototype with at least one part.');
     if (!midProto?.parts?.length) throw new Error('TreeBeautyLod requires a catalog LOD1 prototype with at least one part.');
     assertCompatibleTreeLods(proto, midProto);
+    if (authoredMeshOnly && farProto?.parts?.length) assertCompatibleTreeLods(midProto, farProto);
     // A prototype may be one combined authored-alpha atlas primitive or a set of
     // semantic role primitives (trunk / branches / foliage). Role-split sources keep
     // each role's own texture at its authored resolution and tiling, which a single
@@ -1297,12 +1436,21 @@ export class TreeBeautyLod {
     // part count: LOD0 parts, then LOD1 parts, then the one impostor card.
     this.partCount = proto.parts.length;
     this.authoredMeshOnly = authoredMeshOnly === true;
+    this.visualLodCertification = Object.freeze({
+      lod1: certifiedProjectedPixels(visualLodCertification.lod1),
+      lod2: certifiedProjectedPixels(visualLodCertification.lod2),
+    });
     this.useMiddleLod = this.authoredMeshOnly
-      ? authoredMeshLodUsable(proto, midProto)
+      ? this.visualLodCertification.lod1 > 0 && authoredMeshLodUsable(proto, midProto)
       : middleLodUsable(proto, midProto);
-    if (this.authoredMeshOnly && !this.useMiddleLod) {
-      throw new Error('TreeBeautyLod requires a verified authored LOD1 with retained indexed canopy topology.');
-    }
+    this.useFarLod = this.authoredMeshOnly && this.visualLodCertification.lod2 > 0 && farProto?.parts?.length
+      ? authoredMeshLodUsable(midProto, farProto)
+      : false;
+    this.roleTriangles = Object.freeze({
+      lod0: prototypeRoleTriangles(proto),
+      lod1: prototypeRoleTriangles(midProto),
+      ...(this.useFarLod ? { lod2: prototypeRoleTriangles(farProto) } : {}),
+    });
     // Candidate residency is selected from the authored prototype material, not
     // from distance or a runtime visual heuristic. Production v3 and v4-v7 keep
     // the exact global projected-size policy; only the silhouette-validated v8
@@ -1323,7 +1471,9 @@ export class TreeBeautyLod {
     this.environment = environment;
     this.wind = wind;
     this.windResponse = treeWindResponses(wind);
-    this.forceFullLod = forceFullLod === true;
+    // Missing certification fails closed to the complete production source.
+    // A device workload policy may retain more detail but can never waive this.
+    this.forceFullLod = forceFullLod === true || (this.authoredMeshOnly && !this.useMiddleLod);
     this.assetId = assetId;
     this.impostor = impostor;
     this.impostorTexture = impostorTexture;
@@ -1331,7 +1481,7 @@ export class TreeBeautyLod {
     this.sourceCount = records.transform.length / 4;
     this.shadowRecords = records.shadowRecords;
     this.shadowTransforms = records.shadowTransforms;
-    this.shadowPrototype = midProto;
+    this.shadowPrototype = this.useFarLod ? farProto : (this.useMiddleLod ? midProto : proto);
     this._baseLodNear = lodNear;
     this._baseLodFar = lodFar;
     this._baseLodTransitionDistance = lodTransitionDistance;
@@ -1345,6 +1495,12 @@ export class TreeBeautyLod {
     this.uCameraPosition = uniform(camera.position.clone());
     this.uViewProjection = uniform(new Matrix4());
     this.uProjectionScale = uniform(new Vector2(1, 1));
+    this.uLod2ProjectedHeight = uniform(
+      this.visualLodCertification.lod2 * 2 / Math.max(1, renderer.domElement?.height ?? 720),
+    );
+    this.uCertifiedLod1ProjectedHeight = uniform(
+      this.visualLodCertification.lod1 * 2 / Math.max(1, renderer.domElement?.height ?? 720),
+    );
     // Tier policy changes only these uniform thresholds. All devices execute the
     // exact same compacted source-LOD topology and shader graph.
     this.uLodNear = uniform(lodNear);
@@ -1366,6 +1522,9 @@ export class TreeBeautyLod {
     // on every draw. Vertex shaders dereference the immutable source streams.
     this._visibleLod0 = storage(new StorageInstancedBufferAttribute(new Uint32Array(this.sourceCount), 1, Uint32Array), 'uint', this.sourceCount);
     this._visibleLod1 = storage(new StorageInstancedBufferAttribute(new Uint32Array(this.sourceCount), 1, Uint32Array), 'uint', this.sourceCount);
+    this._visibleLod2 = this.useFarLod
+      ? storage(new StorageInstancedBufferAttribute(new Uint32Array(this.sourceCount), 1, Uint32Array), 'uint', this.sourceCount)
+      : null;
     this._visibleImpostor = this.authoredMeshOnly
       ? null
       : storage(new StorageInstancedBufferAttribute(new Uint32Array(this.sourceCount), 1, Uint32Array), 'uint', this.sourceCount);
@@ -1383,12 +1542,13 @@ export class TreeBeautyLod {
     // per band (the first command of the band); finalize broadcasts it to that
     // band's sibling parts so every role of a tree draws the same instance set.
     if (this.authoredMeshOnly) {
-      this._commandCount = this.partCount * 2;
+      this._commandCount = this.partCount * (this.useFarLod ? 3 : 2);
     } else {
       this._commandCount = this.partCount * 2 + 1;
     }
     this._lod0CountWord = 1;
     this._lod1CountWord = this.partCount * 5 + 1;
+    this._lod2CountWord = this.partCount * 10 + 1;
     this._impostorCountWord = this.partCount * 10 + 1;
     const drawArgWords = this._commandCount * 5;
     this._drawArgsAttr = new IndirectStorageBufferAttribute(new Uint32Array(drawArgWords), 5);
@@ -1399,21 +1559,21 @@ export class TreeBeautyLod {
     this._diagnosticAttr = new StorageBufferAttribute(new Uint32Array(16 + this.sourceCount), 1, Uint32Array);
     this._diagnostic = storage(this._diagnosticAttr, 'uint', 16 + this.sourceCount).toAtomic();
     this._windCompute = this._buildWindCompute();
-    this._clearCompute = this._buildClearCompute(proto, midProto);
+    this._clearCompute = this._buildClearCompute(proto, midProto, farProto);
     this._compactCompute = this._buildCompactCompute();
-    this._finalizeCompute = this._buildFinalizeCompute(proto, midProto);
+    this._finalizeCompute = this._buildFinalizeCompute(proto, midProto, farProto);
     this._windCompute.name = 'Tree beauty source wind precompute';
     this._clearCompute.name = 'Tree beauty GPU reset';
     this._compactCompute.name = 'Tree beauty camera-relative LOD compact';
     this._finalizeCompute.name = 'Tree beauty indirect finalize';
     this._addGeometryMeshes(proto, this._visibleLod0, 0, 'lod0');
     this._addGeometryMeshes(midProto, this._visibleLod1, this.partCount, 'lod1');
+    if (this.useFarLod) this._addGeometryMeshes(farProto, this._visibleLod2, this.partCount * 2, 'lod2');
     if (!this.authoredMeshOnly) this._addImpostorMesh();
   }
 
   setWorkloadPolicy(policy = undefined) {
     this._workloadPolicy = normalizeTreeWorkloadPolicy(policy);
-    this._shadowPolicyOwner?.light?.shadow && (this._shadowPolicyOwner.light.shadow.needsUpdate = true);
     this._workloadDirty = true;
     this._applyWorkloadState(this.camera, true);
     return this;
@@ -1435,9 +1595,13 @@ export class TreeBeautyLod {
       authoredGeometry: this.authoredMeshOnly,
       fullFidelity: this._workloadPolicy.fullFidelity,
       sourceRecordsKept: true,
-      reductionSupported: this.authoredMeshOnly,
+      reductionSupported: this.authoredMeshOnly && this.useMiddleLod,
+      completeTreeResidency: true,
+      fullSourceTopologyResidency: this.forceFullLod,
+      visualLodCertification: this.visualLodCertification,
       shadowResidency: this.authoredMeshOnly
-        ? 'complete-authored-lod1'
+        ? (this.useFarLod ? 'complete-authored-lod2'
+          : (this.useMiddleLod ? 'complete-authored-lod1' : 'complete-authored-lod0'))
         : 'catalog-authored-lod-lists',
       unsupportedReason: this.authoredMeshOnly ? null : 'legacy-atlas-path-not-production',
     };
@@ -1447,14 +1611,19 @@ export class TreeBeautyLod {
     void camera;
     if (!force && !this._workloadDirty) return false;
     const policy = this._workloadPolicy;
-    const lodNear = this._baseLodNear * policy.lodNearScale;
-    const lodFar = this._baseLodFar * policy.lodFarScale;
+    const lodNear = this._baseLodNear
+      * Math.max(policy.lodNearScale, this.residencyThresholds.lodNearPolicyFloor)
+      * this.residencyThresholds.lodNearMultiplier;
+    const lodFar = this._baseLodFar
+      * Math.max(policy.lodFarScale, this.residencyThresholds.lodFarPolicyFloor)
+      * this.residencyThresholds.lodFarMultiplier;
     const transitionDistance = this._baseLodTransitionDistance * policy.transitionScale;
     this._workloadState = {
       sourceRecordsKept: true,
       reductionStrategy: 'authored-lod-promotion',
       shadowResidency: this.authoredMeshOnly
-        ? 'complete-authored-lod1'
+        ? (this.useFarLod ? 'complete-authored-lod2'
+          : (this.useMiddleLod ? 'complete-authored-lod1' : 'complete-authored-lod0'))
         : 'catalog-authored-lod-lists',
       projectedLod0Scale: this._workloadPolicy.projectedLod0Scale,
       lodNear,
@@ -1472,11 +1641,13 @@ export class TreeBeautyLod {
 
   // Index counts for every indirect command, in layout order: LOD0 parts, LOD1
   // parts, then the six-index impostor quad.
-  _commandIndexCounts(proto, midProto) {
+  _commandIndexCounts(proto, midProto, farProto = null) {
     const counts = [
       ...proto.parts.map((part) => part.geometry.index?.count ?? 0),
       ...midProto.parts.map((part) => part.geometry.index?.count ?? 0),
-      ...(this.authoredMeshOnly ? [] : [6]),
+      ...(this.authoredMeshOnly
+        ? (this.useFarLod ? farProto.parts.map((part) => part.geometry.index?.count ?? 0) : [])
+        : [6]),
     ];
     if (counts.some((count) => count <= 0)) throw new Error('TreeBeautyLod requires indexed hero geometry.');
     return counts;
@@ -1504,10 +1675,10 @@ export class TreeBeautyLod {
     })().compute(this.sourceCount);
   }
 
-  _buildClearCompute(proto, midProto) {
+  _buildClearCompute(proto, midProto, farProto = null) {
     const args = this._drawArgs;
     const diagnostics = this._diagnostic;
-    const counts = this._commandIndexCounts(proto, midProto);
+    const counts = this._commandIndexCounts(proto, midProto, farProto);
     return Fn(() => {
       const id = uint(instanceIndex);
       If(id.lessThan(uint(this.sourceCount)), () => {
@@ -1527,19 +1698,23 @@ export class TreeBeautyLod {
     })().compute(Math.max(this.sourceCount, 16));
   }
 
-  _buildFinalizeCompute(proto, midProto) {
+  _buildFinalizeCompute(proto, midProto, farProto = null) {
     const args = this._drawArgs;
     const diagnostics = this._diagnostic;
-    const counts = this._commandIndexCounts(proto, midProto);
+    const counts = this._commandIndexCounts(proto, midProto, farProto);
     const parts = this.partCount;
     if (this.authoredMeshOnly) {
       return Fn(() => {
         const lod0Count = atomicLoad(args.element(uint(this._lod0CountWord)));
         const lod1Count = atomicLoad(args.element(uint(this._lod1CountWord)));
+        const lod2Count = this.useFarLod
+          ? atomicLoad(args.element(uint(this._lod2CountWord)))
+          : uint(0);
         for (let command = 0; command < counts.length; command++) {
           const base = command * 5;
           atomicStore(args.element(uint(base)), uint(counts[command]));
-          const bandCount = command < parts ? lod0Count : lod1Count;
+          const bandCount = command < parts ? lod0Count
+            : (command < parts * 2 ? lod1Count : lod2Count);
           atomicStore(args.element(uint(base + 1)), bandCount);
           atomicStore(args.element(uint(base + 2)), uint(0));
           atomicStore(args.element(uint(base + 3)), uint(0));
@@ -1547,6 +1722,9 @@ export class TreeBeautyLod {
         }
         If(lod0Count.greaterThan(uint(this.sourceCount)), () => { atomicStore(diagnostics.element(uint(6)), uint(1)); });
         If(lod1Count.greaterThan(uint(this.sourceCount)), () => { atomicStore(diagnostics.element(uint(7)), uint(1)); });
+        if (this.useFarLod) {
+          If(lod2Count.greaterThan(uint(this.sourceCount)), () => { atomicStore(diagnostics.element(uint(8)), uint(1)); });
+        }
       })().compute(1);
     }
     return Fn(() => {
@@ -1577,6 +1755,7 @@ export class TreeBeautyLod {
     const sourceTransform = this._sourceTransform;
     const visibleLod0 = this._visibleLod0;
     const visibleLod1 = this._visibleLod1;
+    const visibleLod2 = this._visibleLod2;
     const args = this._drawArgs;
     const diagnostics = this._diagnostic;
     const cameraPosition = this.uCameraPosition;
@@ -1585,6 +1764,8 @@ export class TreeBeautyLod {
     const lodNear = this.uLodNear;
     const lodFar = this.uLodFar;
     const projectedLod0Scale = this.uPolicyProjectedLod0Scale;
+    const certifiedLod1Threshold = this.uCertifiedLod1ProjectedHeight;
+    const projectedLod2Threshold = this.uLod2ProjectedHeight;
     const residency = this.residencyThresholds;
     return Fn(() => {
       const id = uint(instanceIndex);
@@ -1607,7 +1788,12 @@ export class TreeBeautyLod {
         If(inFrustum, () => {
           const distance = dx.mul(dx).add(dy.mul(dy)).add(dz.mul(dz)).sqrt();
           const projectedHeight = h.mul(projectionScale.y).div(max(distance, float(1.0)));
-          const projectedLod0Threshold = float(residency.lod0).mul(projectedLod0Scale);
+          // Workload policy can retain more detail, but cannot promote a lower
+          // mesh above its catalog-certified projected size.
+          const projectedLod0Threshold = min(
+            float(residency.lod0).mul(projectedLod0Scale),
+            certifiedLod1Threshold,
+          );
           // Exactly one authored mesh owns a source in any frame. A screen-door
           // overlap punched holes through the opaque trunk and long palm fronds
           // because independently decimated LOD surfaces do not align pixel for
@@ -1615,12 +1801,15 @@ export class TreeBeautyLod {
           // the far device budget remains authoritative.
           const forceFull = uint(this.forceFullLod ? 1 : 0).equal(uint(1));
           const lod0Visible = forceFull.or(
-            distance.lessThan(lodFar).and(
-              distance.lessThan(lodNear)
-                .or(projectedHeight.greaterThanEqual(projectedLod0Threshold)),
-            ),
+            distance.lessThan(lodNear)
+              .or(projectedHeight.greaterThan(projectedLod0Threshold)),
           );
-          const lod1Visible = lod0Visible.not();
+          const lod2Visible = this.useFarLod
+            ? lod0Visible.not().and(projectedHeight.lessThan(projectedLod2Threshold))
+            : null;
+          const lod1Visible = this.useFarLod
+            ? lod0Visible.not().and(lod2Visible.not())
+            : lod0Visible.not();
           If(lod0Visible, () => {
             const dst = atomicAdd(args.element(uint(this._lod0CountWord)), uint(1));
             If(dst.lessThan(uint(this.sourceCount)), () => { visibleLod0.element(dst).assign(id); })
@@ -1633,6 +1822,14 @@ export class TreeBeautyLod {
               .Else(() => { atomicStore(diagnostics.element(uint(7)), uint(1)); });
             atomicOr(diagnostics.element(uint(16).add(id)), uint(2));
           });
+          if (this.useFarLod) {
+            If(lod2Visible, () => {
+              const dst = atomicAdd(args.element(uint(this._lod2CountWord)), uint(1));
+              If(dst.lessThan(uint(this.sourceCount)), () => { visibleLod2.element(dst).assign(id); })
+                .Else(() => { atomicStore(diagnostics.element(uint(8)), uint(1)); });
+              atomicOr(diagnostics.element(uint(16).add(id)), uint(4));
+            });
+          }
         }).Else(() => {
           atomicAdd(diagnostics.element(uint(1)), uint(1));
           atomicOr(diagnostics.element(uint(16).add(id)), uint(8));
@@ -1753,14 +1950,13 @@ export class TreeBeautyLod {
     // The band is named, not inferred from the command offset: with role-split
     // prototypes LOD1's first command is `partCount`, so an offset test would
     // silently give a multi-part middle LOD the full LOD0 shading path.
-    const middleLod = label === 'lod1';
     proto.parts.forEach((part, command) => {
       // Each prototype part has exactly one compacted hero consumer. Transfer the
       // loaded geometry rather than cloning it, keeping the draw-path delta below
       // the environment memory gate and making TreeBeautyLod its sole owner.
       const geometry = part.geometry;
       geometry.setIndirect(this._drawArgsAttr, (firstCommand + command) * 20);
-      const material = this._geometryMaterial(part, proto, visibleIds, middleLod);
+      const material = this._geometryMaterial(part, proto, visibleIds, label);
       const mesh = new Mesh(geometry, material);
       mesh.name = `tree-catalog-${label}-gpu-indirect-${command}`;
       // Directional shadows use a complete, light-owned authored-mesh list in
@@ -1776,7 +1972,9 @@ export class TreeBeautyLod {
     });
   }
 
-  _geometryMaterial(part, nativeProto, visibleIds, middleLod = false) {
+  _geometryMaterial(part, nativeProto, visibleIds, lodLabel = 'lod0') {
+    const middleLod = lodLabel !== 'lod0';
+    const farLod = lodLabel === 'lod2';
     const sourceId = visibleIds.toAttribute();
     const transform = this._sourceTransform.element(sourceId);
     const hero = this._sourceHero.element(sourceId);
@@ -1864,13 +2062,23 @@ export class TreeBeautyLod {
     // the same graph for both history frames preserves truthful TRAA velocity.
     const currentWind = vec3(packedWind.x, 0, packedWind.y);
     const previousWind = vec3(packedWind.z, 0, packedWind.w);
-    const windMotionAt = (sample) => {
-      const horizontal = vec2(sample.x, sample.z).mul(bendWeight);
+    const windMotionAt = (sample, time) => {
+      // Broad branch lag and finer leaf flutter share the measured wind strength.
+      // Smooth source-space phases keep neighboring foliage vertices together;
+      // independent tree seeds prevent a whole grove from moving in lockstep.
+      const phase = scaledSource.dot(vec3(0.73, 0.39, 0.61)).add(style.x.mul(19.7));
+      const branchLag = time.mul(1.15).add(phase.mul(0.45)).sin().mul(0.18).add(1);
+      const horizontal = vec2(sample.x, sample.z).mul(bendWeight).mul(branchLag);
       const arcDrop = horizontal.length().pow(2).div(transform.w.max(1)).mul(-0.22);
-      return vec3(horizontal.x, arcDrop, horizontal.y);
+      const strength = sample.length().min(12);
+      const flutter = time.mul(4.7).add(phase).sin()
+        .mul(strength).mul(0.006 * leafResponse).mul(atlasFoliageMask).mul(crownMask);
+      const crosswind = vec2(sample.z, sample.x.negate()).div(sample.length().max(0.01));
+      return vec3(horizontal.x, arcDrop, horizontal.y)
+        .add(vec3(crosswind.x, float(0.25), crosswind.y).mul(flutter));
     };
-    const world = staticWorld.add(windMotionAt(currentWind));
-    const previousWorld = staticWorld.add(windMotionAt(previousWind));
+    const world = staticWorld.add(windMotionAt(currentWind, this.environment.time));
+    const previousWorld = staticWorld.add(windMotionAt(previousWind, this.environment.previousTime));
     const needleNormalWorld = rotateYaw(normalLocal).normalize();
     // v4 branchlet tiles are local source sprays, not broad tree cards. Blend a
     // bounded outward parent-puffiness normal into those tiles only, leaving
@@ -1915,7 +2123,68 @@ export class TreeBeautyLod {
     const candidatePhongAtlas = (coniferV7 && part.material.map) || v8ProductionPhongAtlas;
     const cheapMiddleAtlas = middleLod && _isAuthoredAlphaAtlas(part)
       && !candidatePhongAtlas && part.material.map;
+    const cheapMiddleFoliage = middleLod && part.isFoliage && part.material.map;
+    const normalizedFirStructure = this.assetId === 'polyhaven-fir-tree-01'
+      && !part.isFoliage && part.material.map;
     let material = part.isFoliage || cheapMiddleAtlas ? null : part.material.clone();
+    if (normalizedFirStructure) {
+      // Preserve the complete source material contract—base colour, normal,
+      // ARM channels, UV transforms, roughness and metalness—while giving the
+      // exposed structural mesh the same shared environment and atmosphere as
+      // its canopy. `copy` transfers the authored glTF PBR inputs; colorNode
+      // changes only neutral exposure in linear light.
+      material = new SharedEnvironmentTreeStandardMaterial();
+      material.copy(part.material);
+      material.treeEnvironment = this.environment;
+      material.fog = false;
+      const sourceColorFactor = part.material.color;
+      material.colorNode = texture(part.material.map).rgb
+        .mul(vec3(sourceColorFactor.r, sourceColorFactor.g, sourceColorFactor.b))
+        .mul(FIR_SOURCE_STRUCTURE_LINEAR_NORMALIZATION);
+    }
+    if (cheapMiddleFoliage) {
+      // A source-split middle LOD keeps the exact authored foliage mesh, UVs,
+      // RGB, normals, normal/AO maps and external alpha, but it does not need to
+      // run MeshStandard's microfacet response for sub-pixel needles. Lambert
+      // retains real shared sun/sky and shadow reception while omitting the
+      // physically irrelevant needle specular branch. LOD0 remains the
+      // complete PBR presentation path; the catalog GLB still retains every
+      // source PBR map for that near representation.
+      const texel = texture(part.material.map);
+      material = new SharedEnvironmentTreeLambertMaterial({
+        side: DoubleSide,
+      });
+      material.name = part.material.name;
+      material.map = part.material.map;
+      material.normalMap = part.material.normalMap;
+      material.normalScale?.copy(part.material.normalScale);
+      material.aoMap = part.material.aoMap;
+      material.aoMapIntensity = part.material.aoMapIntensity;
+      material.alphaMap = part.material.alphaMap;
+      material.treeEnvironment = this.environment;
+      material.fog = false;
+      // Match the near PBR foliage's measured source-albedo normalization and
+      // restrained per-tree olive variation. The earlier raw JPEG value made
+      // the retained sprays technically present but nearly disappear against
+      // the mountain backdrop, which read as missing geometry rather than LOD.
+      const middleFoliageColor = foliageColorNode(part.material, tint);
+      const coverageCutoff = farLod
+        ? TREE_FAR_FOLIAGE_ALPHA_CUTOFF
+        : TREE_MIDDLE_FOLIAGE_ALPHA_CUTOFF;
+      material.colorNode = needleTransmission(
+        middleFoliageColor, transmissionFactor(), this.environment,
+      );
+      if (part.material.alphaMap) {
+        useStableFoliageCoverage(
+          material,
+          texture(part.material.alphaMap).r,
+          coverageCutoff,
+        );
+      } else {
+        useStableFoliageCoverage(material, texel.a, coverageCutoff);
+      }
+      material.side = DoubleSide;
+    }
     if (cheapMiddleAtlas) {
       // LOD1 is a source-derived silhouette but its atlas primitive is a
       // combined bark/needle material, so it cannot retain a separate trunk PBR
@@ -2019,13 +2288,23 @@ export class TreeBeautyLod {
       material.opacityNode = texel.a;
       material.alphaTest = TREE_ALPHA_CUTOFF;
     }
-    if (part.isFoliage) {
+    if (part.isFoliage && !cheapMiddleFoliage) {
       const foliageBaseColor = foliageColorNode(part.material, tint);
       material = makeFoliageMaterial(part.material, tint, foliageBaseColor);
       material.colorNode = needleTransmission(
         foliageBaseColor, transmissionFactor(), this.environment,
       );
-      if (part.material.map) useStableFoliageCoverage(material, texture(part.material.map).a);
+      // Poly Haven's source glTF packages often keep foliage RGB in JPEG and
+      // authored coverage in a separate alpha PNG. loadTreePrototype attaches
+      // that PNG as material.alphaMap; sampling baseColor.a here would always
+      // return one and discard the source cutout in the production TSL path.
+      // Prefer the declared alpha map and fall back to embedded RGBA only when
+      // the source asset actually carries coverage in its base-colour texture.
+      if (part.material.alphaMap) {
+        useStableFoliageCoverage(material, texture(part.material.alphaMap).r);
+      } else if (part.material.map) {
+        useStableFoliageCoverage(material, texture(part.material.map).a);
+      }
     }
     if (!cheapMiddleAtlas && _isAuthoredAlphaAtlas(part) && material.map) {
       // Combined v3 mesh: one draw, common PBR albedo, source alpha only.
@@ -2068,14 +2347,24 @@ export class TreeBeautyLod {
     const currentClip = mh.currentProjection.mul(mh.currentView.mul(vec4(world, 1.0)));
     const previousClip = mh.previousProjection.mul(mh.previousView.mul(vec4(previousWorld, 1.0)));
     material.positionNode = world;
-    // `normalNode` is view-space for the full PBR path. The authored-alpha LOD1
-    // branch is intentionally MeshBasic and already receives the shared
-    // vertex-lit daylight above; wiring a view-space normal into that material
-    // needlessly reintroduces the normal transform/normalization graph across
-    // every mid-tree fragment without changing its output. Keep the source
-    // normal response for LOD0 and leave the cheap role-graded path unlit by
-    // per-fragment normal evaluation.
-    if (!cheapMiddleAtlas) material.normalNode = shadingViewNormal;
+    // `normalNode` is view-space for the full PBR path. When the authored
+    // material has a normal map, decode it through Three's tangent-space
+    // NormalMapNode so the source texture and normalScale remain active, then apply
+    // the same storage-owned yaw used by positionNode. Assigning only the
+    // geometry normal here silently bypassed every retained glTF normal map.
+    // Materials without a normal map retain the cheaper hand-authored normal;
+    // the MeshBasic atlas branch remains vertex-lit and needs neither path.
+    if (!cheapMiddleAtlas) {
+      if (material.normalMap) {
+        const authoredNormalView = normalMap(
+          texture(material.normalMap),
+          vec2(material.normalScale?.x ?? 1, material.normalScale?.y ?? 1),
+        );
+        authoredNormalView.normalMapType = material.normalMapType;
+        material.normalNode = rotateYaw(authoredNormalView.transformDirection(cameraWorldMatrix))
+          .transformDirection(cameraViewMatrix).normalize();
+      } else material.normalNode = shadingViewNormal;
+    }
     material.transparent = false;
     if (material.map && part.usesAlphaCutout && !part.isFoliage && !_isAuthoredAlphaAtlas(part)) {
       // Canonical v3 embeds a real alpha-covered branchlet atlas. Use authored
@@ -2088,7 +2377,14 @@ export class TreeBeautyLod {
       material.alphaTest = Math.max(material.alphaTest || 0, TREE_ALPHA_CUTOFF);
     }
     material.depthWrite = true;
-    material.mrtNode = mrt({ velocity: currentClip.xy.div(currentClip.w).sub(previousClip.xy.div(previousClip.w)).toVarying('vTreeHeroVelocity') });
+    const treeVelocity = currentClip.xy.div(currentClip.w)
+      .sub(previousClip.xy.div(previousClip.w)).toVarying('vTreeHeroVelocity');
+    // GolfTRAA reserves velocity.z for thin/reactive coverage. At course scale,
+    // opaque authored limbs become subpixel coverage just like needles. Tag the
+    // complete tree so valid motion history integrates those real surfaces
+    // instead of erasing trunks or terminal branches during camera movement.
+    const reactiveThinCoverage = 1;
+    material.mrtNode = mrt({ velocity: vec4(treeVelocity, reactiveThinCoverage, 0) });
     material.needsUpdate = true;
     return material;
   }
@@ -2259,6 +2555,11 @@ export class TreeBeautyLod {
     this.uCameraPosition.value.copy(camera.position);
     this.uViewProjection.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.uProjectionScale.value.set(camera.projectionMatrix.elements[0], camera.projectionMatrix.elements[5]);
+    const presentationHeight = Math.max(1, this.renderer.domElement?.height ?? 720);
+    this.uCertifiedLod1ProjectedHeight.value = this.visualLodCertification.lod1 * 2
+      / presentationHeight;
+    this.uLod2ProjectedHeight.value = this.visualLodCertification.lod2 * 2
+      / presentationHeight;
     // Wind must complete before the indirect beauty draws are rendered. This
     // call is ordered with the existing compute queue, so the following clear,
     // compact, and finalize passes and the later scene render observe this frame's
@@ -2272,25 +2573,39 @@ export class TreeBeautyLod {
   _readAuthoredMeshDiagnostics(commands, values) {
     const behindRejected = values[0];
     const frustumRejected = values[1];
-    const overflow = values[6] | values[7];
+    const overflow = values[6] | values[7] | (this.useFarLod ? values[8] : 0);
     const lod0Count = commands[this._lod0CountWord];
     const lod1Count = commands[this._lod1CountWord];
+    const lod2Count = this.useFarLod ? commands[this._lod2CountWord] : 0;
     const memberships = values.slice(16);
     let invalidMembership = 0;
     const transitionMembership = values[4];
     for (const bits of memberships) {
-      if (bits !== 1 && bits !== 2 && bits !== 8) invalidMembership++;
+      if (bits !== 1 && bits !== 2 && bits !== 8 && !(this.useFarLod && bits === 4)) invalidMembership++;
     }
     let siblingCountsEqual = true;
     for (let command = 0; command < this._commandCount; command++) {
-      const expected = command < this.partCount ? lod0Count : lod1Count;
+      const expected = command < this.partCount ? lod0Count
+        : (command < this.partCount * 2 ? lod1Count : lod2Count);
       if (commands[command * 5 + 1] !== expected) siblingCountsEqual = false;
+    }
+    const submittedTrianglesByRole = {};
+    for (const [lod, count] of [['lod0', lod0Count], ['lod1', lod1Count], ['lod2', lod2Count]]) {
+      for (const [role, triangles] of Object.entries(this.roleTriangles[lod] ?? {})) {
+        submittedTrianglesByRole[role] = (submittedTrianglesByRole[role] ?? 0) + triangles * count;
+      }
     }
     return {
       assetId: this.assetId,
       sourceCount: this.sourceCount,
       middleLodUsable: this.useMiddleLod,
-      visibleCount: lod0Count + lod1Count,
+      visibleCount: lod0Count + lod1Count + lod2Count,
+      visibleStructuralCount: lod0Count + lod1Count + lod2Count,
+      visibleFoliageCount: lod0Count + lod1Count + lod2Count,
+      completeTreeResidency: true,
+      fullSourceTopologyResidency: this.forceFullLod,
+      structuralResidencyComplete: lod0Count + lod1Count + lod2Count
+        + behindRejected + frustumRejected === this.sourceCount,
       behindRejected,
       frustumRejected,
       distanceRejected: 0,
@@ -2298,6 +2613,7 @@ export class TreeBeautyLod {
       policyBudgetRejected: 0,
       lod0Count,
       lod1Count,
+      lod2Count,
       impostorCount: 0,
       transitionMembership,
       overflow,
@@ -2307,17 +2623,24 @@ export class TreeBeautyLod {
       partCount: this.partCount,
       lod0Draws: this.partCount,
       lod1Draws: this.partCount,
+      lod2Draws: this.useFarLod ? this.partCount : 0,
       impostorDraws: 0,
       beautyDraws: this._commandCount,
+      sourceTrianglesByLodAndRole: this.roleTriangles,
+      submittedTrianglesByRole,
+      submittedTriangles: Object.values(submittedTrianglesByRole).reduce((sum, count) => sum + count, 0),
       thresholds: {
         lodNear: this.uLodNear.value,
         lodFar: this.uLodFar.value,
         lod0ProjectedHeight: this.residencyThresholds.lod0 * this._workloadPolicy.projectedLod0Scale,
+        certifiedLod1ProjectedPixels: this.visualLodCertification.lod1,
+        certifiedLod2ProjectedPixels: this.visualLodCertification.lod2,
+        lod2ProjectedHeight: this.uLod2ProjectedHeight.value,
         handoff: 'exclusive',
       },
       workload: this.workloadDiagnostics(),
       classificationComplete: invalidMembership === 0 && overflow === 0 && siblingCountsEqual
-        && lod0Count + lod1Count + behindRejected + frustumRejected
+        && lod0Count + lod1Count + lod2Count + behindRejected + frustumRejected
           === this.sourceCount,
     };
   }
@@ -2395,7 +2718,7 @@ export class TreeBeautyLod {
     if (this.authoredMeshOnly) {
       const thresholds = this.residencyThresholds;
       const projectedLod0Threshold = thresholds.lod0 * this._workloadPolicy.projectedLod0Scale;
-      const counts = { lod0: 0, lod1: 0, impostor: 0, rejected: 0 };
+      const counts = { lod0: 0, lod1: 0, lod2: 0, impostor: 0, rejected: 0 };
       const projectedHeights = [];
       for (let index = 0; index < this.sourceCount; index++) {
         const x = this.shadowRecords[index * 4];
@@ -2411,10 +2734,12 @@ export class TreeBeautyLod {
           lodNear: this.uLodNear.value,
           lodFar: this.uLodFar.value,
           projectedLod0Threshold,
+          projectedLod2Threshold: this.useFarLod ? this.uLod2ProjectedHeight.value : 0,
           forceFullLod: this.forceFullLod,
         });
         if (lod === 0) counts.lod0++;
-        else counts.lod1++;
+        else if (lod === 1) counts.lod1++;
+        else counts.lod2++;
       }
       return {
         assetId: this.assetId,
@@ -2426,11 +2751,16 @@ export class TreeBeautyLod {
           lodNear: this.uLodNear.value,
           lodFar: this.uLodFar.value,
           lod0ProjectedHeight: projectedLod0Threshold,
+          lod2ProjectedHeight: this.uLod2ProjectedHeight.value,
           handoff: 'exclusive',
         },
         forcedFullLod: this.forceFullLod,
         lod0Only: false,
-        classificationComplete: counts.lod0 + counts.lod1 === this.sourceCount,
+        sourceTrianglesByLodAndRole: this.roleTriangles,
+        submittedTriangles: Object.entries(counts).reduce((total, [lod, count]) => (
+          total + Object.values(this.roleTriangles[lod] ?? {}).reduce((sum, triangles) => sum + triangles, 0) * count
+        ), 0),
+        classificationComplete: counts.lod0 + counts.lod1 + counts.lod2 === this.sourceCount,
         workload: this.workloadDiagnostics(),
       };
     }
@@ -2483,6 +2813,7 @@ export class TreeBeautyLod {
       this._sourceWind.value,
       this._visibleLod0.value,
       this._visibleLod1.value,
+      this._visibleLod2?.value,
       this._visibleImpostor?.value,
       this._drawArgsAttr,
       this._diagnosticAttr,
@@ -2498,9 +2829,9 @@ export function buildTreeBeautyLod(proto, midProto, impostor, impostorTexture, p
 // Production path: both representations are verified authored GLBs. The class
 // intentionally does not accept an atlas texture or substitute representation;
 // missing or malformed LOD1 data fails before any production mesh is created.
-export function buildTreeBeautyMeshLod(proto, midProto, placements, options = {}) {
+export function buildTreeBeautyMeshLod(proto, midProto, farProto, placements, options = {}) {
   return new TreeBeautyLod({
-    proto, midProto, placements, authoredMeshOnly: true, ...options,
+    proto, midProto, farProto, placements, authoredMeshOnly: true, ...options,
   });
 }
 
@@ -2509,7 +2840,7 @@ export function buildTreeBeautyLod0(proto, placements, options = {}) {
 }
 
 // Production shadows keep a complete source list made from the verified authored
-// LOD1 GLB.  This is a shadow-only instance list, not a proxy or substitute shape:
+// farthest mesh LOD. This is a shadow-only instance list, not a proxy or substitute shape:
 // it retains the catalog geometry, UVs, normals, and alpha/PBR material.  The
 // directional camera cannot reuse a beauty-camera compacted list because trees
 // outside that camera can still cast into visible turf, and its cached map must
@@ -2524,7 +2855,9 @@ export class TreeShadowLod {
     this.beauty = beauty;
     beauty._shadowPolicyOwner = this;
     this.mesh = new Group();
-    this.mesh.name = 'tree-shadow-complete-authored-lod1';
+    this.shadowLod = beauty.useFarLod ? 2 : (beauty.useMiddleLod ? 1 : 0);
+    this.mesh.name = `tree-shadow-complete-authored-lod${this.shadowLod}`;
+    this._lastWindShadowTime = beauty.environment.time.value;
     this.mesh.layers.set(1);
     this.sourceCount = beauty.sourceCount;
     this.partCount = beauty.partCount;
@@ -2532,7 +2865,7 @@ export class TreeShadowLod {
     this.materials = [];
     const prototype = beauty.shadowPrototype;
     if (!prototype?.parts?.length || prototype.parts.length !== this.partCount) {
-      throw new Error('TreeShadowLod requires the verified authored LOD1 prototype.');
+      throw new Error('TreeShadowLod requires the verified authored far-mesh prototype.');
     }
     if (!(beauty.shadowTransforms instanceof Float32Array)
       || beauty.shadowTransforms.length !== this.sourceCount * 5) {
@@ -2544,9 +2877,18 @@ export class TreeShadowLod {
     const matrix = new Matrix4();
     const up = new Vector3(0, 1, 0);
     prototype.parts.forEach((part, partIndex) => {
-      const material = cloneLod0Material(part.material);
-      const shadowMesh = new InstancedMesh(part.geometry, material, this.sourceCount);
-      shadowMesh.name = `tree-shadow-authored-lod1-${partIndex}`;
+      // Use the exact beauty deformation with a complete, uncompacted source ID
+      // list. Off-camera trees still cast, and source alpha stays registered.
+      const animated = beauty.wind.model === 'hierarchical-tree-v1';
+      const material = animated
+        ? beauty._geometryMaterial(part, prototype, { toAttribute: () => instanceIndex }, `lod${this.shadowLod}`)
+        : cloneLod0Material(part.material);
+      // Beauty geometry owns a camera-compacted indirect command. Sharing it
+      // overrides InstancedMesh.count and drops unrelated shadow casters.
+      const geometry = part.geometry.clone();
+      geometry.setIndirect(null);
+      const shadowMesh = new InstancedMesh(geometry, material, this.sourceCount);
+      shadowMesh.name = `tree-shadow-authored-lod${this.shadowLod}-${partIndex}`;
       shadowMesh.instanceMatrix.setUsage(StaticDrawUsage);
       for (let index = 0; index < this.sourceCount; index++) {
         const offset = index * 5;
@@ -2567,6 +2909,14 @@ export class TreeShadowLod {
       shadowMesh.frustumCulled = true;
       shadowMesh.layers.set(1);
       shadowMesh.computeBoundingSphere();
+      if (animated) {
+        // The material already resolves world-space source transforms. Retain
+        // the full planted bounds computed above, then avoid applying them twice.
+        matrix.identity();
+        for (let index = 0; index < this.sourceCount; index++) shadowMesh.setMatrixAt(index, matrix);
+        shadowMesh.instanceMatrix.needsUpdate = true;
+        shadowMesh.boundingSphere.radius += 2;
+      }
       shadowMesh.userData.treeSourcePartIndex = partIndex;
       shadowMesh.userData.treeSourceCount = this.sourceCount;
       this.mesh.add(shadowMesh);
@@ -2577,14 +2927,17 @@ export class TreeShadowLod {
   }
 
   update() {
-    // Beauty compute already updates the shared indirect LOD lists before the
-    // shadow pass. The shadow map can remain cached until Lighting invalidates it.
-    return false;
+    const { environment, wind } = this.beauty;
+    const time = environment.time.value;
+    if (wind.model !== 'hierarchical-tree-v1' || time === this._lastWindShadowTime) return false;
+    this._lastWindShadowTime = time;
+    if (environment.baseWind.value.lengthSq() < 0.0001 && environment.windProfile.value.w < 0.0001) return false;
+    this.light.shadow.needsUpdate = true;
+    return true;
   }
 
   setWorkloadPolicy(policy = undefined) {
     this.beauty.setWorkloadPolicy(policy);
-    this.light.shadow.needsUpdate = true;
     return this;
   }
 
@@ -2602,9 +2955,10 @@ export class TreeShadowLod {
       visibleCount: this.sourceCount,
       shadowDraws: this.partCount,
       shadowBatchDraws: this.meshes.length,
-      shadowResidency: 'complete-authored-lod1',
-      lod0Count: 0,
-      lod1Count: this.sourceCount,
+      shadowResidency: `complete-authored-lod${this.shadowLod}`,
+      lod0Count: this.shadowLod === 0 ? this.sourceCount : 0,
+      lod1Count: this.shadowLod === 1 ? this.sourceCount : 0,
+      lod2Count: this.shadowLod === 2 ? this.sourceCount : 0,
       transitionMembership: 0,
       workload: this.beauty.workloadDiagnostics(),
       classificationComplete: true,
@@ -2613,6 +2967,7 @@ export class TreeShadowLod {
 
   dispose() {
     this.mesh.clear();
+    for (const mesh of this.meshes) mesh.geometry.dispose();
     for (const material of this.materials) material.dispose();
     this.meshes.length = 0;
     this.materials.length = 0;

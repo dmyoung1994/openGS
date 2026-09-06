@@ -75,6 +75,41 @@ export class ProposalLedger {
     return { project: this.project, revision: projectRevision(this.project), applied };
   }
 
+  recordExternalProjectChange({ id, summary, title, rationale, threadId = null, project, metadata = {} }) {
+    const before = this.project;
+    const after = normalizeCourseProject(project);
+    if (projectRevision(before) === projectRevision(after)) return null;
+    const proposalId = String(id).toLowerCase().replace(/_/g, '-').slice(0, 64);
+    const proposal = this.addProposal({
+      id: proposalId,
+      summary,
+      baseRevision: projectRevision(before),
+      threadId,
+      items: [{
+        id: `${proposalId.slice(0, 52)}-checkpoint`,
+        title,
+        rationale,
+        dependencies: [],
+        // The event stores the authoritative whole-project before/after snapshots.
+        // This metadata mutation keeps the history item compatible with the typed
+        // proposal UI without pretending a direct live turn was one small object edit.
+        mutation: {
+          op: 'replace', entityType: 'project', entityId: before.meta.id,
+          value: structuredClone(after.meta),
+        },
+      }],
+    });
+    const item = this._item(proposal.id, proposal.items[0].id);
+    this.project = after;
+    item.status = 'applied';
+    const event = this._record('apply', proposal.id, item.id, before, after, {
+      externalProjectCheckpoint: true,
+      ...structuredClone(metadata),
+    });
+    this.state.redo = [];
+    return { proposal: structuredClone(this._proposal(proposal.id)), event: structuredClone(event), ...this.snapshot() };
+  }
+
   undo(eventId = null) {
     const applied = this.state.history.filter((event) => event.kind === 'apply' && !event.undoneAt);
     const target = eventId ? applied.find((event) => event.id === eventId) : applied.at(-1);

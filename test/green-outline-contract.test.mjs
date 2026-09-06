@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const rangeSource = await readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8');
+const rangeSource = await readFile(new URL('../src/scene/PlayableCourseScene.js', import.meta.url), 'utf8');
 
 test('greens inherit continuous landform and never add a radial height patch', () => {
   const start = rangeSource.indexOf('// Greens inherit the continuous course landform');

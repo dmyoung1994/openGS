@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js WebGPU Performance"
+  short_description: "Profile and optimize Three.js WebGPU scenes"
+  default_prompt: "Audit this Three.js/WebGPU scene with deterministic production-path measurements, isolate the bottleneck, implement evidence-backed optimizations, and verify visual and performance regressions."

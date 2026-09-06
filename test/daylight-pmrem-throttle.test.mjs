@@ -139,3 +139,23 @@ test('initial and explicit rebuild requests remain forced, and policy is measura
   assert.equal(manager._daylightPmremRevision, -1);
   assert.deepEqual(request, { force: true, reason: 'explicit', now: 1234 });
 });
+
+
+test('daylight refresh reuses the native PMREM target and keeps its texture alive', () => {
+  const target = { texture: {}, dispose() { assert.fail('An active PMREM target was disposed'); } };
+  const calls = [];
+  const manager = Object.assign(Object.create(SceneManager.prototype), {
+    renderer: { isWebGPURenderer: true, _background: new Map() },
+    scene: { environmentRotation: { set() {} } }, weatherSky: { iblBackgroundNode: {} },
+    _environmentBindings: daylightEnvironment(1), _daylightPmremTarget: null,
+    _pmremGenerator: { fromScene(_scene, _sigma, _near, _far, options) {
+      calls.push(options.renderTarget); return options.renderTarget ?? target;
+    } },
+  });
+  for (const revision of [1, 2, 3]) {
+    manager._environmentBindings.daylightRevision = revision;
+    assert.equal(manager._rebuildDaylightPmrem({ now: revision * 1000 }), true);
+    assert.equal(manager.scene.environment, target.texture);
+  }
+  assert.deepEqual(calls, [null, target, target]);
+});

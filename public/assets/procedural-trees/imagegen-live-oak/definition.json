@@ -1,0 +1,187 @@
+{
+  "id": "imagegen-live-oak",
+  "generator": "parametric",
+  "seed": 1,
+  "variantCount": 3,
+  "parameters": {
+    "shape": "hemispherical",
+    "gScale": 15,
+    "gScaleV": 0.8,
+    "levels": 3,
+    "ratio": 0.04715003500315715,
+    "ratioPower": 1.0856986106922153,
+    "flare": 0.995494244648132,
+    "baseSplits": 0,
+    "levelsParameters": [
+      {
+        "baseSize": 0.18,
+        "downAngle": 55,
+        "downAngleV": 8,
+        "rotate": 137.5,
+        "rotateV": 10,
+        "branches": 1,
+        "length": 1,
+        "lengthV": 0,
+        "taper": 1,
+        "segSplits": 0,
+        "splitAngle": 24,
+        "splitAngleV": 6,
+        "curveRes": 9,
+        "curve": 3,
+        "curveV": 8,
+        "curveBack": 0,
+        "bendV": 6,
+        "branchDist": 1,
+        "radiusMod": 1,
+        "branchPattern": "alternate",
+        "helixTurns": 0
+      },
+      {
+        "baseSize": 0.15,
+        "downAngle": 57,
+        "downAngleV": 8,
+        "rotate": 139,
+        "rotateV": 10,
+        "branches": 26,
+        "length": 0.6389678588412366,
+        "lengthV": 0.08,
+        "taper": 1,
+        "segSplits": 0,
+        "splitAngle": 24,
+        "splitAngleV": 6,
+        "curveRes": 5,
+        "curve": 7,
+        "curveV": 8,
+        "curveBack": 0,
+        "bendV": 6,
+        "branchDist": 1,
+        "radiusMod": 0.5,
+        "branchPattern": "alternate",
+        "helixTurns": 0
+      },
+      {
+        "baseSize": 0.15,
+        "downAngle": 42,
+        "downAngleV": 8,
+        "rotate": 137.5,
+        "rotateV": 10,
+        "branches": 13,
+        "length": 0.4886714951284604,
+        "lengthV": 0.08,
+        "taper": 1,
+        "segSplits": 0,
+        "splitAngle": 24,
+        "splitAngleV": 6,
+        "curveRes": 4,
+        "curve": 10,
+        "curveV": 8,
+        "curveBack": 0,
+        "bendV": 6,
+        "branchDist": 1,
+        "radiusMod": 0.46,
+        "branchPattern": "alternate",
+        "helixTurns": 0
+      },
+      {
+        "baseSize": 0.15,
+        "downAngle": 36,
+        "downAngleV": 8,
+        "rotate": 137.5,
+        "rotateV": 10,
+        "branches": 5,
+        "length": 0.38,
+        "lengthV": 0.08,
+        "taper": 1,
+        "segSplits": 0,
+        "splitAngle": 24,
+        "splitAngleV": 6,
+        "curveRes": 3,
+        "curve": 10,
+        "curveV": 8,
+        "curveBack": 0,
+        "bendV": 6,
+        "branchDist": 1,
+        "radiusMod": 0.42,
+        "branchPattern": "alternate",
+        "helixTurns": 0
+      },
+      {
+        "baseSize": 0.15,
+        "downAngle": 30,
+        "downAngleV": 8,
+        "rotate": 137.5,
+        "rotateV": 10,
+        "branches": 3,
+        "length": 0.3,
+        "lengthV": 0.08,
+        "taper": 1,
+        "segSplits": 0,
+        "splitAngle": 24,
+        "splitAngleV": 6,
+        "curveRes": 2,
+        "curve": 10,
+        "curveV": 8,
+        "curveBack": 0,
+        "bendV": 6,
+        "branchDist": 1,
+        "radiusMod": 0.38,
+        "branchPattern": "alternate",
+        "helixTurns": 0
+      }
+    ],
+    "leaves": {
+        "count": 6000,
+      "shape": "oval",
+        "scale": 0.48,
+        "scaleX": 0.85,
+      "bend": 0.25,
+      "stemLength": 0.03
+    },
+    "blossoms": {
+      "count": 0,
+      "shape": "oval",
+      "scale": 0.12,
+      "rate": 0
+    },
+    "tropism": [
+      0,
+      0.18,
+      0
+    ],
+    "pruning": {
+      "ratio": 0,
+      "width": 0.4095600909274789,
+      "peak": 0.5363479720985175,
+      "powerLow": 0.5,
+      "powerHigh": 0.5
+    },
+    "pruningVolumes": [],
+    "multipleTrunks": {
+      "count": 1,
+      "radius": 0
+    }
+  },
+  "materials": {
+    "bark": {
+      "color": "#4b3a2b",
+      "roughness": 0.96
+    },
+    "leaves": {
+        "color": "#ffffff",
+      "roughness": 0.9,
+        "alphaCutoff": 0.24,
+      "doubleSided": true,
+      "textureUrl": "/assets/procedural-trees/imagegen-live-oak/leaf.ktx2"
+    },
+    "blossoms": {
+      "color": "#f2d7d9",
+      "roughness": 0.8
+    }
+  },
+  "source": {
+    "kind": "imagegen",
+    "referenceUrl": "/assets/procedural-trees/imagegen-live-oak/reference.png",
+    "promptHash": "6768325e0b8161e3c02ec935f2861da3b98e4c78ec243f4ca33f1e680d734d34",
+    "fitness": 0.7075737847222222
+  }
+}

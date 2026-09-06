@@ -23,7 +23,7 @@ test('production renderer has one strict hardware-WebGPU backend', async () => {
 test('required environment assets fail closed before rendering', async () => {
   const [main, range, terrain, bunkers, course, ball, backdrop] = await Promise.all([
     source('src/main.js'),
-    source('src/scene/Range.js'),
+    source('src/scene/PlayableCourseScene.js'),
     source('src/terrain/Terrain.js'),
     source('src/scene/Bunkers.js'),
     source('src/course/course.js'),
@@ -127,7 +127,7 @@ test('continuous grass LOD keeps its near carpet and fits the fixed record buffe
     records += 2 * Math.PI * r * dr * candidateDensity * aliveProbability;
   }
   assert.ok(records < capacity, `${Math.ceil(records)} worst-case records exceed ${capacity}`);
-  assert.equal(triangleBudget, 9_961_472,
+  assert.equal(triangleBudget, 11_534_336,
     'grass workload must be bounded by submitted triangles rather than one full-detail blade count');
 });
 
@@ -164,7 +164,7 @@ test('strict benchmark cannot alter the renderer workload', async () => {
   assert.match(benchmark, /quality\.acquirePresentationLock\(\{ mode, renderScale \}\)/);
   assert.match(benchmark, /quality\.releasePresentationLock\(lockId\)/);
   assert.match(benchmark, /presentationQualityMode = 'quality'/);
-  assert.match(benchmark, /presentationRenderScale = 0\.90/);
+  assert.match(benchmark, /presentationRenderScale = 1\.0/);
   assert.match(benchmark, /qualityDiagnostics\.presentationLock\?\.active !== true/,
     'every scenario must prove that the quality lock remains active');
   assert.match(benchmark, /function viewportDimensionSignature\(viewport\)/);
@@ -227,8 +227,8 @@ test('local evaluation uses one observable canonical range endpoint', async () =
     source('vite.config.js'),
     source('scripts/shot.mjs'),
   ]);
-  assert.match(vite, /server:\s*\{\s*port:\s*5173,\s*host:\s*true,\s*strictPort:\s*true\s*\}/,
-    'Vite must fail rather than silently create stale 5174/5175 range servers');
+  assert.match(vite, /server:\s*\{\s*port:\s*5173,\s*host:\s*'127\.0\.0\.1',\s*strictPort:\s*true\s*\}/,
+    'Vite must stay loopback-only and fail rather than silently create stale 5174/5175 range servers');
   assert.match(shot, /const evaluation = await page\.evaluate\(arg\('eval'\)\)/,
     'the engine capture hook must retain the evaluated diagnostic result');
   assert.match(shot, /console\.log\(`eval \$\{JSON\.stringify\(evaluation\)\}`\)/,

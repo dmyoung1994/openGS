@@ -169,6 +169,8 @@ export function buildHazardPatchGeometry(feature, {
     }
     return (low + high) * 0.5;
   };
+  // The authored outline is invariant across rings; solve each ray only once.
+  const boundaries = Float64Array.from({ length: radial }, (_, segment) => boundaryAt(segment / radial * Math.PI * 2));
   const centerHeight = heightAt ? heightAt(feature.x, feature.z) + yOffset : yOffset;
   const positions = [feature.x, centerHeight, feature.z];
   const normals = [];
@@ -183,7 +185,7 @@ export function buildHazardPatchGeometry(feature, {
     const wallConcentrated = 1 - (1 - u) * (1 - u);
     for (let segment = 0; segment < radial; segment++) {
       const angle = segment / radial * Math.PI * 2;
-      const boundary = boundaryAt(angle);
+      const boundary = boundaries[segment];
       const radius = boundary * wallConcentrated + collarWidth * Math.max(0, (u - 0.94) / 0.06);
       const collarTaper = 1 - Math.max(0, (u - 0.90) / 0.10) * 0.78;
       const x = feature.x + Math.cos(angle) * radius;
