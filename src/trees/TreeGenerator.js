@@ -37,16 +37,23 @@ export function generateTreeSkeleton(rawDefinition, { seed } = {}) {
 // The geometry here is only the resting shape. Seating each root against the real
 // surface happens per instance on the GPU, because one shared geometry has to serve
 // placements standing on entirely different slopes.
-function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng }) {
+function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, limitsReached, clump }) {
   const { rootCount, rootSpread, rootDepth, rootRise } = plant.structure;
   const count = Math.round(rootCount);
   if (count < 1 || trunkRadius <= 0) return;
   const resolution = 4;
   for (let index = 0; index < count; index++) {
+    // Roots are stems and spend the same budget every other stem does. A multi-stem
+    // shrub multiplies its trunk count by its root count, so this is the difference
+    // between a bounded plant and one that quietly overruns the documented limit.
+    if (segments.length + resolution > TREE_LIMITS.maxSegments) { limitsReached.add('structure'); return; }
     // Spread the roots around the trunk, jittered so they never read as a turbine.
     const around = azimuth + (index + 0.5) / count * Math.PI * 2 + varied(rng, 2.0 / count);
     const outward = [Math.cos(around), 0, Math.sin(around)];
-    const reach = trunkRadius * rootSpread * (0.55 + rng() * 0.9);
+    // In a clump each stem is crowded by its neighbours, so roots run out into open
+    // ground and stay stubby where they would otherwise drive into the next stem.
+    const openness = clump ? 0.5 + 0.5 * (outward[0] * clump[0] + outward[2] * clump[1]) : 1;
+    const reach = trunkRadius * rootSpread * (0.55 + rng() * 0.9) * (0.35 + 0.65 * openness);
     const depth = trunkRadius * rootDepth * (0.8 + rng() * 0.4);
     const rise = trunkRadius * rootRise * (0.8 + rng() * 0.4);
     // Start inside the trunk so the root emerges from its flare instead of being
@@ -172,8 +179,12 @@ function generateParametric(parameters, seed, plant) {
     let lean = trunkCount === 1 ? [0, 1, 0] : normalize([start[0] * 0.045, 1, start[2] * 0.045]);
     if (plant) lean = normalize(add(lean, [plant.structure.leanX, 0, plant.structure.leanZ]));
     addStem({ start, direction: lean, length: height, radius: height * parameters.ratio, level: 0, azimuth: angle, id: `trunk-${trunk}` });
-    if (plant) addRoots({ segments, start, trunkRadius: height * parameters.ratio, plant, azimuth: angle, trunk,
-      rng: createRng(deriveSeed(seed, `roots:${trunk}`)) });
+    if (plant) addRoots({
+      segments, start, trunkRadius: height * parameters.ratio, plant, azimuth: angle, trunk, limitsReached,
+      // Direction out of the clump for a multi-stem plant; null for a single trunk.
+      clump: distance > 1e-4 ? [start[0] / distance, start[2] / distance] : null,
+      rng: createRng(deriveSeed(seed, `roots:${trunk}`)),
+    });
   }
 
   const leafSpec = { ...parameters.leaves };

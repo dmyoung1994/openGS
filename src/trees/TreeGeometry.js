@@ -1,9 +1,6 @@
 import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
 
 const ROOT_BARK_WRAP = 0.3;
-// Blade proportions for a root's cross section: narrow across, deep through.
-const ROOT_SECTION_WIDE = 0.55;
-const ROOT_SECTION_TALL = 1.85;
 
 function meshBuffer(positions, uvs, indices, rootBlend = null) {
   const geometry = new BufferGeometry();
@@ -61,8 +58,11 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
           // The thickening is reported within the zone of rapid taper, so it is
           // strongest at the stump and relaxes to a round runner further out.
           const beam = 1 - stations[i].blend;
-          const wide = 1 + (ROOT_SECTION_WIDE - 1) * beam;
-          const tall = 1 + (ROOT_SECTION_TALL - 1) * beam;
+          // One control: the section deepens by `rootBlade` and narrows by its
+          // reciprocal, so the blade changes shape without gaining bulk.
+          const blade = plant.structure.rootBlade;
+          const wide = 1 + (1 / blade - 1) * beam;
+          const tall = 1 + (blade - 1) * beam;
           const gauge = (axis) => wide + (tall - wide) * Math.abs(axis.y);
           p.addScaledVector(right, Math.cos(angle) * radius * gauge(right))
             .addScaledVector(forward, Math.sin(angle) * radius * gauge(forward));
