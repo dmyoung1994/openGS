@@ -18,14 +18,15 @@ const FRAME_MARGIN_BOTTOM = 0.18;
 const ADDRESS_SECONDS = 0.25;
 const HOLED_HIDE_SECONDS = 0.35;
 const HOLED_CLEAR_SECONDS = 0.55;
-// The stroke floats clear of the turf rather than tracing it. Terrain height comes
-// from a bilinear 0.6 m collision grid, which is only C0 - re-seating a line on it
-// reproduces a crease at every cell boundary, and sampling it once per frame makes
-// the spacing depend on how fast the ball happens to be moving. Neither belongs in a
-// presentation ribbon, so the drawn curve is built once, evenly, and lifted away from
-// the surface it was derived from. The ball itself is untouched and still sits on
-// exact production physics.
-const TRACER_LIFT_M = 0.12;
+// The stroke runs through the centre of the ball that drew it, which is where a
+// trace belongs: any lift reads as the line hovering over its own ball. It still
+// does not trace the terrain - height comes from a bilinear 0.6 m collision grid,
+// only C0, so re-seating a line on it reproduces a crease at every cell boundary,
+// and sampling it once per frame makes spacing depend on how fast the ball happens
+// to be moving. The curve is built once and evenly from the solved samples, which
+// are ball centres, so zero lift puts it exactly on the ball's axis. The ball itself
+// is untouched and still sits on exact production physics.
+const TRACER_LIFT_M = 0;
 // Control spacing of the drawn curve. Uniform by construction, because the ribbon's
 // Catmull-Rom is uniformly parameterised and wobbles through unevenly spaced points.
 const TRACER_PATH_SPACING_M = 0.05;

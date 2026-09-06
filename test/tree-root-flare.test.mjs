@@ -30,13 +30,18 @@ test('every preset produces roots proportioned to its own trunk, and none where 
     assert.ok(first.radius0 > last.radius1 * 2,
       `${name} roots must taper rapidly, got ${first.radius0} to ${last.radius1}`);
 
-    // Every root has to finish below grade or it terminates in mid air.
+    // Every root has to finish below grade or it terminates in mid air. Primaries
+    // additionally leave the trunk above it; a secondary branches off its parent
+    // partway out, by which point that parent has already descended.
     const trunkStems = new Set(roots.map((segment) => segment.stem));
+    let forks = 0;
     for (const stem of trunkStems) {
       const run = roots.filter((segment) => segment.stem === stem);
       assert.ok(run.at(-1).end[1] < 0, `${name} root ${stem} must end below grade`);
+      if (run[0].rootFork) { forks++; continue; }
       assert.ok(run[0].start[1] > 0, `${name} root ${stem} must leave the trunk above grade`);
     }
+    assert.ok(forks > 0, `${name} roots must divide as they run, not stay single tubes`);
   }
 });
 
@@ -178,12 +183,13 @@ test('the cleared footprint is derived from the same numbers that build the flar
   const record = { definitionId: definition.id, scale: 1 };
   const radius = proceduralTreeFlareRadius(record, [definition]);
 
-  // It has to cover whichever reaches further: the flared trunk or its roots.
-  const roots = trunkRadius * definition.plant.structure.rootSpread;
+  // It covers the flare and deliberately stops there: turf belongs between surface
+  // roots, so clearing out to the root tips would leave an unnaturally bare disc.
   const flare = trunkRadius * (1 + definition.parameters.flare);
-  assert.ok(Math.abs(radius - Math.max(roots, flare)) < 1e-9,
-    `footprint must cover the wider of flare and roots, got ${radius}`);
+  assert.ok(Math.abs(radius - flare) < 1e-9, `footprint must match the flare, got ${radius}`);
   assert.ok(radius > trunkRadius, 'and always exceed the bare trunk');
+  assert.ok(radius < trunkRadius * definition.plant.structure.rootSpread,
+    'but must not reach the root tips, or grass cannot grow between the runners');
 
   // Scale is a placement property, so the footprint has to follow it.
   const doubled = proceduralTreeFlareRadius({ ...record, scale: 2 }, [definition]);

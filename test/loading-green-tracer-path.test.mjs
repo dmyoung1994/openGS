@@ -31,7 +31,7 @@ function solvedSamples() {
   return samples;
 }
 
-test('the drawn stroke is evenly spaced, lifted, and pinned to the real endpoints', () => {
+test('the drawn stroke is evenly spaced and pinned to the real endpoints', () => {
   const samples = solvedSamples();
   const path = buildTracerPath(samples, { spacing: 0.05, passes: 2, lift: 0.12 });
 
@@ -47,6 +47,16 @@ test('the drawn stroke is evenly spaced, lifted, and pinned to the real endpoint
     assert.ok(Math.abs(point.y - (sample.y + 0.12)) < 1e-6, 'every control sits one lift above grade');
   }
   assert.ok(path.total > 8 && path.total < 12);
+
+  // The samples are ball centres, so the shipped default must not lift off them:
+  // any offset reads as the trace hovering over the ball that drew it.
+  const shipped = buildTracerPath(samples);
+  const grounded = buildTracerPath(samples, { lift: 0 });
+  assert.equal(shipped.points.length, grounded.points.length);
+  for (let i = 0; i < shipped.points.length; i++) {
+    assert.equal(shipped.points[i].y, grounded.points[i].y,
+      'the default stroke must run through the ball centre, not above it');
+  }
 });
 
 test('smoothing removes collision-grid creases without flattening the putt break', () => {

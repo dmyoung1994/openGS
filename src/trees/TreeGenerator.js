@@ -71,10 +71,17 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     // of the soil and covered by it; the trunk's own flare is what reads, not a set
     // of limbs standing clear of the ground.
     const surfaceAt = (at, atRadius) => atRadius * (Math.sin(at * emerge + phase) * 0.6 - 0.2);
-    const radius0Start = trunkRadius * (0.52 + rng() * 0.26);
+    const radius0Start = trunkRadius * (0.34 + rng() * 0.18);
     let radius = radius0Start;
     const stem = -1 - (trunk * count + index);
     const id = `root-${trunk}-${index}`;
+    // Photographed surface roots divide as they run: a main runner splits and sends
+    // secondaries off at a shallow angle. An undivided tube is the giveaway that
+    // something was extruded rather than grown, so each root forks once partway out.
+    const forkAt = Math.floor(resolution * (0.45 + rng() * 0.25));
+    const forkSide = rng() < 0.5 ? -1 : 1;
+    const forkSpread = 0.35 + rng() * 0.45;
+    let forkFrom = null;
     for (let step = 0; step < resolution; step++) {
       const t = (step + 1) / resolution;
       // Arch out and down: mostly outward near the trunk, mostly downward at the tip.
@@ -98,15 +105,46 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
       const nextRadius = Math.max(0.004, (radius0Start * (1 - t) ** 1.15 + trunkRadius * 0.09) * knuckle);
       const was = step / resolution;
       segments.push({ start: point, end: next, radius0: radius, radius1: nextRadius,
-        level: 0, stem, id, parent: null, role: 'root',
+        level: 0, stem, id, parent: null, role: 'root', rootFork: false,
         // 0 where the root leaves the trunk, 1 at the tip: how strongly the GPU is
         // allowed to pull this station onto the terrain surface.
         rootBlend0: was ** 1.5, rootBlend1: t ** 1.5,
         // And where it rides once seated, so the seating buries it rather than
         // laying it on top of the turf.
         rootSurface0: surfaceAt(was, radius), rootSurface1: surfaceAt(t, nextRadius) });
+      if (step === forkAt) forkFrom = { at: next, t, radius: nextRadius };
       point = next;
       radius = nextRadius;
+    }
+
+    // The secondary carries on shallower and thinner than the runner that shed it.
+    if (!forkFrom || segments.length + resolution > TREE_LIMITS.maxSegments) continue;
+    const forkAzimuth = around + forkSide * forkSpread;
+    const forkOut = [Math.cos(forkAzimuth), 0, Math.sin(forkAzimuth)];
+    const forkReach = reach * (0.45 + rng() * 0.3);
+    let forkPoint = forkFrom.at;
+    let forkRadius = forkFrom.radius * (0.55 + rng() * 0.2);
+    const forkStem = stem - count * 64;
+    for (let step = 0; step < resolution; step++) {
+      const t = (step + 1) / resolution;
+      const span = forkReach * Math.sin(t * Math.PI * 0.5);
+      const next = [
+        forkFrom.at[0] + forkOut[0] * span,
+        forkFrom.at[1] - (Math.abs(forkFrom.at[1]) + depth * 0.5) * t * t,
+        forkFrom.at[2] + forkOut[2] * span,
+      ];
+      const knuckle = 1 + Math.sin(t * knuckleRate * 1.4 + knucklePhase) * 0.15;
+      const nextRadius = Math.max(0.003, forkRadius * (1 - t) ** 1.1 * knuckle + trunkRadius * 0.03);
+      const was = step / resolution;
+      segments.push({ start: forkPoint, end: next, radius0: forkRadius, radius1: nextRadius,
+        level: 0, stem: forkStem, id: `${id}-f`, parent: null, role: 'root', rootFork: true,
+        // Already well out from the trunk, so a secondary is seated on the surface
+        // along its whole length rather than easing in from a collar.
+        rootBlend0: Math.max(0.55, forkFrom.t), rootBlend1: 1,
+        rootSurface0: surfaceAt(forkFrom.t + was * 0.4, forkRadius),
+        rootSurface1: surfaceAt(forkFrom.t + t * 0.4, nextRadius) });
+      forkPoint = next;
+      forkRadius = nextRadius;
     }
   }
 }

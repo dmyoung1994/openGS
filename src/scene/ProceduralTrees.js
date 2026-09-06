@@ -31,9 +31,12 @@ export function proceduralTreeFlareRadius(record, definitions) {
   const parameters = definition.parameters ?? {};
   const trunkRadius = (parameters.gScale ?? 0) * (parameters.ratio ?? 0);
   if (!(trunkRadius > 0)) return 0;
-  const flare = 1 + (parameters.flare ?? 0);
-  const roots = definition.plant ? definition.plant.structure.rootSpread : 0;
-  return trunkRadius * Math.max(flare, roots) * (record.scale ?? 1);
+  // Only the flare, deliberately not the root spread. Grass does grow between
+  // surface roots - the photographed runners have weeds all around them - so
+  // clearing out to the root tips leaves an unnaturally bare disc. What has to be
+  // cleared is the dense wood at the base, where a blade would sprout from solid
+  // trunk; past that the runners are thin and mostly buried, and turf belongs.
+  return trunkRadius * (1 + (parameters.flare ?? 0)) * (record.scale ?? 1);
 }
 
 // A generated tree is an explicit authored source. It never participates in the
