@@ -58,14 +58,18 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
           // The thickening is reported within the zone of rapid taper, so it is
           // strongest at the stump and relaxes to a round runner further out.
           const beam = 1 - stations[i].blend;
-          // One control: the section deepens by `rootBlade` and narrows by its
-          // reciprocal, so the blade changes shape without gaining bulk.
+          // A T-beam is an internal structural section, not a silhouette: what shows
+          // above ground is a rounded, flanged hump whose underside is buried. So the
+          // section is full over the top, a little narrow across, and tucked beneath -
+          // not the symmetric knife a plain deep ellipse produces.
           const blade = plant.structure.rootBlade;
-          const wide = 1 + (1 / blade - 1) * beam;
-          const tall = 1 + (blade - 1) * beam;
-          const gauge = (axis) => wide + (tall - wide) * Math.abs(axis.y);
-          p.addScaledVector(right, Math.cos(angle) * radius * gauge(right))
-            .addScaledVector(forward, Math.sin(angle) * radius * gauge(forward));
+          const crown = 1 + (blade - 1) * beam;
+          const wide = 1 + (1 / Math.sqrt(blade) - 1) * beam;
+          const belly = 1 + (1 / blade - 1) * beam;
+          const dir = right.clone().multiplyScalar(Math.cos(angle)).addScaledVector(forward, Math.sin(angle));
+          const lift = dir.y;
+          const gauge = wide + ((lift > 0 ? crown : belly) - wide) * Math.abs(lift);
+          p.addScaledVector(dir, radius * gauge);
         } else {
           p.addScaledVector(right, Math.cos(angle) * radius).addScaledVector(forward, Math.sin(angle) * radius);
         }

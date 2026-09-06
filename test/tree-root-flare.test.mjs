@@ -97,29 +97,44 @@ test('roots are compiled into the near tier only, and never reach the shadow tie
   assert.deepEqual(blendCounts.slice(1), [0, 0], 'reduced tiers, and so the shadow pass, carry none');
 });
 
-test('the blade section deepens a root without inflating it', () => {
-  const definition = createTreePreset('tall-pine', 6);
-  const skeleton = generateTreeSkeleton(definition, { seed: 6 });
+// Measured on one isolated root: across a whole flare the vertex bounds are set by
+// where the roots are, not by the shape of their sections, which hides the effect.
+test('the root section is a flanged hump rather than a symmetric knife', () => {
+  const RADIAL = 12;
+  const skeleton = {
+    segments: [{
+      start: [0, 0.3, 0], end: [1.2, 0, 0], radius0: 0.2, radius1: 0.1,
+      level: 0, stem: -1, id: 'root-0-0', parent: null, role: 'root',
+      rootBlend0: 0, rootBlend1: 1,
+    }],
+    leaves: [], blossoms: [],
+  };
   const sectionFor = (blade) => {
-    const plant = structuredClone(definition.plant);
+    const plant = structuredClone(createTreePreset('tall-pine', 6).plant);
     plant.structure.rootBlade = blade;
-    const geometry = compileTreeGeometry(skeleton, { radialSegments: 9, plant, includeRoots: true });
+    const geometry = compileTreeGeometry(skeleton, { radialSegments: RADIAL, plant, includeRoots: true });
     const position = geometry.branches.attributes.position.array;
-    const blend = geometry.branches.attributes.rootBlend.array;
-    // Measure the ring at the stump end of a root, where the thickening is strongest.
-    let minY = Infinity, maxY = -Infinity, minX = Infinity, maxX = -Infinity;
-    for (let i = 0; i < blend.length; i++) {
-      if (blend[i] !== 0) continue;
-      const y = position[i * 3 + 1], x = position[i * 3];
-      if (y > 3) continue;                       // ignore the trunk's own stations
-      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    // The first ring is the stump end, where the thickening is strongest.
+    let above = 0, below = 0, across = 0;
+    for (let i = 0; i <= RADIAL; i++) {
+      above = Math.max(above, position[i * 3 + 1] - 0.3);
+      below = Math.max(below, 0.3 - position[i * 3 + 1]);
+      across = Math.max(across, Math.abs(position[i * 3 + 2]));
     }
-    return { depth: maxY - minY, width: maxX - minX };
+    return { above, below, across };
   };
   const round = sectionFor(1);
-  const bladed = sectionFor(2.5);
-  assert.ok(bladed.depth > round.depth, 'a higher blade ratio must deepen the section');
-  assert.ok(PLANT_CONTROLS.structure.rootBlade[1] === 1,
-    'blade ratio 1 is the round runner and must be the floor');
+  assert.ok(Math.abs(round.above - round.below) < 1e-6, 'ratio 1 must be a round runner');
+  assert.equal(PLANT_CONTROLS.structure.rootBlade[1], 1, 'the round runner is the floor');
+
+  const humped = sectionFor(2.5);
+  assert.ok(humped.above > round.above, 'a higher ratio must raise the crown');
+  assert.ok(humped.below < round.below, 'and tuck the buried underside');
+  // The flange does widen the silhouette a little - that is what a flange is - but
+  // the section must gain height far faster than width, or it is just a bigger tube.
+  assert.ok(humped.across / round.across < (humped.above / round.above) * 0.6,
+    `height must outgrow width, got ${(humped.across / round.across).toFixed(2)}x across `
+    + `vs ${(humped.above / round.above).toFixed(2)}x up`);
+  assert.ok(humped.above > humped.below * 2,
+    `the section must be asymmetric, got ${humped.above.toFixed(3)} over ${humped.below.toFixed(3)}`);
 });

@@ -41,7 +41,7 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
   const { rootCount, rootSpread, rootDepth, rootRise } = plant.structure;
   const count = Math.round(rootCount);
   if (count < 1 || trunkRadius <= 0) return;
-  const resolution = 4;
+  const resolution = 6;
   for (let index = 0; index < count; index++) {
     // Roots are stems and spend the same budget every other stem does. A multi-stem
     // shrub multiplies its trunk count by its root count, so this is the difference
@@ -60,6 +60,7 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     // stuck to the outside of it.
     let point = add(start, [outward[0] * trunkRadius * 0.35, rise, outward[2] * trunkRadius * 0.35]);
     // The roots are the flare, so they leave the trunk thick and shed it quickly.
+    const sway = (rng() - 0.5) * 0.9;
     const radius0Start = trunkRadius * (0.52 + rng() * 0.26);
     let radius = radius0Start;
     const stem = -1 - (trunk * count + index);
@@ -67,10 +68,14 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     for (let step = 0; step < resolution; step++) {
       const t = (step + 1) / resolution;
       // Arch out and down: mostly outward near the trunk, mostly downward at the tip.
+      // Wander off the radial line as it runs. Roots that stay in one vertical plane
+      // are what make a set of them read as machined fins rather than as growth.
+      const wander = Math.sin(t * Math.PI * (0.7 + sway)) * sway * reach * 0.45;
+      const span = trunkRadius * 0.35 + reach * Math.sin(t * Math.PI * 0.5);
       const next = add(start, [
-        outward[0] * (trunkRadius * 0.35 + reach * Math.sin(t * Math.PI * 0.5)),
+        outward[0] * span - outward[2] * wander,
         rise - (rise + depth) * t * t,
-        outward[2] * (trunkRadius * 0.35 + reach * Math.sin(t * Math.PI * 0.5)),
+        outward[2] * span + outward[0] * wander,
       ]);
         // Danjon's "zone of rapid taper": structural roots lose diameter steeply over
       // the first couple of trunk diameters and then run on thin. A gentle linear
