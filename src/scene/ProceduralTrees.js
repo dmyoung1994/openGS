@@ -133,8 +133,9 @@ export class ProceduralTreeForest {
         // roots are seated per vertex against the terrain rather than being modelled
         // into the mesh. `rootBlend` is 0 everywhere on the trunk and foliage, so only
         // root stations move, easing in from the trunk collar to the tip.
+        const rootBlend = attribute('rootBlend');
         const base = this.rootSeating
-          ? vec3(placed.x, this.rootSeating(placed, attribute('rootBlend')), placed.z)
+          ? vec3(placed.x, this.rootSeating(placed, rootBlend.x, rootBlend.y.mul(attribute('treeScale').y)), placed.z)
           : placed;
         const weight = raw.y.max(0).div(height).pow(2).mul(treeInstance.x).mul(settings.strength * (1 - settings.stiffness * 0.8));
         const foliage = !draw.name.endsWith('branches');
@@ -363,7 +364,7 @@ function buildRootSeating(terrain) {
   const { minX, minZ, maxX, maxZ } = terrain.bounds;
   const sizeX = maxX - minX, sizeZ = maxZ - minZ;
   const load = (x, z) => textureLoad(heightTex, ivec2(int(x), int(z))).x;
-  return (world, blend) => {
+  return (world, blend, surface) => {
     const gx = world.x.sub(minX).div(sizeX).mul(terrain.nx - 1).clamp(0, terrain.nx - 1.001);
     const gz = world.z.sub(minZ).div(sizeZ).mul(terrain.nz - 1).clamp(0, terrain.nz - 1.001);
     const ix = gx.floor(), iz = gz.floor();
@@ -371,8 +372,10 @@ function buildRootSeating(terrain) {
     const ground = mix(
       mix(load(ix, iz), load(ix.add(1), iz), fx),
       mix(load(ix, iz.add(1)), load(ix.add(1), iz.add(1)), fx), fz);
-    // Sink the tip slightly so a root ends in soil rather than sitting on the surface.
-    return mix(world.y, ground.sub(ROOT_EMBED_M), blend.clamp(0, 1));
+    // Seat to the surface plus the station's own emergence offset, so a root is
+    // buried for stretches and breaks through between them instead of being laid
+    // whole on top of the turf.
+    return mix(world.y, ground.sub(ROOT_EMBED_M).add(surface), blend.clamp(0, 1));
   };
 }
 

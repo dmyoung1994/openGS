@@ -88,10 +88,14 @@ test('roots are compiled into the near tier only, and never reach the shadow tie
       radialSegments: Math.max(3, 9 - tier * 3), leafStride: [1, 2, 4][tier],
       plant: definition.plant, includeRoots: tier === 0,
     });
-    const blend = geometry.branches.attributes.rootBlend.array;
+    const attribute = geometry.branches.attributes.rootBlend;
     // The attribute must exist on every tier: one compiled material serves them all.
-    assert.equal(blend.length, geometry.branches.attributes.position.count);
-    return blend.reduce((n, value) => n + (value > 0 ? 1 : 0), 0);
+    // It carries (seat weight, emergence offset) per vertex.
+    assert.equal(attribute.itemSize, 2);
+    assert.equal(attribute.count, geometry.branches.attributes.position.count);
+    let seatable = 0;
+    for (let i = 0; i < attribute.count; i++) if (attribute.getX(i) > 0) seatable++;
+    return seatable;
   });
   assert.ok(blendCounts[0] > 0, 'the near tier carries seatable root vertices');
   assert.deepEqual(blendCounts.slice(1), [0, 0], 'reduced tiers, and so the shadow pass, carry none');
@@ -99,8 +103,10 @@ test('roots are compiled into the near tier only, and never reach the shadow tie
 
 // Measured on one isolated root: across a whole flare the vertex bounds are set by
 // where the roots are, not by the shape of their sections, which hides the effect.
-test('the root section is a flanged hump rather than a symmetric knife', () => {
+test('the root section spreads flat against the soil rather than standing on edge', () => {
   const RADIAL = 12;
+  // Roots ring denser than the wood they grow from, so the first ring is wider.
+  const ROOT_RING = RADIAL + 6;
   const skeleton = {
     segments: [{
       start: [0, 0.3, 0], end: [1.2, 0, 0], radius0: 0.2, radius1: 0.1,
@@ -109,14 +115,14 @@ test('the root section is a flanged hump rather than a symmetric knife', () => {
     }],
     leaves: [], blossoms: [],
   };
-  const sectionFor = (blade) => {
+  const sectionFor = (flatten) => {
     const plant = structuredClone(createTreePreset('tall-pine', 6).plant);
-    plant.structure.rootBlade = blade;
+    plant.structure.rootFlatten = flatten;
     const geometry = compileTreeGeometry(skeleton, { radialSegments: RADIAL, plant, includeRoots: true });
     const position = geometry.branches.attributes.position.array;
     // The first ring is the stump end, where the thickening is strongest.
     let above = 0, below = 0, across = 0;
-    for (let i = 0; i <= RADIAL; i++) {
+    for (let i = 0; i <= ROOT_RING; i++) {
       above = Math.max(above, position[i * 3 + 1] - 0.3);
       below = Math.max(below, 0.3 - position[i * 3 + 1]);
       across = Math.max(across, Math.abs(position[i * 3 + 2]));
@@ -125,16 +131,16 @@ test('the root section is a flanged hump rather than a symmetric knife', () => {
   };
   const round = sectionFor(1);
   assert.ok(Math.abs(round.above - round.below) < 1e-6, 'ratio 1 must be a round runner');
-  assert.equal(PLANT_CONTROLS.structure.rootBlade[1], 1, 'the round runner is the floor');
+  assert.equal(PLANT_CONTROLS.structure.rootFlatten[1], 1, 'the round runner is the floor');
 
-  const humped = sectionFor(2.5);
-  assert.ok(humped.above > round.above, 'a higher ratio must raise the crown');
-  assert.ok(humped.below < round.below, 'and tuck the buried underside');
-  // The flange does widen the silhouette a little - that is what a flange is - but
-  // the section must gain height far faster than width, or it is just a bigger tube.
-  assert.ok(humped.across / round.across < (humped.above / round.above) * 0.6,
-    `height must outgrow width, got ${(humped.across / round.across).toFixed(2)}x across `
-    + `vs ${(humped.above / round.above).toFixed(2)}x up`);
-  assert.ok(humped.above > humped.below * 2,
-    `the section must be asymmetric, got ${humped.above.toFixed(3)} over ${humped.below.toFixed(3)}`);
+  // Photographed oak flares are broad masses lying in the soil: wide across, low
+  // over the top, flat beneath. A section that grows upward is the knife-on-edge
+  // failure this replaced.
+  const spread = sectionFor(2.5);
+  assert.ok(spread.across > round.across * 1.5, 'a higher ratio must spread it wider');
+  assert.ok(spread.above < round.above, 'and dome it lower, not raise it');
+  assert.ok(spread.below < round.below, 'with the buried underside flattened');
+  assert.ok(spread.across > spread.above * 2,
+    `the section must lie flat, got ${spread.across.toFixed(3)} across `
+    + `by ${spread.above.toFixed(3)} up`);
 });

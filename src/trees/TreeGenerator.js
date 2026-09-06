@@ -61,6 +61,15 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     let point = add(start, [outward[0] * trunkRadius * 0.35, rise, outward[2] * trunkRadius * 0.35]);
     // The roots are the flare, so they leave the trunk thick and shed it quickly.
     const sway = (rng() - 0.5) * 0.9;
+    // A surface root is mostly buried and shows as a run of intermittent humps, not
+    // as a limb lying on the lawn. This rides each station relative to the ground it
+    // will be seated against: under for stretches, breaking through between them.
+    // Each root gets its own rhythm, or a whole flare ripples in unison.
+    const emerge = 2.5 + rng() * 2.5, phase = rng() * Math.PI * 2;
+    // Low relief. In photographed oak flares the radiating roots are barely proud
+    // of the soil and covered by it; the trunk's own flare is what reads, not a set
+    // of limbs standing clear of the ground.
+    const surfaceAt = (at, atRadius) => atRadius * (Math.sin(at * emerge + phase) * 0.6 - 0.2);
     const radius0Start = trunkRadius * (0.52 + rng() * 0.26);
     let radius = radius0Start;
     const stem = -1 - (trunk * count + index);
@@ -77,15 +86,19 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
         rise - (rise + depth) * t * t,
         outward[2] * span + outward[0] * wander,
       ]);
-        // Danjon's "zone of rapid taper": structural roots lose diameter steeply over
+      // Danjon's "zone of rapid taper": structural roots lose diameter steeply over
       // the first couple of trunk diameters and then run on thin. A gentle linear
       // taper is what makes a root read as a foot rather than a buttress.
-    const nextRadius = Math.max(0.004, radius0Start * (1 - t) ** 1.7 + trunkRadius * 0.05);
+      const nextRadius = Math.max(0.004, radius0Start * (1 - t) ** 1.15 + trunkRadius * 0.09);
+      const was = step / resolution;
       segments.push({ start: point, end: next, radius0: radius, radius1: nextRadius,
         level: 0, stem, id, parent: null, role: 'root',
         // 0 where the root leaves the trunk, 1 at the tip: how strongly the GPU is
         // allowed to pull this station onto the terrain surface.
-        rootBlend0: (step / resolution) ** 1.5, rootBlend1: t ** 1.5 });
+        rootBlend0: was ** 1.5, rootBlend1: t ** 1.5,
+        // And where it rides once seated, so the seating buries it rather than
+        // laying it on top of the turf.
+        rootSurface0: surfaceAt(was, radius), rootSurface1: surfaceAt(t, nextRadius) });
       point = next;
       radius = nextRadius;
     }
@@ -183,7 +196,12 @@ function generateParametric(parameters, seed, plant) {
     const start = [Math.sin(angle) * distance, 0, Math.cos(angle) * distance];
     let lean = trunkCount === 1 ? [0, 1, 0] : normalize([start[0] * 0.045, 1, start[2] * 0.045]);
     if (plant) lean = normalize(add(lean, [plant.structure.leanX, 0, plant.structure.leanZ]));
-    addStem({ start, direction: lean, length: height, radius: height * parameters.ratio, level: 0, azimuth: angle, id: `trunk-${trunk}` });
+    // Begin the trunk below grade so the terrain cuts it. Ending exactly at grade
+    // leaves the flare's base ring as a hard rim lying on the ground; a real trunk
+    // simply disappears into the soil. The above-ground length is unchanged.
+    const sink = plant ? height * parameters.ratio * 0.7 : 0;
+    addStem({ start: [start[0], start[1] - sink, start[2]], direction: lean, length: height + sink,
+      radius: height * parameters.ratio, level: 0, azimuth: angle, id: `trunk-${trunk}` });
     if (plant) addRoots({
       segments, start, trunkRadius: height * parameters.ratio, plant, azimuth: angle, trunk, limitsReached,
       // Direction out of the clump for a multi-stem plant; null for a single trunk.

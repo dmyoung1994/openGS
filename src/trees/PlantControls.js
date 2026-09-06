@@ -10,10 +10,12 @@ export const PLANT_CONTROLS = Object.freeze({
     // measured "zone of rapid taper" for pine: roots originating within about
     // 2.2 x DBH of the stem, which is 4.4 trunk radii (Danjon et al.).
     rootCount: [0, 0, 8], rootSpread: [4.4, 0, 9], rootDepth: [0.5, 0, 3], rootRise: [0.9, 0, 4],
-    // Depth-to-width of a root's cross section: 1 is a round runner, higher is a
-    // deeper blade. Conifers section hard, oaks carry broader masses, and a palm
-    // is a monocot with no secondary thickening at all (rootCount 0).
-    rootBlade: [1.85, 1, 3],
+    // How far a root's cross section flattens against the ground: 1 is a round
+    // runner, higher spreads wider and domes lower. A surface root is a broad mass
+    // hugging the soil, not a blade standing on edge - reading the reported I-beam
+    // sections as depth is what produced knife silhouettes. A palm is a monocot with
+    // no secondary thickening at all (rootCount 0).
+    rootFlatten: [1.7, 1, 3],
   },
   foliage: {
     density: [1, 0, 2], variation: [0.2, 0, 0.8], spread: [0.15, 0, 1],

@@ -1,6 +1,11 @@
 import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
 
 const ROOT_BARK_WRAP = 0.3;
+// Scratch axes for the root section, which is built world-aligned rather than on the
+// tube's own rolled frame so a flattened root always lies flat against the ground.
+const ROOT_UP = new Vector3(0, 1, 0);
+const ROOT_ACROSS = new Vector3();
+const ROOT_OVER = new Vector3();
 
 function meshBuffer(positions, uvs, indices, rootBlend = null) {
   const geometry = new BufferGeometry();
@@ -9,7 +14,7 @@ function meshBuffer(positions, uvs, indices, rootBlend = null) {
   // Always present, even on tiers carrying no roots and on foliage: the tiers share
   // one compiled material, so an attribute the shader reads cannot be conditional.
   geometry.setAttribute('rootBlend', new BufferAttribute(
-    rootBlend ? new Float32Array(rootBlend) : new Float32Array(positions.length / 3), 1));
+    rootBlend ? new Float32Array(rootBlend) : new Float32Array(positions.length / 3 * 2), 2));
   geometry.setIndex(indices);
   geometry.computeVertexNormals(); geometry.computeBoundingBox(); geometry.computeBoundingSphere();
   return geometry;
@@ -30,8 +35,12 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
     list.push(segment);
   }
   for (const segments of new Set(stems.values())) {
-    const stations = [{ point: segments[0].start, radius: segments[0].radius0, blend: segments[0].rootBlend0 ?? 0 },
-      ...segments.map(s => ({ point: s.end, radius: s.radius1, blend: s.rootBlend1 ?? 0 }))];
+    const stations = [
+      { point: segments[0].start, radius: segments[0].radius0, blend: segments[0].rootBlend0 ?? 0, surface: segments[0].rootSurface0 ?? 0 },
+      ...segments.map(s => ({ point: s.end, radius: s.radius1, blend: s.rootBlend1 ?? 0, surface: s.rootSurface1 ?? 0 }))];
+    // A rounded hump facets badly at trunk resolution. Roots are near-tier only and
+    // few, so they can afford a denser ring than the wood they grow from.
+    const ringCount = segments[0].role === 'root' ? radialSegments + 6 : radialSegments;
     const start = positions.length / 3;
     let right = null, length = 0;
     for (let i = 0; i < stations.length; i++) {
@@ -43,33 +52,48 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
       if (!right || right.lengthSq() < 0.1) right = new Vector3().crossVectors(tangent, Math.abs(tangent.y) < 0.95 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0)).normalize();
       const forward = new Vector3().crossVectors(right, tangent).normalize();
       if (i) length += point.distanceTo(new Vector3(...stations[i - 1].point));
-      for (let j = 0; j <= radialSegments; j++) {
-        const angle = j / radialSegments * Math.PI * 2;
+      for (let j = 0; j <= ringCount; j++) {
+        const angle = j / ringCount * Math.PI * 2;
         let radius = stations[i].radius;
-        if (plant && segments[0].level === 0 && segments[0].role !== 'root') radius *= 1 + plant.structure.buttress * Math.max(0, 1 - point.y / 1.5) ** 2 * (0.5 + 0.5 * Math.cos(angle * Math.round(plant.structure.buttressCount)));
+        if (plant && segments[0].level === 0 && segments[0].role !== 'root') {
+          // Swell toward the roots, not on an unrelated cosine. A root emerging from
+          // a smooth cone leaves a hard intersection seam; emerging from the bulge
+          // that grew it, the seam sits inside the swell where it belongs. The lobe
+          // phase is taken in world azimuth so it matches where addRoots put them.
+          const lobes = Math.round(plant.structure.rootCount) || Math.round(plant.structure.buttressCount);
+          const dir = right.clone().multiplyScalar(Math.cos(angle)).addScaledVector(forward, Math.sin(angle));
+          const azimuth = Math.atan2(dir.z, dir.x);
+          // The flare zone is a property of the tree, not a fixed 1.5 m: that height
+          // is the foot of a pine and the whole of a shrub. Scale it to the trunk the
+          // lobes are actually fluting.
+          const zone = Math.max(0.2, segments[0].radius0 * 5);
+          radius *= 1 + plant.structure.buttress * Math.max(0, 1 - point.y / zone) ** 2
+            * (0.5 + 0.5 * Math.cos(azimuth * lobes + Math.PI));
+        }
         if (plant && segments[0].parent && i === 0) radius *= 1 + plant.structure.collar;
-        // Structural roots are not tubes. Excavations of pine report I-beam and
-        // T-beam cross sections through the zone of rapid taper - secondary
-        // thickening about the vertical axis - so the section is a vertically
-        // deepened blade, narrow across and tall through. Building it in world axes
-        // keeps the blade upright however the tube's frame happens to be rolled.
         const p = point.clone();
         if (segments[0].role === 'root') {
           // The thickening is reported within the zone of rapid taper, so it is
           // strongest at the stump and relaxes to a round runner further out.
           const beam = 1 - stations[i].blend;
-          // A T-beam is an internal structural section, not a silhouette: what shows
-          // above ground is a rounded, flanged hump whose underside is buried. So the
-          // section is full over the top, a little narrow across, and tucked beneath -
-          // not the symmetric knife a plain deep ellipse produces.
-          const blade = plant.structure.rootBlade;
-          const crown = 1 + (blade - 1) * beam;
-          const wide = 1 + (1 / Math.sqrt(blade) - 1) * beam;
-          const belly = 1 + (1 / blade - 1) * beam;
-          const dir = right.clone().multiplyScalar(Math.cos(angle)).addScaledVector(forward, Math.sin(angle));
-          const lift = dir.y;
-          const gauge = wide + ((lift > 0 ? crown : belly) - wide) * Math.abs(lift);
-          p.addScaledVector(dir, radius * gauge);
+          // A T-beam is an internal structural section, not a silhouette. What shows
+          // above ground is a broad mass spread against the soil: wide across, domed
+          // over the top, flat beneath. Treating the reported depth as silhouette
+          // depth produced knives standing on edge.
+          const flatten = plant.structure.rootFlatten;
+          const wide = 1 + (flatten - 1) * beam;
+          const crown = 1 + (1 / Math.sqrt(flatten) - 1) * beam;
+          const belly = 1 + (1 / flatten - 1) * beam;
+          // A true ellipse on world-aligned axes, not an angular gauge blend: scaling
+          // a circle's radius by direction leaves raised shoulders near 45 degrees
+          // that stand higher than the pole, which is the knife edge coming back.
+          const across = ROOT_ACROSS.crossVectors(tangent, ROOT_UP);
+          if (across.lengthSq() < 1e-6) across.copy(right);
+          across.normalize();
+          const overIt = ROOT_OVER.crossVectors(across, tangent).normalize();
+          const rise = Math.sin(angle);
+          p.addScaledVector(across, Math.cos(angle) * radius * wide)
+            .addScaledVector(overIt, rise * radius * (rise > 0 ? crown : belly));
         } else {
           p.addScaledVector(right, Math.cos(angle) * radius).addScaledVector(forward, Math.sin(angle) * radius);
         }
@@ -77,17 +101,17 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
         // Bark ridges are laid out across the normalized circumference, so a thin tube
         // packs the same ridge count into far fewer radial segments and beats against
         // them. Roots wrap a proportionally shorter span of bark instead of aliasing.
-        uvs.push(j / radialSegments * (segments[0].role === 'root' ? ROOT_BARK_WRAP : 1), length);
-        rootBlend.push(stations[i].blend);
-        if (i && j < radialSegments) {
-          const a = start + (i - 1) * (radialSegments + 1) + j, b = a + radialSegments + 1;
+        uvs.push(j / ringCount * (segments[0].role === 'root' ? ROOT_BARK_WRAP : 1), length);
+        rootBlend.push(stations[i].blend, stations[i].surface);
+        if (i && j < ringCount) {
+          const a = start + (i - 1) * (ringCount + 1) + j, b = a + ringCount + 1;
           indices.push(a, b, a + 1, a + 1, b, b + 1);
         }
       }
     }
     // End caps only, using existing perimeter vertices.
-    for (const [ring, reverse] of [[start, true], [start + (stations.length - 1) * (radialSegments + 1), false]]) {
-      for (let j = 1; j < radialSegments - 1; j++) indices.push(ring, ring + (reverse ? j + 1 : j), ring + (reverse ? j : j + 1));
+    for (const [ring, reverse] of [[start, true], [start + (stations.length - 1) * (ringCount + 1), false]]) {
+      for (let j = 1; j < ringCount - 1; j++) indices.push(ring, ring + (reverse ? j + 1 : j), ring + (reverse ? j : j + 1));
     }
   }
   return meshBuffer(positions, uvs, indices, rootBlend);
@@ -162,7 +186,7 @@ export function packTreeGeometry(geometry) {
 export function unpackTreeGeometry(packed) {
   return Object.fromEntries(Object.entries(packed).map(([key, mesh]) => {
     const geometry = new BufferGeometry();
-    for (const [name, size] of [['position', 3], ['normal', 3], ['uv', 2], ['rootBlend', 1]]) {
+    for (const [name, size] of [['position', 3], ['normal', 3], ['uv', 2], ['rootBlend', 2]]) {
       // A missing array here becomes an attribute whose `array` is undefined, which
       // only fails much later inside BufferGeometry.clone(). Reject it at the seam.
       if (!mesh[name]) throw new Error(`Packed tree geometry is missing its ${name} attribute.`);
