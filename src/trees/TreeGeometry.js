@@ -1,9 +1,36 @@
 import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
 
-const ROOT_BARK_WRAP = 0.3;
+// Bark ridges are laid across the NORMALIZED circumference, so every tube gets the
+// same ridge count regardless of girth: a thin root packs the trunk's whole count
+// into a tiny perimeter and beats against its own segments as a zebra pattern.
+// Wrapping a root proportionally to its actual radius makes ridge spacing constant
+// in world units, which is both what bark does and what stops the aliasing. Bounded
+// so a hair-thin tip still carries some texture rather than going plastic.
+const ROOT_BARK_MIN_WRAP = 0.16;
 // Scratch axes for the root section, which is built world-aligned rather than on the
 // tube's own rolled frame so a flattened root always lies flat against the ground.
 const ROOT_UP = new Vector3(0, 1, 0);
+
+// A photographed root collar is knobbly: its ridges differ in width and depth and
+// no two are alike. A single cosine gives a perfectly regular rosette, which is the
+// machined look again in a different guise. Beating the lobe count against two
+// neighbouring harmonics keeps the roots' own count dominant while breaking the
+// regularity, and the phases come from the tree's seed so a stand is not clones.
+function flutingPhases(seed) {
+  let h = (seed >>> 0) || 1;
+  const next = () => {
+    h ^= h << 13; h >>>= 0; h ^= h >> 17; h ^= h << 5; h >>>= 0;
+    return h / 4294967296;
+  };
+  return [next() * Math.PI * 2, next() * Math.PI * 2, 0.55 + next() * 0.35, 0.18 + next() * 0.22];
+}
+function fluting(azimuth, lobes, [phaseA, phaseB, weightA, weightB]) {
+  const primary = 0.5 + 0.5 * Math.cos(azimuth * lobes + Math.PI);
+  const secondary = 0.5 + 0.5 * Math.cos(azimuth * (lobes + 1) + phaseA);
+  const tertiary = 0.5 + 0.5 * Math.cos(azimuth * Math.max(2, lobes - 2) + phaseB);
+  const total = weightA + weightB;
+  return primary * (1 - total) + secondary * weightA + tertiary * weightB;
+}
 const ROOT_ACROSS = new Vector3();
 const ROOT_OVER = new Vector3();
 
@@ -23,6 +50,7 @@ function meshBuffer(positions, uvs, indices, rootBlend = null) {
 // One shared ring per stem station: no interior cylinder caps or shading seams.
 function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
   const positions = [], uvs = [], indices = [], rootBlend = [], stems = new Map();
+  const flutingPhase = flutingPhases(skeleton.seed ?? 1);
   for (const segment of skeleton.segments) {
     // Roots are near-field only. Dropping them from the reduced tiers also keeps them
     // out of the shadow pass, which draws from tier 1.
@@ -41,6 +69,8 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
     // A rounded hump facets badly at trunk resolution. Roots are near-tier only and
     // few, so they can afford a denser ring than the wood they grow from.
     const ringCount = segments[0].role === 'root' ? radialSegments + 6 : radialSegments;
+    const trunkRadius = skeleton.segments.find(
+      (segment) => segment.level === 0 && segment.role !== 'root')?.radius0 ?? 0;
     const start = positions.length / 3;
     let right = null, length = 0;
     for (let i = 0; i < stations.length; i++) {
@@ -68,7 +98,7 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
           // lobes are actually fluting.
           const zone = Math.max(0.2, segments[0].radius0 * 5);
           radius *= 1 + plant.structure.buttress * Math.max(0, 1 - point.y / zone) ** 2
-            * (0.5 + 0.5 * Math.cos(azimuth * lobes + Math.PI));
+            * fluting(azimuth, lobes, flutingPhase);
         }
         if (plant && segments[0].parent && i === 0) radius *= 1 + plant.structure.collar;
         const p = point.clone();
@@ -98,10 +128,10 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
           p.addScaledVector(right, Math.cos(angle) * radius).addScaledVector(forward, Math.sin(angle) * radius);
         }
         positions.push(p.x, p.y, p.z);
-        // Bark ridges are laid out across the normalized circumference, so a thin tube
-        // packs the same ridge count into far fewer radial segments and beats against
-        // them. Roots wrap a proportionally shorter span of bark instead of aliasing.
-        uvs.push(j / ringCount * (segments[0].role === 'root' ? ROOT_BARK_WRAP : 1), length);
+        const wrap = segments[0].role === 'root' && trunkRadius > 0
+          ? Math.max(ROOT_BARK_MIN_WRAP, Math.min(1, stations[i].radius / trunkRadius))
+          : 1;
+        uvs.push(j / ringCount * wrap, length);
         rootBlend.push(stations[i].blend, stations[i].surface);
         if (i && j < ringCount) {
           const a = start + (i - 1) * (ringCount + 1) + j, b = a + ringCount + 1;

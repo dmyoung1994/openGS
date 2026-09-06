@@ -66,6 +66,7 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     // will be seated against: under for stretches, breaking through between them.
     // Each root gets its own rhythm, or a whole flare ripples in unison.
     const emerge = 2.5 + rng() * 2.5, phase = rng() * Math.PI * 2;
+    const knuckleRate = 6 + rng() * 6, knucklePhase = rng() * Math.PI * 2;
     // Low relief. In photographed oak flares the radiating roots are barely proud
     // of the soil and covered by it; the trunk's own flare is what reads, not a set
     // of limbs standing clear of the ground.
@@ -89,7 +90,12 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
       // Danjon's "zone of rapid taper": structural roots lose diameter steeply over
       // the first couple of trunk diameters and then run on thin. A gentle linear
       // taper is what makes a root read as a foot rather than a buttress.
-      const nextRadius = Math.max(0.004, radius0Start * (1 - t) ** 1.15 + trunkRadius * 0.09);
+      // Knuckle the taper. A root photographed at the collar is lumpy - it swells
+      // where it forks and pinches between - and a clean monotonic cone is the last
+      // thing separating this from growth. Bounded so it never necks to a thread.
+      const knuckle = 1 + Math.sin(t * knuckleRate + knucklePhase) * 0.17
+        + Math.sin(t * knuckleRate * 2.3 + knucklePhase * 1.7) * 0.08;
+      const nextRadius = Math.max(0.004, (radius0Start * (1 - t) ** 1.15 + trunkRadius * 0.09) * knuckle);
       const was = step / resolution;
       segments.push({ start: point, end: next, radius0: radius, radius1: nextRadius,
         level: 0, stem, id, parent: null, role: 'root',
