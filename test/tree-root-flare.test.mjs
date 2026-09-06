@@ -106,6 +106,11 @@ test('roots are compiled into the near tier only, and never reach the shadow tie
     // It carries (seat weight, emergence offset) per vertex.
     assert.equal(attribute.itemSize, 2);
     assert.equal(attribute.count, geometry.branches.attributes.position.count);
+    for (const part of ['leaves', 'blossoms']) {
+      const blend = geometry[part].attributes.rootBlend;
+      assert.equal(blend.count, geometry[part].attributes.position.count);
+      assert.ok(blend.array.every(value => value === 0), `${part} must not require terrain seating`);
+    }
     let seatable = 0;
     for (let i = 0; i < attribute.count; i++) if (attribute.getX(i) > 0) seatable++;
     return seatable;
@@ -203,4 +208,49 @@ test('the cleared footprint is derived from the same numbers that build the flar
   const doubled = proceduralTreeFlareRadius({ ...record, scale: 2 }, [definition]);
   assert.ok(Math.abs(doubled - radius * 2) < 1e-9, 'footprint must scale with the placement');
   assert.throws(() => proceduralTreeFlareRadius({ definitionId: 'nope' }, [definition]), /Missing/);
+});
+
+// A fixed one-division-per-root schedule reads as regular however irregular each
+// individual root is, which is the thing this variety exists to break.
+test('roots divide an uneven number of times, not on a schedule', () => {
+  const familiesFor = (name, seed) => {
+    const skeleton = generateTreeSkeleton(createTreePreset(name, seed), { seed });
+    const families = new Map();
+    for (const segment of skeleton.segments.filter((s) => s.role === 'root')) {
+      const base = segment.id.replace(/-g[0-9]+$/, '');
+      if (!families.has(base)) families.set(base, new Set());
+      families.get(base).add(segment.stem);
+    }
+    return [...families.values()].map((runs) => runs.size - 1);
+  };
+
+  for (const [name, seed] of [['spreading-oak', 11], ['tall-pine', 27], ['weeping-willow', 11]]) {
+    const divisions = familiesFor(name, seed);
+    assert.ok(divisions.length >= 5, `${name} should have several roots to compare`);
+    assert.ok(new Set(divisions).size > 1,
+      `${name} roots must not all divide the same number of times, got ${JSON.stringify(divisions)}`);
+    assert.ok(divisions.some((d) => d === 0), `${name} must leave some runners undivided`);
+    assert.ok(divisions.some((d) => d >= 2), `${name} must divide some runners more than once`);
+  }
+
+  // Changing the seed has to change the pattern, or a stand is clones.
+  assert.notDeepEqual(familiesFor('spreading-oak', 11), familiesFor('spreading-oak', 27));
+});
+
+test('division stops before a root is thinner than the bark drawn on it', () => {
+  const skeleton = generateTreeSkeleton(createTreePreset('spreading-oak', 11), { seed: 11 });
+  const roots = skeleton.segments.filter((s) => s.role === 'root');
+  const generations = roots.map((s) => Number((s.id.match(/-g([0-9]+)/) || [null, 0])[1]));
+  assert.ok(Math.max(...generations) <= 2, 'runs must not descend past the second division');
+
+  // Every generation still has to be thinner than the one that shed it.
+  const widest = new Map();
+  for (const segment of roots) {
+    const g = Number((segment.id.match(/-g([0-9]+)/) || [null, 0])[1]);
+    widest.set(g, Math.max(widest.get(g) ?? 0, segment.radius0));
+  }
+  for (let g = 1; g <= Math.max(...generations); g++) {
+    assert.ok(widest.get(g) < widest.get(g - 1),
+      `generation ${g} must be thinner than the runner that shed it`);
+  }
 });

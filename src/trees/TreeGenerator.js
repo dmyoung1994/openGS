@@ -42,10 +42,12 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
   const count = Math.round(rootCount);
   if (count < 1 || trunkRadius <= 0) return;
   const resolution = 6;
+  // Generation 0 is the runner off the collar, 1 its secondaries, 2 their own. Past
+  // that a division is thinner than the bark it would be drawn with.
+  const MAX_GENERATION = 2;
+  let serial = 0;
+
   for (let index = 0; index < count; index++) {
-    // Roots are stems and spend the same budget every other stem does. A multi-stem
-    // shrub multiplies its trunk count by its root count, so this is the difference
-    // between a bounded plant and one that quietly overruns the documented limit.
     if (segments.length + resolution > TREE_LIMITS.maxSegments) { limitsReached.add('structure'); return; }
     // Spread the roots around the trunk, jittered so they never read as a turbine.
     const around = azimuth + (index + 0.5) / count * Math.PI * 2 + varied(rng, 2.0 / count);
@@ -65,92 +67,98 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     // underneath it, which is the one thing that cannot happen at a root collar.
     const proud = Math.min(0.9, rootRise) * (0.8 + rng() * 0.4);
     const emergeAt = radiusFor(0) * (proud - 0.55);
-    let point = add(start, [outward[0] * trunkRadius * 0.35, emergeAt, outward[2] * trunkRadius * 0.35]);
     const sway = (rng() - 0.5) * 0.9;
     // A surface root is mostly buried and shows as a run of intermittent humps, not
     // as a limb lying on the lawn. This rides each station relative to the ground it
     // will be seated against: under for stretches, breaking through between them.
-    // Each root gets its own rhythm, or a whole flare ripples in unison.
+    // Each root gets its own rhythm, or a whole flare ripples in unison. Children
+    // sample the same rhythm at their own arc, so a division does not restart it.
     const emerge = 2.5 + rng() * 2.5, phase = rng() * Math.PI * 2;
     const knuckleRate = 6 + rng() * 6, knucklePhase = rng() * Math.PI * 2;
-    // Low relief. In photographed oak flares the radiating roots are barely proud
-    // of the soil and covered by it; the trunk's own flare is what reads, not a set
-    // of limbs standing clear of the ground.
     const surfaceAt = (at, atRadius) => atRadius * (Math.sin(at * emerge + phase) * 0.6 - 0.2);
-    let radius = radius0Start;
-    const stem = -1 - (trunk * count + index);
-    const id = `root-${trunk}-${index}`;
-    // Photographed surface roots divide as they run: a main runner splits and sends
-    // secondaries off at a shallow angle. An undivided tube is the giveaway that
-    // something was extruded rather than grown, so each root forks once partway out.
-    const forkAt = Math.floor(resolution * (0.45 + rng() * 0.25));
-    const forkSide = rng() < 0.5 ? -1 : 1;
-    const forkSpread = 0.35 + rng() * 0.45;
-    let forkFrom = null;
-    for (let step = 0; step < resolution; step++) {
-      const t = (step + 1) / resolution;
-      // Arch out and down: mostly outward near the trunk, mostly downward at the tip.
-      // Wander off the radial line as it runs. Roots that stay in one vertical plane
-      // are what make a set of them read as machined fins rather than as growth.
-      const wander = Math.sin(t * Math.PI * (0.7 + sway)) * sway * reach * 0.45;
-      const span = trunkRadius * 0.35 + reach * Math.sin(t * Math.PI * 0.5);
-      const next = add(start, [
-        outward[0] * span - outward[2] * wander,
-        emergeAt - depth * t * t,
-        outward[2] * span + outward[0] * wander,
-      ]);
-      // Danjon's "zone of rapid taper": structural roots lose diameter steeply over
-      // the first couple of trunk diameters and then run on thin. A gentle linear
-      // taper is what makes a root read as a foot rather than a buttress.
-      // Knuckle the taper. A root photographed at the collar is lumpy - it swells
-      // where it forks and pinches between - and a clean monotonic cone is the last
-      // thing separating this from growth. Bounded so it never necks to a thread.
-      const knuckle = 1 + Math.sin(t * knuckleRate + knucklePhase) * 0.17
-        + Math.sin(t * knuckleRate * 2.3 + knucklePhase * 1.7) * 0.08;
-      const nextRadius = Math.max(0.004, radiusFor(t) * knuckle);
-      const was = step / resolution;
-      segments.push({ start: point, end: next, radius0: radius, radius1: nextRadius,
-        level: 0, stem, id, parent: null, role: 'root', rootFork: false,
-        // 0 where the root leaves the trunk, 1 at the tip: how strongly the GPU is
-        // allowed to pull this station onto the terrain surface.
-        rootBlend0: was ** 1.5, rootBlend1: t ** 1.5,
-        // And where it rides once seated, so the seating buries it rather than
-        // laying it on top of the turf.
-        rootSurface0: surfaceAt(was, radius), rootSurface1: surfaceAt(t, nextRadius) });
-      if (step === forkAt) forkFrom = { at: next, t, radius: nextRadius };
-      point = next;
-      radius = nextRadius;
-    }
 
-    // The secondary carries on shallower and thinner than the runner that shed it.
-    if (!forkFrom || segments.length + resolution > TREE_LIMITS.maxSegments) continue;
-    const forkAzimuth = around + forkSide * forkSpread;
-    const forkOut = [Math.cos(forkAzimuth), 0, Math.sin(forkAzimuth)];
-    const forkReach = reach * (0.45 + rng() * 0.3);
-    let forkPoint = forkFrom.at;
-    let forkRadius = forkFrom.radius * (0.55 + rng() * 0.2);
-    const forkStem = stem - count * 64;
-    for (let step = 0; step < resolution; step++) {
-      const t = (step + 1) / resolution;
-      const span = forkReach * Math.sin(t * Math.PI * 0.5);
-      const next = [
-        forkFrom.at[0] + forkOut[0] * span,
-        forkFrom.at[1] - (Math.abs(forkFrom.at[1]) + depth * 0.5) * t * t,
-        forkFrom.at[2] + forkOut[2] * span,
-      ];
-      const knuckle = 1 + Math.sin(t * knuckleRate * 1.4 + knucklePhase) * 0.15;
-      const nextRadius = Math.max(0.003, forkRadius * (1 - t) ** 1.1 * knuckle + trunkRadius * 0.03);
-      const was = step / resolution;
-      segments.push({ start: forkPoint, end: next, radius0: forkRadius, radius1: nextRadius,
-        level: 0, stem: forkStem, id: `${id}-f`, parent: null, role: 'root', rootFork: true,
-        // Already well out from the trunk, so a secondary is seated on the surface
-        // along its whole length rather than easing in from a collar.
-        rootBlend0: Math.max(0.55, forkFrom.t), rootBlend1: 1,
-        rootSurface0: surfaceAt(forkFrom.t + was * 0.4, forkRadius),
-        rootSurface1: surfaceAt(forkFrom.t + t * 0.4, nextRadius) });
-      forkPoint = next;
-      forkRadius = nextRadius;
-    }
+    // How many times this root divides. Photographed collars are uneven: some
+    // runners never divide, most divide once, a few twice. A fixed one-per-root
+    // schedule reads as regular however irregular each individual root is.
+    const roll = rng();
+    const budget = roll < 0.22 ? 0 : roll < 0.8 ? 1 : 2;
+
+    const emitRun = ({ from, bearing, runReach, runDrop, radiusAt, arcBase, arcSpan, generation, forks }) => {
+      if (segments.length + resolution > TREE_LIMITS.maxSegments) { limitsReached.add('structure'); return; }
+      const heading = [Math.cos(bearing), 0, Math.sin(bearing)];
+      const stem = -1 - (trunk * 4096 + serial++);
+      const id = `root-${trunk}-${index}${generation ? `-g${generation}` : ''}`;
+      // Divisions are placed before the walk so they can be spaced apart rather
+      // than landing on top of one another.
+      const at = [];
+      for (let f = 0; f < forks; f++) at.push(0.34 + (f + rng() * 0.7) / Math.max(1, forks) * 0.42);
+      const children = [];
+      let point = from, radius = radiusAt(0);
+      for (let step = 0; step < resolution; step++) {
+        const t = (step + 1) / resolution, was = step / resolution;
+        // Wander off the radial line as it runs. Roots that stay in one vertical
+        // plane are what make a set of them read as machined fins.
+        const wander = Math.sin(t * Math.PI * (0.7 + sway)) * sway * runReach * 0.45;
+        const span = runReach * Math.sin(t * Math.PI * 0.5);
+        const next = [
+          from[0] + heading[0] * span - heading[2] * wander,
+          from[1] - runDrop * t * t,
+          from[2] + heading[2] * span + heading[0] * wander,
+        ];
+        // Knuckle the taper. A root photographed at the collar is lumpy - it swells
+        // where it forks and pinches between - and a clean monotonic cone is the
+        // last thing separating this from growth.
+        const knuckle = 1 + Math.sin(t * knuckleRate + knucklePhase) * 0.17
+          + Math.sin(t * knuckleRate * 2.3 + knucklePhase * 1.7) * 0.08;
+        const nextRadius = Math.max(0.003, radiusAt(t) * knuckle);
+        const arcWas = arcBase + arcSpan * was, arcNow = arcBase + arcSpan * t;
+        segments.push({ start: point, end: next, radius0: radius, radius1: nextRadius,
+          level: 0, stem, id, parent: null, role: 'root', rootFork: generation > 0,
+          // 0 where the root leaves the trunk, 1 at the tip: how strongly the GPU is
+          // allowed to pull this station onto the terrain surface. A division starts
+          // already well out, so it is seated along its whole length.
+          rootBlend0: Math.min(1, arcWas ** 1.5), rootBlend1: Math.min(1, arcNow ** 1.5),
+          // And where it rides once seated, so the seating buries it rather than
+          // laying it on top of the turf.
+          rootSurface0: surfaceAt(arcWas, radius), rootSurface1: surfaceAt(arcNow, nextRadius) });
+        for (const where of at) {
+          if (was <= where && where < t) children.push({ point: next, arc: arcNow, radius: nextRadius, t });
+        }
+        point = next;
+        radius = nextRadius;
+      }
+      if (generation >= MAX_GENERATION) return;
+      for (const child of children) {
+        // A secondary carries on shallower and thinner than the runner that shed it,
+        // and may itself divide once - which is what makes one root busier than the
+        // next instead of every root repeating the same silhouette.
+        const side = rng() < 0.5 ? -1 : 1;
+        const childRadius0 = child.radius * (0.55 + rng() * 0.2);
+        emitRun({
+          from: child.point,
+          bearing: bearing + side * (0.3 + rng() * 0.5),
+          runReach: runReach * (0.4 + rng() * 0.3),
+          runDrop: Math.max(0.02, runDrop * 0.5),
+          radiusAt: (t) => childRadius0 * (1 - t) ** 1.1 + trunkRadius * 0.03,
+          arcBase: child.arc,
+          arcSpan: arcSpan * 0.45,
+          generation: generation + 1,
+          forks: generation + 1 < MAX_GENERATION && rng() < 0.35 ? 1 : 0,
+        });
+      }
+    };
+
+    emitRun({
+      from: add(start, [outward[0] * trunkRadius * 0.35, emergeAt, outward[2] * trunkRadius * 0.35]),
+      bearing: around,
+      runReach: reach,
+      runDrop: depth,
+      radiusAt: radiusFor,
+      arcBase: 0,
+      arcSpan: 1,
+      generation: 0,
+      forks: budget,
+    });
   }
 }
 
