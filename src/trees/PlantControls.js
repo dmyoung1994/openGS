@@ -9,7 +9,7 @@ export const PLANT_CONTROLS = Object.freeze({
     // byte-identical, so this is opt-in per species. The default spread is the
     // measured "zone of rapid taper" for pine: roots originating within about
     // 2.2 x DBH of the stem, which is 4.4 trunk radii (Danjon et al.).
-    rootCount: [0, 0, 8], rootSpread: [4.4, 0, 9], rootDepth: [0.5, 0, 3], rootRise: [0.9, 0, 4],
+    rootCount: [0, 0, 8], rootSpread: [4.4, 0, 9], rootDepth: [0.5, 0, 3], rootRise: [0.45, 0, 0.9],
     // How far a root's cross section flattens against the ground: 1 is a round
     // runner, higher spreads wider and domes lower. A surface root is a broad mass
     // hugging the soil, not a blade standing on edge - reading the reported I-beam

@@ -30,16 +30,24 @@ test('every preset produces roots proportioned to its own trunk, and none where 
     assert.ok(first.radius0 > last.radius1 * 2,
       `${name} roots must taper rapidly, got ${first.radius0} to ${last.radius1}`);
 
-    // Every root has to finish below grade or it terminates in mid air. Primaries
-    // additionally leave the trunk above it; a secondary branches off its parent
-    // partway out, by which point that parent has already descended.
+    // Every root has to finish below grade or it terminates in mid air. And a
+    // primary has to EMERGE from the ground rather than sit on it: its centreline
+    // starts buried while its crown breaks the surface. A centreline riding above
+    // grade is what leaves a root protruding as a shelf with trunk visible beneath,
+    // which cannot happen at a real root collar.
+    const flatten = definition.plant.structure.rootFlatten;
+    const crownGauge = 1 / Math.sqrt(flatten);
     const trunkStems = new Set(roots.map((segment) => segment.stem));
     let forks = 0;
     for (const stem of trunkStems) {
       const run = roots.filter((segment) => segment.stem === stem);
       assert.ok(run.at(-1).end[1] < 0, `${name} root ${stem} must end below grade`);
       if (run[0].rootFork) { forks++; continue; }
-      assert.ok(run[0].start[1] > 0, `${name} root ${stem} must leave the trunk above grade`);
+      const centre = run[0].start[1];
+      assert.ok(centre < 0,
+        `${name} root ${stem} must emerge from the ground, not stand on it (centre ${centre.toFixed(4)})`);
+      assert.ok(centre + run[0].radius0 * crownGauge > 0,
+        `${name} root ${stem} must still break the surface, not vanish under it`);
     }
     assert.ok(forks > 0, `${name} roots must divide as they run, not stay single tubes`);
   }

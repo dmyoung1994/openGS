@@ -55,11 +55,17 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     const openness = clump ? 0.5 + 0.5 * (outward[0] * clump[0] + outward[2] * clump[1]) : 1;
     const reach = trunkRadius * rootSpread * (0.55 + rng() * 0.9) * (0.35 + 0.65 * openness);
     const depth = trunkRadius * rootDepth * (0.8 + rng() * 0.4);
-    const rise = trunkRadius * rootRise * (0.8 + rng() * 0.4);
-    // Start inside the trunk so the root emerges from its flare instead of being
-    // stuck to the outside of it.
-    let point = add(start, [outward[0] * trunkRadius * 0.35, rise, outward[2] * trunkRadius * 0.35]);
     // The roots are the flare, so they leave the trunk thick and shed it quickly.
+    const radius0Start = trunkRadius * (0.44 + rng() * 0.2);
+    const radiusFor = (at) => radius0Start * (1 - at) ** 1.15 + trunkRadius * 0.09;
+    // How much of the section stands proud where the root leaves the trunk, as a
+    // fraction of its own radius. A surface root emerges FROM the ground: its crown
+    // breaks the surface and the rest is already buried. Riding the centreline above
+    // grade instead leaves the root protruding as a shelf with the flare showing
+    // underneath it, which is the one thing that cannot happen at a root collar.
+    const proud = Math.min(0.9, rootRise) * (0.8 + rng() * 0.4);
+    const emergeAt = radiusFor(0) * (proud - 0.55);
+    let point = add(start, [outward[0] * trunkRadius * 0.35, emergeAt, outward[2] * trunkRadius * 0.35]);
     const sway = (rng() - 0.5) * 0.9;
     // A surface root is mostly buried and shows as a run of intermittent humps, not
     // as a limb lying on the lawn. This rides each station relative to the ground it
@@ -71,7 +77,6 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
     // of the soil and covered by it; the trunk's own flare is what reads, not a set
     // of limbs standing clear of the ground.
     const surfaceAt = (at, atRadius) => atRadius * (Math.sin(at * emerge + phase) * 0.6 - 0.2);
-    const radius0Start = trunkRadius * (0.34 + rng() * 0.18);
     let radius = radius0Start;
     const stem = -1 - (trunk * count + index);
     const id = `root-${trunk}-${index}`;
@@ -91,7 +96,7 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
       const span = trunkRadius * 0.35 + reach * Math.sin(t * Math.PI * 0.5);
       const next = add(start, [
         outward[0] * span - outward[2] * wander,
-        rise - (rise + depth) * t * t,
+        emergeAt - depth * t * t,
         outward[2] * span + outward[0] * wander,
       ]);
       // Danjon's "zone of rapid taper": structural roots lose diameter steeply over
@@ -102,7 +107,7 @@ function addRoots({ segments, start, trunkRadius, plant, azimuth, trunk, rng, li
       // thing separating this from growth. Bounded so it never necks to a thread.
       const knuckle = 1 + Math.sin(t * knuckleRate + knucklePhase) * 0.17
         + Math.sin(t * knuckleRate * 2.3 + knucklePhase * 1.7) * 0.08;
-      const nextRadius = Math.max(0.004, (radius0Start * (1 - t) ** 1.15 + trunkRadius * 0.09) * knuckle);
+      const nextRadius = Math.max(0.004, radiusFor(t) * knuckle);
       const was = step / resolution;
       segments.push({ start: point, end: next, radius0: radius, radius1: nextRadius,
         level: 0, stem, id, parent: null, role: 'root', rootFork: false,
