@@ -92,9 +92,9 @@ test('analytic environment fill remains subordinate to the shared celestial key'
     'Neutral calibration must retain midtone value while preserving daylight chromaticity');
 });
 
-test('post graph replacement disposes prior full-resolution targets and waits for weather', async () => {
+test('post graph replacement retains scene MRT and disposes obsolete effect targets', async () => {
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
-  assert.match(source, /this\._scenePass\?\.dispose\(\)/);
+  assert.match(source, /const scenePass = this\._scenePass \?\? pass\(/);
   assert.match(source, /this\._traa\?\.dispose\(\)/);
   assert.match(source, /this\._cloudTemporal\?\.dispose\(\)/);
   assert.doesNotMatch(source, /_skyPass|skyScene/,

@@ -104,7 +104,7 @@ Compiled runtime fields:
 - tee {x,z,boxHalfX,z0,z1}
 - corridor {c0,k,rough}: fairway half-width(m) = c0 + (-z)*k; then a rough band of width \`rough\`; beyond that deep rough.
 - fringeW: green collar width (m).
-- greens[]: {yards (z auto-derived as -yards*0.9144 if z omitted), x, r (~6-12 m), contour}. contour ∈ [${CONTOURS.join(', ')}]. One legible contour per green; vary them across the set.
+- greens[]: {yards (z auto-derived as -yards*0.9144 if z omitted), x, r (~6-12 m), contour}. contour ∈ [${CONTOURS.join(', ')}]. The contour label is intent only. Optional shape uses 6–48 smooth spline controls with concave bays and unequal lobes. Optional grade:{slopeX,slopeZ,blend} establishes the underlying plane at the site centre elevation (signed slopes in m/m, total at most 6%, outer blend 2..40 m). Optional contours[] owns physical relief: up to 12 {kind,points,width,height,falloff} semantic landforms, with height -3..3 m, width 1..80 m and falloff 1..60 m. Points transform with the green. Use ridge, shelf, plateau, swale and drainage-channel for varied pin regions and connected recovery ground.
 - bunkers[]: {x, z, r (m), depth (m below grade), pot (bool)}. Cut INTO grade, no raised rim. pot = small (r≲4), deep (depth≳1.5), steep revetted links pit.
 - ponds[]: {x, z, r, depth}.
 - site.forestFloorAreas[]: {id,shape:[{x,z},...]}. Four to 32 sparse world-space controls compile into a smooth pine-straw-bed SDF; author broad woodland beds, never crown circles or scatter rectangles.

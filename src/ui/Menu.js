@@ -141,11 +141,6 @@ export class Menu {
       </button>`;
   }
 
-  // Set the selected course card thumbnail to a live render of the actual course.
-  setCourseThumb(url) {
-    if (this.thumbEl && url) this.thumbEl.style.setProperty('--img', `url(${url})`);
-  }
-
   _renderStats() {
     const s = this.getStats() || {};
     const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.textContent = v; };
@@ -270,8 +265,6 @@ export class Menu {
         background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.3);
         backdrop-filter: blur(12px) saturate(1.05); box-shadow: 0 18px 50px rgba(0,0,0,.32);
         transition: transform .35s, border-color .35s, box-shadow .35s; padding: 0; color: #f6f3ec; }
-      .gp-thumb { height: 200px; background-image: var(--img), linear-gradient(150deg, #7fa07f, #3f5a44 60%, #26382b);
-        background-size: cover; background-position: center; }
       .gp-body { padding: 18px 22px 20px; }
       .gp-cname { font-family: var(--serif); font-weight: 500; font-size: 30px; color: #fbf8f2; }
       .gp-hr { height: 1px; margin: 12px 0; background: linear-gradient(90deg, rgba(255,255,255,.4), rgba(255,255,255,0)); }

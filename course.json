@@ -3,7 +3,7 @@
     "name": "Pineglass Forest — Needle Bend",
     "mode": "realistic",
     "schema": 4,
-    "notes": "Routing audit: a non-crossing triangular loop with approximately 72.7 m and 81.3 m woodland walks, safe transformed rough envelopes, and the opening tee and finishing green on opposite sides of the clubhouse clearing. Needle Bend is a 42-43.5 m strategic par-4 corridor with alternating landing-edge bunkers. Fern Gate is intentionally semi-blind: its 165-yard line and raised entry are readable from the tee while the putting surface reveals from the approach. Glasswood Reach alternates a drive-right bunker, lay-up-left bunker, and paired greenside guards. Mature forest rooms use catalog-backed pine structure over pine-needle litter; openings remain deliberate rather than uniform."
+    "notes": "Routing audit: a non-crossing triangular loop with approximately 72.7 m and 81.3 m woodland walks, safe transformed rough envelopes, and the opening tee and finishing green on opposite sides of the clubhouse clearing. Needle Bend is a 42-43.5 m strategic par-4 corridor with alternating landing-edge bunkers. Fern Gate is intentionally semi-blind: its 165-yard line and raised entry are readable from the tee while the putting surface reveals from the approach. Glasswood Reach alternates a drive-right bunker, lay-up-left bunker, and paired greenside guards. Mature forest rooms use custom procedural tall-pine structure over pine-needle litter; openings remain deliberate rather than uniform."
   },
   "catalogVersion": 2,
   "placementAlgorithmVersion": 1,
@@ -335,38 +335,133 @@
       "contour": "spine",
       "shape": [
         {
-          "x": -282.6,
-          "z": -73.10000000000002
+          "x": -285,
+          "z": -67.89999999999998
         },
         {
-          "x": -280.6,
-          "z": -82.5
+          "x": -288,
+          "z": -74.89999999999998
         },
         {
-          "x": -273.8,
-          "z": -86
+          "x": -289,
+          "z": -83.89999999999998
         },
         {
-          "x": -265.8,
-          "z": -84.10000000000002
+          "x": -284,
+          "z": -89.89999999999998
         },
         {
-          "x": -260.8,
-          "z": -76.69999999999999
+          "x": -276,
+          "z": -90.89999999999998
+        },
+        {
+          "x": -271,
+          "z": -85.89999999999998
+        },
+        {
+          "x": -269,
+          "z": -79.89999999999998
         },
         {
           "x": -263,
-          "z": -67.5
+          "z": -80.89999999999998
         },
         {
-          "x": -270.7,
-          "z": -64.10000000000002
+          "x": -256,
+          "z": -85.89999999999998
         },
         {
-          "x": -279,
-          "z": -66.19999999999999
+          "x": -252,
+          "z": -80.89999999999998
+        },
+        {
+          "x": -253,
+          "z": -72.89999999999998
+        },
+        {
+          "x": -260,
+          "z": -69.89999999999998
+        },
+        {
+          "x": -262,
+          "z": -62.89999999999998
+        },
+        {
+          "x": -268,
+          "z": -58.89999999999998
+        },
+        {
+          "x": -275,
+          "z": -59.89999999999998
+        },
+        {
+          "x": -278,
+          "z": -66.89999999999998
         }
-      ]
+      ],
+      "contours": [
+        {
+          "kind": "ridge",
+          "points": [
+            {
+              "x": -279,
+              "z": -83.89999999999998
+            },
+            {
+              "x": -276,
+              "z": -77.89999999999998
+            },
+            {
+              "x": -274,
+              "z": -69.89999999999998
+            }
+          ],
+          "width": 14,
+          "height": 0.25,
+          "falloff": 8
+        },
+        {
+          "kind": "plateau",
+          "points": [
+            {
+              "x": -263,
+              "z": -77.89999999999998
+            },
+            {
+              "x": -260,
+              "z": -77.89999999999998
+            }
+          ],
+          "width": 9,
+          "height": 0.18,
+          "falloff": 9
+        },
+        {
+          "kind": "swale",
+          "points": [
+            {
+              "x": -273,
+              "z": -65.89999999999998
+            },
+            {
+              "x": -272,
+              "z": -58.89999999999998
+            }
+          ],
+          "width": 12,
+          "height": -0.1,
+          "falloff": 10
+        }
+      ],
+      "grade": {
+        "slopeX": 0.003,
+        "slopeZ": 0.007,
+        "blend": 14
+      },
+      "pin": {
+        "x": -260,
+        "z": -77.89999999999998
+      }
     },
     {
       "yards": 165,
@@ -376,38 +471,97 @@
       "contour": "tilt",
       "shape": [
         {
-          "x": -64.9,
-          "z": -137
+          "x": -55.099999999999994,
+          "z": -143
         },
         {
-          "x": -55.599999999999994,
-          "z": -134.7
+          "x": -48.099999999999994,
+          "z": -142
         },
         {
-          "x": -51.30000000000001,
-          "z": -127.70000000000002
+          "x": -45.099999999999994,
+          "z": -135
         },
         {
-          "x": -53.900000000000006,
-          "z": -119.50000000000001
+          "x": -48.099999999999994,
+          "z": -129
         },
         {
-          "x": -61.599999999999994,
-          "z": -115.40000000000002
+          "x": -54.099999999999994,
+          "z": -126.00000000000001
         },
         {
-          "x": -70.6,
-          "z": -118.80000000000001
+          "x": -59.099999999999994,
+          "z": -119.00000000000001
         },
         {
-          "x": -73.19999999999999,
-          "z": -126.30000000000001
+          "x": -66.1,
+          "z": -118.00000000000001
         },
         {
-          "x": -70.80000000000001,
-          "z": -133.1
+          "x": -71.1,
+          "z": -121.00000000000001
+        },
+        {
+          "x": -74.1,
+          "z": -128
+        },
+        {
+          "x": -72.1,
+          "z": -135
+        },
+        {
+          "x": -66.1,
+          "z": -136
+        },
+        {
+          "x": -62.099999999999994,
+          "z": -140
         }
-      ]
+      ],
+      "grade": {
+        "slopeX": -0.004999999999999999,
+        "slopeZ": 0.008,
+        "blend": 14
+      },
+      "contours": [
+        {
+          "kind": "ridge",
+          "points": [
+            {
+              "x": -58.099999999999994,
+              "z": -123.00000000000001
+            },
+            {
+              "x": -55.099999999999994,
+              "z": -126.00000000000001
+            }
+          ],
+          "width": 16,
+          "height": 0.18,
+          "falloff": 10
+        },
+        {
+          "kind": "swale",
+          "points": [
+            {
+              "x": -67.1,
+              "z": -136
+            },
+            {
+              "x": -73.1,
+              "z": -141
+            }
+          ],
+          "width": 14,
+          "height": -0.12,
+          "falloff": 8
+        }
+      ],
+      "pin": {
+        "x": -51.099999999999994,
+        "z": -137
+      }
     },
     {
       "yards": 535,
@@ -417,38 +571,109 @@
       "contour": "saddle",
       "shape": [
         {
-          "x": -208.66105459661264,
-          "z": 420.3709330602667
+          "x": -210.16526204731807,
+          "z": 412.9051872873889
         },
         {
-          "x": -212.94606675619303,
-          "z": 429.0593547116512
+          "x": -211.12495994662848,
+          "z": 418.9117653433255
         },
         {
-          "x": -221.3610740323175,
-          "z": 430.87804999750114
+          "x": -216.8251673643591,
+          "z": 423.3285102301
         },
         {
-          "x": -229.28985456119221,
-          "z": 426.21495667600976
+          "x": -216.8367633599855,
+          "z": 429.653054919869
         },
         {
-          "x": -232.53070270256814,
-          "z": 417.3229994491367
+          "x": -213.68608701072736,
+          "z": 435.9833976074513
         },
         {
-          "x": -227.04437493180043,
-          "z": 408.8265173776142
+          "x": -217.1721239872575,
+          "z": 440.0879738582066
         },
         {
-          "x": -218.5345574653076,
-          "z": 407.03961875514756
+          "x": -223.81463531085893,
+          "z": 441.0244797662642
         },
         {
-          "x": -210.95380083430456,
-          "z": 411.796942467226
+          "x": -229.81541536898231,
+          "z": 436.9025095220693
+        },
+        {
+          "x": -231.70002318072397,
+          "z": 429.9420315646355
+        },
+        {
+          "x": -227.8960195703615,
+          "z": 424.8893534101961
+        },
+        {
+          "x": -225.04011786368295,
+          "z": 419.5187086219243
+        },
+        {
+          "x": -226.92472567542464,
+          "z": 412.55823066449045
+        },
+        {
+          "x": -224.06882396874613,
+          "z": 407.1875858762187
+        },
+        {
+          "x": -217.10834601131228,
+          "z": 405.302978064477
+        },
+        {
+          "x": -211.73770122304052,
+          "z": 408.1588797711555
         }
-      ]
+      ],
+      "grade": {
+        "slopeX": 0.0044341388802141505,
+        "slopeZ": -0.0037866096169229283,
+        "blend": 16
+      },
+      "contours": [
+        {
+          "kind": "plateau",
+          "points": [
+            {
+              "x": -222.21900414388367,
+              "z": 433.12169790295957
+            },
+            {
+              "x": -223.1729040453809,
+              "z": 435.9660036140117
+            }
+          ],
+          "width": 10,
+          "height": 0.32,
+          "falloff": 10
+        },
+        {
+          "kind": "swale",
+          "points": [
+            {
+              "x": -219.3341124481392,
+              "z": 411.93969139026524
+            },
+            {
+              "x": -218.37441454882872,
+              "z": 405.93311333432865
+            }
+          ],
+          "width": 14,
+          "height": -0.1,
+          "falloff": 8
+        }
+      ],
+      "pin": {
+        "x": -222.8549374115485,
+        "z": 435.0179017103277
+      }
     }
   ],
   "bunkers": [
@@ -2227,12 +2452,13 @@
             "crownZ": 1,
             "droop": 0,
             "collar": 0.2,
-            "buttress": 0.35,
+            "buttress": 0.55,
             "buttressCount": 6,
             "rootCount": 6,
-            "rootSpread": 4.4,
-            "rootDepth": 1,
-            "rootRise": 0.75
+            "rootSpread": 4.3,
+            "rootDepth": 0.85,
+            "rootRise": 0.45,
+            "rootFlatten": 2
           },
           "foliage": {
             "density": 1,
@@ -2256,9 +2482,9 @@
             "flutter": 0.12
           },
           "bark": {
-            "ridgeDepth": 0.04,
+            "ridgeDepth": 0.006,
             "ridgeFrequency": 18,
-            "variation": 0.2
+            "variation": 0.32
           },
           "envelope": {
             "shape": "none",
@@ -3643,6 +3869,2670 @@
         "age": 1,
         "health": 1,
         "windExposure": 0.7
+      },
+      {
+        "id": "pineglass-woodland-infill-001",
+        "definitionId": "tall-pine",
+        "x": -375.82,
+        "z": 247.49,
+        "rotationY": 2.236,
+        "scale": 0.993,
+        "seed": 6092026,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-002",
+        "definitionId": "tall-pine",
+        "x": -417.71,
+        "z": 294.62,
+        "rotationY": 4.636,
+        "scale": 0.76,
+        "seed": 6092029,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-003",
+        "definitionId": "tall-pine",
+        "x": -357.52,
+        "z": 300.21,
+        "rotationY": 4.884,
+        "scale": 0.896,
+        "seed": 6092030,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-004",
+        "definitionId": "tall-pine",
+        "x": -392.8,
+        "z": 241.3,
+        "rotationY": 2.227,
+        "scale": 0.917,
+        "seed": 6092031,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-005",
+        "definitionId": "tall-pine",
+        "x": -418.05,
+        "z": 166.08,
+        "rotationY": 0.448,
+        "scale": 0.984,
+        "seed": 6092033,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-006",
+        "definitionId": "tall-pine",
+        "x": -393.72,
+        "z": 86.91,
+        "rotationY": 1.24,
+        "scale": 1.074,
+        "seed": 6092034,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-007",
+        "definitionId": "tall-pine",
+        "x": -408.71,
+        "z": 341.35,
+        "rotationY": 2.473,
+        "scale": 0.736,
+        "seed": 6092035,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-008",
+        "definitionId": "tall-pine",
+        "x": -407.88,
+        "z": 263.69,
+        "rotationY": 3.145,
+        "scale": 0.822,
+        "seed": 6092036,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-009",
+        "definitionId": "tall-pine",
+        "x": -387.44,
+        "z": 192.96,
+        "rotationY": 2.414,
+        "scale": 1.041,
+        "seed": 6092037,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-010",
+        "definitionId": "tall-pine",
+        "x": -366.17,
+        "z": 171.4,
+        "rotationY": 1.364,
+        "scale": 0.976,
+        "seed": 6092038,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-011",
+        "definitionId": "tall-pine",
+        "x": -409.44,
+        "z": 122.07,
+        "rotationY": 5.948,
+        "scale": 0.811,
+        "seed": 6092039,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-012",
+        "definitionId": "tall-pine",
+        "x": -379.67,
+        "z": 50.96,
+        "rotationY": 6.151,
+        "scale": 1.063,
+        "seed": 6092040,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-013",
+        "definitionId": "tall-pine",
+        "x": -127.17,
+        "z": -62.59,
+        "rotationY": 1.533,
+        "scale": 0.781,
+        "seed": 6092042,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-014",
+        "definitionId": "tall-pine",
+        "x": -176.72,
+        "z": -61.95,
+        "rotationY": 1.715,
+        "scale": 0.745,
+        "seed": 6092046,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-015",
+        "definitionId": "tall-pine",
+        "x": -125.13,
+        "z": -70.52,
+        "rotationY": 0.784,
+        "scale": 1.03,
+        "seed": 6092047,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-016",
+        "definitionId": "tall-pine",
+        "x": -112.73,
+        "z": -167.82,
+        "rotationY": 3.502,
+        "scale": 0.957,
+        "seed": 6092050,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-017",
+        "definitionId": "tall-pine",
+        "x": -163.46,
+        "z": -157.47,
+        "rotationY": 5.687,
+        "scale": 1.091,
+        "seed": 6092054,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-018",
+        "definitionId": "tall-pine",
+        "x": -128.77,
+        "z": -165.54,
+        "rotationY": 2.637,
+        "scale": 0.865,
+        "seed": 6092056,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-019",
+        "definitionId": "tall-pine",
+        "x": -132.8,
+        "z": 368.94,
+        "rotationY": 3.334,
+        "scale": 0.98,
+        "seed": 6092065,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-020",
+        "definitionId": "tall-pine",
+        "x": -87.76,
+        "z": 311.21,
+        "rotationY": 0.996,
+        "scale": 0.873,
+        "seed": 6092067,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-021",
+        "definitionId": "tall-pine",
+        "x": -137.69,
+        "z": 305.39,
+        "rotationY": 3.919,
+        "scale": 1.061,
+        "seed": 6092069,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-022",
+        "definitionId": "tall-pine",
+        "x": -80.89,
+        "z": 44.02,
+        "rotationY": 3.801,
+        "scale": 1.018,
+        "seed": 6092072,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-023",
+        "definitionId": "tall-pine",
+        "x": -83.18,
+        "z": 62.66,
+        "rotationY": 5.734,
+        "scale": 0.993,
+        "seed": 6092073,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-024",
+        "definitionId": "tall-pine",
+        "x": -35.31,
+        "z": 22.19,
+        "rotationY": 5.42,
+        "scale": 0.904,
+        "seed": 6092074,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-025",
+        "definitionId": "tall-pine",
+        "x": -55.78,
+        "z": 61.39,
+        "rotationY": 2.659,
+        "scale": 0.829,
+        "seed": 6092075,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-026",
+        "definitionId": "tall-pine",
+        "x": -45.01,
+        "z": 44.33,
+        "rotationY": 4.76,
+        "scale": 0.938,
+        "seed": 6092079,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-027",
+        "definitionId": "tall-pine",
+        "x": -124.82,
+        "z": 176.4,
+        "rotationY": 2.587,
+        "scale": 0.966,
+        "seed": 6092081,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-028",
+        "definitionId": "tall-pine",
+        "x": -98.54,
+        "z": 135.94,
+        "rotationY": 3.882,
+        "scale": 0.809,
+        "seed": 6092083,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-029",
+        "definitionId": "tall-pine",
+        "x": -113.05,
+        "z": 147.93,
+        "rotationY": 5.371,
+        "scale": 0.876,
+        "seed": 6092084,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-030",
+        "definitionId": "tall-pine",
+        "x": -90.15,
+        "z": 185.75,
+        "rotationY": 1.928,
+        "scale": 0.957,
+        "seed": 6092085,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-031",
+        "definitionId": "tall-pine",
+        "x": -108.95,
+        "z": 194.02,
+        "rotationY": 1.471,
+        "scale": 0.873,
+        "seed": 6092086,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-032",
+        "definitionId": "tall-pine",
+        "x": -260.54,
+        "z": 232.37,
+        "rotationY": 6.065,
+        "scale": 0.913,
+        "seed": 6092092,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-033",
+        "definitionId": "tall-pine",
+        "x": -257.08,
+        "z": 285.16,
+        "rotationY": 1.562,
+        "scale": 0.909,
+        "seed": 6092093,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-034",
+        "definitionId": "tall-pine",
+        "x": -232.34,
+        "z": 254.05,
+        "rotationY": 0.426,
+        "scale": 0.901,
+        "seed": 6092094,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-035",
+        "definitionId": "tall-pine",
+        "x": -179.29,
+        "z": 51.54,
+        "rotationY": 5.754,
+        "scale": 0.852,
+        "seed": 6092096,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-036",
+        "definitionId": "tall-pine",
+        "x": -230.21,
+        "z": 173.12,
+        "rotationY": 3.195,
+        "scale": 0.812,
+        "seed": 6092104,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-037",
+        "definitionId": "tall-pine",
+        "x": -246.82,
+        "z": 183.96,
+        "rotationY": 5.051,
+        "scale": 0.743,
+        "seed": 6092106,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-038",
+        "definitionId": "tall-pine",
+        "x": -230.23,
+        "z": 157.05,
+        "rotationY": 2.655,
+        "scale": 1.006,
+        "seed": 6092109,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-039",
+        "definitionId": "tall-pine",
+        "x": -203.55,
+        "z": 171.05,
+        "rotationY": 0.109,
+        "scale": 1.036,
+        "seed": 6092110,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-040",
+        "definitionId": "tall-pine",
+        "x": -246.94,
+        "z": 58.4,
+        "rotationY": 0.752,
+        "scale": 1.055,
+        "seed": 6092112,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-041",
+        "definitionId": "tall-pine",
+        "x": -370.22,
+        "z": -117.92,
+        "rotationY": 1.602,
+        "scale": 1.078,
+        "seed": 6092121,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-042",
+        "definitionId": "tall-pine",
+        "x": -365.34,
+        "z": 0.76,
+        "rotationY": 5.15,
+        "scale": 0.769,
+        "seed": 6092124,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-043",
+        "definitionId": "tall-pine",
+        "x": -391.83,
+        "z": 141.34,
+        "rotationY": 5.601,
+        "scale": 0.924,
+        "seed": 6092125,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-044",
+        "definitionId": "tall-pine",
+        "x": -377.9,
+        "z": 198.87,
+        "rotationY": 0.449,
+        "scale": 0.924,
+        "seed": 6092127,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-045",
+        "definitionId": "tall-pine",
+        "x": -346.07,
+        "z": 240.6,
+        "rotationY": 6.132,
+        "scale": 0.896,
+        "seed": 6092128,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-046",
+        "definitionId": "tall-pine",
+        "x": -343.79,
+        "z": 163.18,
+        "rotationY": 2.255,
+        "scale": 1.029,
+        "seed": 6092130,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-047",
+        "definitionId": "tall-pine",
+        "x": -359.11,
+        "z": 277.13,
+        "rotationY": 3.701,
+        "scale": 0.757,
+        "seed": 6092132,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-048",
+        "definitionId": "tall-pine",
+        "x": -336.75,
+        "z": 184.25,
+        "rotationY": 1.922,
+        "scale": 1.094,
+        "seed": 6092133,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-049",
+        "definitionId": "tall-pine",
+        "x": -358.26,
+        "z": 92.18,
+        "rotationY": 1.048,
+        "scale": 0.784,
+        "seed": 6092138,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-050",
+        "definitionId": "tall-pine",
+        "x": -336.49,
+        "z": 168.25,
+        "rotationY": 1.514,
+        "scale": 1.019,
+        "seed": 6092139,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-051",
+        "definitionId": "tall-pine",
+        "x": -405.75,
+        "z": 308.11,
+        "rotationY": 3.657,
+        "scale": 0.814,
+        "seed": 6092140,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-052",
+        "definitionId": "tall-pine",
+        "x": -389.48,
+        "z": 275.72,
+        "rotationY": 6.19,
+        "scale": 0.902,
+        "seed": 6092141,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-053",
+        "definitionId": "tall-pine",
+        "x": -395.78,
+        "z": 212.86,
+        "rotationY": 5.437,
+        "scale": 1.044,
+        "seed": 6092143,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-054",
+        "definitionId": "tall-pine",
+        "x": -382.81,
+        "z": 89.98,
+        "rotationY": 1.97,
+        "scale": 0.772,
+        "seed": 6092145,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-055",
+        "definitionId": "tall-pine",
+        "x": -394.51,
+        "z": 339.22,
+        "rotationY": 5.632,
+        "scale": 0.889,
+        "seed": 6092146,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-056",
+        "definitionId": "tall-pine",
+        "x": -385.56,
+        "z": 256.79,
+        "rotationY": 0.363,
+        "scale": 1.078,
+        "seed": 6092147,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-057",
+        "definitionId": "tall-pine",
+        "x": -388.62,
+        "z": 41.24,
+        "rotationY": 3.929,
+        "scale": 0.944,
+        "seed": 6092151,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-058",
+        "definitionId": "tall-pine",
+        "x": -190.79,
+        "z": -83.22,
+        "rotationY": 5.622,
+        "scale": 0.888,
+        "seed": 6092154,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-059",
+        "definitionId": "tall-pine",
+        "x": -153.86,
+        "z": -73.28,
+        "rotationY": 0.855,
+        "scale": 0.778,
+        "seed": 6092156,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-060",
+        "definitionId": "tall-pine",
+        "x": -120.7,
+        "z": -79.79,
+        "rotationY": 5.143,
+        "scale": 0.894,
+        "seed": 6092158,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-061",
+        "definitionId": "tall-pine",
+        "x": -170.45,
+        "z": -182.39,
+        "rotationY": 1.161,
+        "scale": 0.797,
+        "seed": 6092159,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-062",
+        "definitionId": "tall-pine",
+        "x": -137.6,
+        "z": -164.06,
+        "rotationY": 0.414,
+        "scale": 0.937,
+        "seed": 6092161,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-063",
+        "definitionId": "tall-pine",
+        "x": -161.61,
+        "z": -187.13,
+        "rotationY": 2.124,
+        "scale": 0.919,
+        "seed": 6092162,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-064",
+        "definitionId": "tall-pine",
+        "x": -197.9,
+        "z": -162.2,
+        "rotationY": 3.95,
+        "scale": 0.743,
+        "seed": 6092166,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-065",
+        "definitionId": "tall-pine",
+        "x": -179.38,
+        "z": -192.36,
+        "rotationY": 0.915,
+        "scale": 0.899,
+        "seed": 6092169,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-066",
+        "definitionId": "tall-pine",
+        "x": -134.94,
+        "z": 347.77,
+        "rotationY": 5.49,
+        "scale": 0.961,
+        "seed": 6092176,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-067",
+        "definitionId": "tall-pine",
+        "x": -115.48,
+        "z": 187.26,
+        "rotationY": 0.905,
+        "scale": 0.965,
+        "seed": 6092177,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-068",
+        "definitionId": "tall-pine",
+        "x": -112.94,
+        "z": 245.5,
+        "rotationY": 4.804,
+        "scale": 0.897,
+        "seed": 6092179,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-069",
+        "definitionId": "tall-pine",
+        "x": -107.1,
+        "z": 296.66,
+        "rotationY": 1.923,
+        "scale": 0.892,
+        "seed": 6092180,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-070",
+        "definitionId": "tall-pine",
+        "x": -141.06,
+        "z": 200.49,
+        "rotationY": 2.856,
+        "scale": 0.8,
+        "seed": 6092181,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-071",
+        "definitionId": "tall-pine",
+        "x": -63.64,
+        "z": 50.83,
+        "rotationY": 0.245,
+        "scale": 0.876,
+        "seed": 6092183,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-072",
+        "definitionId": "tall-pine",
+        "x": -40.7,
+        "z": 79.17,
+        "rotationY": 4.571,
+        "scale": 0.756,
+        "seed": 6092184,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-073",
+        "definitionId": "tall-pine",
+        "x": -86.29,
+        "z": 11.05,
+        "rotationY": 1.871,
+        "scale": 0.773,
+        "seed": 6092185,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-074",
+        "definitionId": "tall-pine",
+        "x": -95.06,
+        "z": 41.29,
+        "rotationY": 3.126,
+        "scale": 0.802,
+        "seed": 6092186,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-075",
+        "definitionId": "tall-pine",
+        "x": -119.06,
+        "z": 116.87,
+        "rotationY": 2.01,
+        "scale": 0.983,
+        "seed": 6092195,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-076",
+        "definitionId": "tall-pine",
+        "x": -242.36,
+        "z": 192.57,
+        "rotationY": 2.227,
+        "scale": 0.736,
+        "seed": 6092202,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-077",
+        "definitionId": "tall-pine",
+        "x": -265.78,
+        "z": 271.17,
+        "rotationY": 3.792,
+        "scale": 0.78,
+        "seed": 6092204,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-078",
+        "definitionId": "tall-pine",
+        "x": -238.99,
+        "z": 293.36,
+        "rotationY": 3.289,
+        "scale": 1.01,
+        "seed": 6092205,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-079",
+        "definitionId": "tall-pine",
+        "x": -256.39,
+        "z": 145.12,
+        "rotationY": 0.186,
+        "scale": 0.807,
+        "seed": 6092227,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-080",
+        "definitionId": "tall-pine",
+        "x": -346.27,
+        "z": 43.58,
+        "rotationY": 4.616,
+        "scale": 0.758,
+        "seed": 6092235,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-081",
+        "definitionId": "tall-pine",
+        "x": -379.1,
+        "z": 133.13,
+        "rotationY": 3.875,
+        "scale": 0.941,
+        "seed": 6092236,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-082",
+        "definitionId": "tall-pine",
+        "x": -353.92,
+        "z": 125.85,
+        "rotationY": 5.802,
+        "scale": 0.824,
+        "seed": 6092237,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-083",
+        "definitionId": "tall-pine",
+        "x": -346.16,
+        "z": 253.82,
+        "rotationY": 3.053,
+        "scale": 1.031,
+        "seed": 6092239,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-084",
+        "definitionId": "tall-pine",
+        "x": -367.34,
+        "z": 191.94,
+        "rotationY": 3.673,
+        "scale": 0.847,
+        "seed": 6092244,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-085",
+        "definitionId": "tall-pine",
+        "x": -362.17,
+        "z": 322.6,
+        "rotationY": 1.421,
+        "scale": 1.089,
+        "seed": 6092247,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-086",
+        "definitionId": "tall-pine",
+        "x": -363.13,
+        "z": 256.58,
+        "rotationY": 0.415,
+        "scale": 0.77,
+        "seed": 6092248,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-087",
+        "definitionId": "tall-pine",
+        "x": -396.2,
+        "z": 315.17,
+        "rotationY": 1.036,
+        "scale": 1.061,
+        "seed": 6092251,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-088",
+        "definitionId": "tall-pine",
+        "x": -418.97,
+        "z": 178.37,
+        "rotationY": 3.457,
+        "scale": 0.854,
+        "seed": 6092254,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-089",
+        "definitionId": "tall-pine",
+        "x": -402.96,
+        "z": 98.52,
+        "rotationY": 5.335,
+        "scale": 1.022,
+        "seed": 6092256,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-090",
+        "definitionId": "tall-pine",
+        "x": -379.78,
+        "z": 146.94,
+        "rotationY": 5.853,
+        "scale": 0.875,
+        "seed": 6092261,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-091",
+        "definitionId": "tall-pine",
+        "x": -357.95,
+        "z": 65.01,
+        "rotationY": 0.444,
+        "scale": 1.022,
+        "seed": 6092262,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-092",
+        "definitionId": "tall-pine",
+        "x": -136.6,
+        "z": -79.33,
+        "rotationY": 5.17,
+        "scale": 0.912,
+        "seed": 6092269,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-093",
+        "definitionId": "tall-pine",
+        "x": -126.4,
+        "z": -196.55,
+        "rotationY": 3.874,
+        "scale": 1.063,
+        "seed": 6092272,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-094",
+        "definitionId": "tall-pine",
+        "x": -141.3,
+        "z": -174.42,
+        "rotationY": 1.094,
+        "scale": 0.927,
+        "seed": 6092273,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-095",
+        "definitionId": "tall-pine",
+        "x": -168.5,
+        "z": -195.54,
+        "rotationY": 3.626,
+        "scale": 0.783,
+        "seed": 6092278,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-096",
+        "definitionId": "tall-pine",
+        "x": -157.85,
+        "z": -145.08,
+        "rotationY": 2.056,
+        "scale": 1.069,
+        "seed": 6092279,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-097",
+        "definitionId": "tall-pine",
+        "x": -134.82,
+        "z": 247.28,
+        "rotationY": 2.706,
+        "scale": 0.877,
+        "seed": 6092288,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-098",
+        "definitionId": "tall-pine",
+        "x": -132.05,
+        "z": 317.12,
+        "rotationY": 4.882,
+        "scale": 0.947,
+        "seed": 6092289,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-099",
+        "definitionId": "tall-pine",
+        "x": -100.95,
+        "z": 49.9,
+        "rotationY": 5.464,
+        "scale": 0.776,
+        "seed": 6092294,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-100",
+        "definitionId": "tall-pine",
+        "x": -36.71,
+        "z": 60.42,
+        "rotationY": 4.215,
+        "scale": 1.082,
+        "seed": 6092297,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-101",
+        "definitionId": "tall-pine",
+        "x": -35.34,
+        "z": 36.95,
+        "rotationY": 1.382,
+        "scale": 0.744,
+        "seed": 6092301,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-102",
+        "definitionId": "tall-pine",
+        "x": -95.2,
+        "z": 144.49,
+        "rotationY": 3.81,
+        "scale": 1.019,
+        "seed": 6092303,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-103",
+        "definitionId": "tall-pine",
+        "x": -93.76,
+        "z": 154.09,
+        "rotationY": 3.126,
+        "scale": 0.925,
+        "seed": 6092307,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-104",
+        "definitionId": "tall-pine",
+        "x": -86.32,
+        "z": 193.92,
+        "rotationY": 4.453,
+        "scale": 1.036,
+        "seed": 6092308,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-105",
+        "definitionId": "tall-pine",
+        "x": -268.25,
+        "z": 297.09,
+        "rotationY": 5.168,
+        "scale": 0.832,
+        "seed": 6092311,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-106",
+        "definitionId": "tall-pine",
+        "x": -250.35,
+        "z": 318.31,
+        "rotationY": 3.466,
+        "scale": 0.792,
+        "seed": 6092312,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-107",
+        "definitionId": "tall-pine",
+        "x": -268.58,
+        "z": 158.07,
+        "rotationY": 1.264,
+        "scale": 0.813,
+        "seed": 6092313,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-108",
+        "definitionId": "tall-pine",
+        "x": -234.33,
+        "z": 234.28,
+        "rotationY": 3.377,
+        "scale": 0.988,
+        "seed": 6092314,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-109",
+        "definitionId": "tall-pine",
+        "x": -247.69,
+        "z": 253.24,
+        "rotationY": 5.419,
+        "scale": 0.851,
+        "seed": 6092315,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-110",
+        "definitionId": "tall-pine",
+        "x": -193.49,
+        "z": 16.64,
+        "rotationY": 5.882,
+        "scale": 0.911,
+        "seed": 6092325,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-111",
+        "definitionId": "tall-pine",
+        "x": -214.95,
+        "z": 104.76,
+        "rotationY": 1.688,
+        "scale": 0.786,
+        "seed": 6092327,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-112",
+        "definitionId": "tall-pine",
+        "x": -224.53,
+        "z": 145.46,
+        "rotationY": 4.648,
+        "scale": 0.882,
+        "seed": 6092329,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-113",
+        "definitionId": "tall-pine",
+        "x": -256.59,
+        "z": 183.81,
+        "rotationY": 1.829,
+        "scale": 0.952,
+        "seed": 6092332,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-114",
+        "definitionId": "tall-pine",
+        "x": -268.04,
+        "z": 132.53,
+        "rotationY": 4.11,
+        "scale": 0.989,
+        "seed": 6092340,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-115",
+        "definitionId": "tall-pine",
+        "x": -352.32,
+        "z": -105.38,
+        "rotationY": 3.278,
+        "scale": 0.817,
+        "seed": 6092343,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-116",
+        "definitionId": "tall-pine",
+        "x": -377.8,
+        "z": -14.21,
+        "rotationY": 3.165,
+        "scale": 1.028,
+        "seed": 6092346,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-117",
+        "definitionId": "tall-pine",
+        "x": -365.55,
+        "z": 162.36,
+        "rotationY": 3.777,
+        "scale": 0.749,
+        "seed": 6092347,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-118",
+        "definitionId": "tall-pine",
+        "x": -347.83,
+        "z": 132.21,
+        "rotationY": 1.661,
+        "scale": 1.076,
+        "seed": 6092348,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-119",
+        "definitionId": "tall-pine",
+        "x": -361.86,
+        "z": 238.94,
+        "rotationY": 4.233,
+        "scale": 0.916,
+        "seed": 6092351,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-120",
+        "definitionId": "tall-pine",
+        "x": -379.5,
+        "z": 172.16,
+        "rotationY": 5.657,
+        "scale": 1.096,
+        "seed": 6092352,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-121",
+        "definitionId": "tall-pine",
+        "x": -346.53,
+        "z": 142.27,
+        "rotationY": 0.733,
+        "scale": 0.74,
+        "seed": 6092360,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-122",
+        "definitionId": "tall-pine",
+        "x": -361.27,
+        "z": 154.07,
+        "rotationY": 4.24,
+        "scale": 0.972,
+        "seed": 6092361,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-123",
+        "definitionId": "tall-pine",
+        "x": -416.49,
+        "z": 252.21,
+        "rotationY": 6.04,
+        "scale": 0.73,
+        "seed": 6092364,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-124",
+        "definitionId": "tall-pine",
+        "x": -422.52,
+        "z": 199.82,
+        "rotationY": 0.503,
+        "scale": 0.758,
+        "seed": 6092365,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-125",
+        "definitionId": "tall-pine",
+        "x": -420.45,
+        "z": 118.01,
+        "rotationY": 5.616,
+        "scale": 0.886,
+        "seed": 6092366,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-126",
+        "definitionId": "tall-pine",
+        "x": -410.23,
+        "z": 108.45,
+        "rotationY": 5.29,
+        "scale": 0.828,
+        "seed": 6092367,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-127",
+        "definitionId": "tall-pine",
+        "x": -367.81,
+        "z": 310.95,
+        "rotationY": 0.326,
+        "scale": 0.94,
+        "seed": 6092368,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-128",
+        "definitionId": "tall-pine",
+        "x": -413.04,
+        "z": 279.63,
+        "rotationY": 5.9,
+        "scale": 0.87,
+        "seed": 6092369,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-129",
+        "definitionId": "tall-pine",
+        "x": -396.98,
+        "z": 227.69,
+        "rotationY": 3.862,
+        "scale": 0.818,
+        "seed": 6092370,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-130",
+        "definitionId": "tall-pine",
+        "x": -390.71,
+        "z": 78.22,
+        "rotationY": 5.124,
+        "scale": 0.791,
+        "seed": 6092373,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-131",
+        "definitionId": "tall-pine",
+        "x": -182.98,
+        "z": -86.73,
+        "rotationY": 6.203,
+        "scale": 0.928,
+        "seed": 6092377,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-132",
+        "definitionId": "tall-pine",
+        "x": -175.8,
+        "z": -81.98,
+        "rotationY": 2.935,
+        "scale": 1.046,
+        "seed": 6092379,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-133",
+        "definitionId": "tall-pine",
+        "x": -147.92,
+        "z": -78.72,
+        "rotationY": 5.255,
+        "scale": 0.933,
+        "seed": 6092380,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-134",
+        "definitionId": "tall-pine",
+        "x": -178.34,
+        "z": -146.17,
+        "rotationY": 6.205,
+        "scale": 0.968,
+        "seed": 6092382,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-135",
+        "definitionId": "tall-pine",
+        "x": -114.57,
+        "z": -181.19,
+        "rotationY": 2.253,
+        "scale": 0.832,
+        "seed": 6092383,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-136",
+        "definitionId": "tall-pine",
+        "x": -154.44,
+        "z": -158.23,
+        "rotationY": 2.548,
+        "scale": 0.748,
+        "seed": 6092384,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-137",
+        "definitionId": "tall-pine",
+        "x": -145.81,
+        "z": -152.67,
+        "rotationY": 2.051,
+        "scale": 0.879,
+        "seed": 6092387,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-138",
+        "definitionId": "tall-pine",
+        "x": -120.99,
+        "z": 342.84,
+        "rotationY": 1.839,
+        "scale": 0.724,
+        "seed": 6092398,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-139",
+        "definitionId": "tall-pine",
+        "x": -106.27,
+        "z": 210.95,
+        "rotationY": 5.163,
+        "scale": 0.971,
+        "seed": 6092399,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-140",
+        "definitionId": "tall-pine",
+        "x": -116.87,
+        "z": 320.78,
+        "rotationY": 4.732,
+        "scale": 1.041,
+        "seed": 6092402,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-141",
+        "definitionId": "tall-pine",
+        "x": -45.42,
+        "z": -4.58,
+        "rotationY": 0.636,
+        "scale": 0.995,
+        "seed": 6092407,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-142",
+        "definitionId": "tall-pine",
+        "x": -79.59,
+        "z": -13.46,
+        "rotationY": 1.403,
+        "scale": 0.783,
+        "seed": 6092410,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-143",
+        "definitionId": "tall-pine",
+        "x": -60.81,
+        "z": 9.88,
+        "rotationY": 4.811,
+        "scale": 0.814,
+        "seed": 6092413,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-144",
+        "definitionId": "tall-pine",
+        "x": -97.45,
+        "z": 102.19,
+        "rotationY": 3.94,
+        "scale": 0.826,
+        "seed": 6092416,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-145",
+        "definitionId": "tall-pine",
+        "x": -127.49,
+        "z": 139.38,
+        "rotationY": 5.852,
+        "scale": 0.843,
+        "seed": 6092417,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-146",
+        "definitionId": "tall-pine",
+        "x": -120.74,
+        "z": 159.99,
+        "rotationY": 3.295,
+        "scale": 0.857,
+        "seed": 6092418,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-147",
+        "definitionId": "tall-pine",
+        "x": -270.63,
+        "z": 424.05,
+        "rotationY": 5.744,
+        "scale": 0.959,
+        "seed": 6092421,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-148",
+        "definitionId": "tall-pine",
+        "x": -268.75,
+        "z": 309.45,
+        "rotationY": 1.541,
+        "scale": 1.076,
+        "seed": 6092423,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-149",
+        "definitionId": "tall-pine",
+        "x": -239.62,
+        "z": 249.26,
+        "rotationY": 6.015,
+        "scale": 0.941,
+        "seed": 6092425,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-150",
+        "definitionId": "tall-pine",
+        "x": -235.42,
+        "z": 165.94,
+        "rotationY": 2.45,
+        "scale": 1.054,
+        "seed": 6092437,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-151",
+        "definitionId": "tall-pine",
+        "x": -252.4,
+        "z": 113.45,
+        "rotationY": 2.81,
+        "scale": 0.903,
+        "seed": 6092438,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-152",
+        "definitionId": "tall-pine",
+        "x": -210.51,
+        "z": 153.82,
+        "rotationY": 5.191,
+        "scale": 1,
+        "seed": 6092441,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-153",
+        "definitionId": "tall-pine",
+        "x": -240.32,
+        "z": 203,
+        "rotationY": 3.477,
+        "scale": 0.953,
+        "seed": 6092443,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-154",
+        "definitionId": "tall-pine",
+        "x": -256.89,
+        "z": 65.81,
+        "rotationY": 3.301,
+        "scale": 0.785,
+        "seed": 6092444,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-155",
+        "definitionId": "tall-pine",
+        "x": -259.61,
+        "z": 153.46,
+        "rotationY": 2.351,
+        "scale": 0.722,
+        "seed": 6092449,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-156",
+        "definitionId": "tall-pine",
+        "x": -356.58,
+        "z": -123.85,
+        "rotationY": 1.126,
+        "scale": 0.772,
+        "seed": 6092454,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-157",
+        "definitionId": "tall-pine",
+        "x": -382.98,
+        "z": 14.91,
+        "rotationY": 3.45,
+        "scale": 1.004,
+        "seed": 6092457,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-158",
+        "definitionId": "tall-pine",
+        "x": -361.56,
+        "z": 105.17,
+        "rotationY": 3.708,
+        "scale": 0.869,
+        "seed": 6092458,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-159",
+        "definitionId": "tall-pine",
+        "x": -350.89,
+        "z": 181.62,
+        "rotationY": 0.997,
+        "scale": 0.734,
+        "seed": 6092460,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-160",
+        "definitionId": "tall-pine",
+        "x": -366.31,
+        "z": -17.39,
+        "rotationY": 6.265,
+        "scale": 1.045,
+        "seed": 6092464,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-161",
+        "definitionId": "tall-pine",
+        "x": -376.2,
+        "z": 275.37,
+        "rotationY": 0.372,
+        "scale": 1.01,
+        "seed": 6092465,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-162",
+        "definitionId": "tall-pine",
+        "x": -363.52,
+        "z": 336.96,
+        "rotationY": 4.911,
+        "scale": 0.987,
+        "seed": 6092469,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-163",
+        "definitionId": "tall-pine",
+        "x": -422.22,
+        "z": 136.33,
+        "rotationY": 1.059,
+        "scale": 1.05,
+        "seed": 6092477,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-164",
+        "definitionId": "tall-pine",
+        "x": -371.99,
+        "z": 303.92,
+        "rotationY": 2.317,
+        "scale": 1.086,
+        "seed": 6092479,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-165",
+        "definitionId": "tall-pine",
+        "x": -398.28,
+        "z": 286.86,
+        "rotationY": 5.372,
+        "scale": 0.996,
+        "seed": 6092480,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-166",
+        "definitionId": "tall-pine",
+        "x": -378.04,
+        "z": 237.23,
+        "rotationY": 2.375,
+        "scale": 0.776,
+        "seed": 6092481,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-167",
+        "definitionId": "tall-pine",
+        "x": -182.6,
+        "z": -73.67,
+        "rotationY": 4.855,
+        "scale": 0.962,
+        "seed": 6092487,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-168",
+        "definitionId": "tall-pine",
+        "x": -156.21,
+        "z": -89.59,
+        "rotationY": 0.292,
+        "scale": 0.864,
+        "seed": 6092489,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-169",
+        "definitionId": "tall-pine",
+        "x": -163.35,
+        "z": -176.97,
+        "rotationY": 3.807,
+        "scale": 0.826,
+        "seed": 6092492,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-170",
+        "definitionId": "tall-pine",
+        "x": -103.08,
+        "z": -156.27,
+        "rotationY": 0.081,
+        "scale": 0.987,
+        "seed": 6092496,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-171",
+        "definitionId": "tall-pine",
+        "x": -202.82,
+        "z": -154.02,
+        "rotationY": 0.566,
+        "scale": 0.997,
+        "seed": 6092499,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-172",
+        "definitionId": "tall-pine",
+        "x": -116.45,
+        "z": 234.43,
+        "rotationY": 2.785,
+        "scale": 0.903,
+        "seed": 6092510,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-173",
+        "definitionId": "tall-pine",
+        "x": -115.96,
+        "z": 290.77,
+        "rotationY": 5.396,
+        "scale": 1.006,
+        "seed": 6092511,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-174",
+        "definitionId": "tall-pine",
+        "x": -98.78,
+        "z": 279.19,
+        "rotationY": 1.999,
+        "scale": 0.796,
+        "seed": 6092513,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-175",
+        "definitionId": "tall-pine",
+        "x": -48.12,
+        "z": 14.6,
+        "rotationY": 6.236,
+        "scale": 0.901,
+        "seed": 6092518,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-176",
+        "definitionId": "tall-pine",
+        "x": -34.62,
+        "z": 7.28,
+        "rotationY": 3.571,
+        "scale": 0.982,
+        "seed": 6092522,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-177",
+        "definitionId": "tall-pine",
+        "x": -115.99,
+        "z": 127.76,
+        "rotationY": 5.126,
+        "scale": 0.875,
+        "seed": 6092526,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-178",
+        "definitionId": "tall-pine",
+        "x": -231.74,
+        "z": 312.38,
+        "rotationY": 1.658,
+        "scale": 0.721,
+        "seed": 6092534,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-179",
+        "definitionId": "tall-pine",
+        "x": -251.06,
+        "z": 200.28,
+        "rotationY": 2.706,
+        "scale": 1.011,
+        "seed": 6092536,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-180",
+        "definitionId": "tall-pine",
+        "x": -263.09,
+        "z": 244.26,
+        "rotationY": 0.841,
+        "scale": 1.072,
+        "seed": 6092537,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-181",
+        "definitionId": "tall-pine",
+        "x": -198.32,
+        "z": 44.74,
+        "rotationY": 3.399,
+        "scale": 1.056,
+        "seed": 6092540,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-182",
+        "definitionId": "tall-pine",
+        "x": -184.84,
+        "z": 64.04,
+        "rotationY": 0.209,
+        "scale": 0.897,
+        "seed": 6092546,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-183",
+        "definitionId": "tall-pine",
+        "x": -223.71,
+        "z": 187.18,
+        "rotationY": 3.402,
+        "scale": 0.905,
+        "seed": 6092548,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-184",
+        "definitionId": "tall-pine",
+        "x": -237.63,
+        "z": 113.34,
+        "rotationY": 6.001,
+        "scale": 0.756,
+        "seed": 6092549,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-185",
+        "definitionId": "tall-pine",
+        "x": -250.07,
+        "z": 303.49,
+        "rotationY": 3.246,
+        "scale": 0.849,
+        "seed": 6092563,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-186",
+        "definitionId": "tall-pine",
+        "x": -354.75,
+        "z": -138.56,
+        "rotationY": 1.108,
+        "scale": 0.818,
+        "seed": 6092565,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-187",
+        "definitionId": "tall-pine",
+        "x": -370.57,
+        "z": 33.26,
+        "rotationY": 5.619,
+        "scale": 0.763,
+        "seed": 6092568,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-188",
+        "definitionId": "tall-pine",
+        "x": -342.59,
+        "z": 100.97,
+        "rotationY": 1.352,
+        "scale": 0.79,
+        "seed": 6092570,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-189",
+        "definitionId": "tall-pine",
+        "x": -364.77,
+        "z": 210.27,
+        "rotationY": 0.695,
+        "scale": 1.058,
+        "seed": 6092571,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-190",
+        "definitionId": "tall-pine",
+        "x": -371.41,
+        "z": 220.08,
+        "rotationY": 4.554,
+        "scale": 0.995,
+        "seed": 6092572,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-191",
+        "definitionId": "tall-pine",
+        "x": -340.65,
+        "z": 9.25,
+        "rotationY": 0.99,
+        "scale": 1.085,
+        "seed": 6092575,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-192",
+        "definitionId": "tall-pine",
+        "x": -352.71,
+        "z": 220.47,
+        "rotationY": 0.946,
+        "scale": 0.994,
+        "seed": 6092579,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-193",
+        "definitionId": "tall-pine",
+        "x": -372.43,
+        "z": 264.34,
+        "rotationY": 0.085,
+        "scale": 0.767,
+        "seed": 6092581,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-194",
+        "definitionId": "tall-pine",
+        "x": -404.46,
+        "z": 295.31,
+        "rotationY": 2.347,
+        "scale": 0.789,
+        "seed": 6092585,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-195",
+        "definitionId": "tall-pine",
+        "x": -410.98,
+        "z": 131.29,
+        "rotationY": 3.819,
+        "scale": 0.752,
+        "seed": 6092588,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-196",
+        "definitionId": "tall-pine",
+        "x": -389.42,
+        "z": 328.76,
+        "rotationY": 5.035,
+        "scale": 0.817,
+        "seed": 6092590,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-197",
+        "definitionId": "tall-pine",
+        "x": -383.87,
+        "z": 102.34,
+        "rotationY": 4.892,
+        "scale": 0.807,
+        "seed": 6092594,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-198",
+        "definitionId": "tall-pine",
+        "x": -170.57,
+        "z": -92.27,
+        "rotationY": 0.968,
+        "scale": 0.826,
+        "seed": 6092601,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-199",
+        "definitionId": "tall-pine",
+        "x": -95.72,
+        "z": -175.16,
+        "rotationY": 4.663,
+        "scale": 0.879,
+        "seed": 6092607,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-200",
+        "definitionId": "tall-pine",
+        "x": -150.18,
+        "z": -196.9,
+        "rotationY": 0.18,
+        "scale": 0.818,
+        "seed": 6092608,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-201",
+        "definitionId": "tall-pine",
+        "x": -124.37,
+        "z": 311.14,
+        "rotationY": 0.869,
+        "scale": 0.767,
+        "seed": 6092620,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-202",
+        "definitionId": "tall-pine",
+        "x": -130.58,
+        "z": 193.45,
+        "rotationY": 4.582,
+        "scale": 1.096,
+        "seed": 6092621,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-203",
+        "definitionId": "tall-pine",
+        "x": -92.5,
+        "z": 302.78,
+        "rotationY": 2.394,
+        "scale": 0.881,
+        "seed": 6092622,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-204",
+        "definitionId": "tall-pine",
+        "x": -112.71,
+        "z": 277.21,
+        "rotationY": 1.079,
+        "scale": 0.815,
+        "seed": 6092624,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-205",
+        "definitionId": "tall-pine",
+        "x": -60.92,
+        "z": -13.42,
+        "rotationY": 4.345,
+        "scale": 0.857,
+        "seed": 6092632,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-206",
+        "definitionId": "tall-pine",
+        "x": -42.91,
+        "z": 25.46,
+        "rotationY": 3.797,
+        "scale": 0.977,
+        "seed": 6092634,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-207",
+        "definitionId": "tall-pine",
+        "x": -120.76,
+        "z": 200.87,
+        "rotationY": 1.816,
+        "scale": 1.061,
+        "seed": 6092636,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-208",
+        "definitionId": "tall-pine",
+        "x": -96.49,
+        "z": 166.47,
+        "rotationY": 5.125,
+        "scale": 0.895,
+        "seed": 6092638,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-209",
+        "definitionId": "tall-pine",
+        "x": -118.67,
+        "z": 108.66,
+        "rotationY": 4.481,
+        "scale": 0.884,
+        "seed": 6092639,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-210",
+        "definitionId": "tall-pine",
+        "x": -251.9,
+        "z": 163.03,
+        "rotationY": 0.918,
+        "scale": 1.031,
+        "seed": 6092646,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-211",
+        "definitionId": "tall-pine",
+        "x": -227.22,
+        "z": 267.16,
+        "rotationY": 1.096,
+        "scale": 0.889,
+        "seed": 6092649,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-212",
+        "definitionId": "tall-pine",
+        "x": -245.57,
+        "z": 156.19,
+        "rotationY": 1.993,
+        "scale": 0.832,
+        "seed": 6092660,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-213",
+        "definitionId": "tall-pine",
+        "x": -222.39,
+        "z": 116.96,
+        "rotationY": 1.503,
+        "scale": 0.875,
+        "seed": 6092662,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-214",
+        "definitionId": "tall-pine",
+        "x": -221.65,
+        "z": 206.01,
+        "rotationY": 4.235,
+        "scale": 1.015,
+        "seed": 6092665,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-215",
+        "definitionId": "tall-pine",
+        "x": -251.45,
+        "z": 102.94,
+        "rotationY": 3.741,
+        "scale": 0.733,
+        "seed": 6092671,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-216",
+        "definitionId": "tall-pine",
+        "x": -262.69,
+        "z": 263.76,
+        "rotationY": 1.026,
+        "scale": 1.062,
+        "seed": 6092674,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-217",
+        "definitionId": "tall-pine",
+        "x": -354.29,
+        "z": 33.95,
+        "rotationY": 5.642,
+        "scale": 1.07,
+        "seed": 6092679,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-218",
+        "definitionId": "tall-pine",
+        "x": -357.7,
+        "z": -9.34,
+        "rotationY": 2.054,
+        "scale": 0.842,
+        "seed": 6092686,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-219",
+        "definitionId": "tall-pine",
+        "x": -347.77,
+        "z": 298.9,
+        "rotationY": 4.744,
+        "scale": 0.837,
+        "seed": 6092689,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-220",
+        "definitionId": "tall-pine",
+        "x": -358.22,
+        "z": 267.56,
+        "rotationY": 5.886,
+        "scale": 0.726,
+        "seed": 6092692,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-221",
+        "definitionId": "tall-pine",
+        "x": -416.03,
+        "z": 311.89,
+        "rotationY": 4.642,
+        "scale": 0.825,
+        "seed": 6092695,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
+      },
+      {
+        "id": "pineglass-woodland-infill-222",
+        "definitionId": "tall-pine",
+        "x": -345.28,
+        "z": 289.2,
+        "rotationY": 3.865,
+        "scale": 1.025,
+        "seed": 6092696,
+        "age": 1,
+        "health": 1,
+        "windExposure": 0.6
       }
     ]
   }

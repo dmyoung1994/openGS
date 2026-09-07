@@ -11,7 +11,7 @@ test('course performance sweep uses strict production route poses and machine-re
   assert.match(source, /scripts\/shot\.mjs/);
   assert.match(source, /arg\('pose', null\)/);
   assert.match(source, /--authored-course/);
-  assert.match(source, /--presentation-mode=balanced/);
+  assert.match(source, /--presentation-mode=\$\{mode\}/);
   assert.match(source, /--gpu-live/);
   assert.match(source, /--terrain-lift=/);
   assert.match(source, /--hole=/);
@@ -25,7 +25,7 @@ test('course performance sweep uses strict production route poses and machine-re
   assert.match(source, /cpu\?\.taskDurationMsPerFrame > 0/);
   assert.match(source, /terrainClearance\?\.camera, pose\.lift/);
   assert.match(source, /resolvedCamera\?\.owned !== true/);
-  assert.match(source, /scene\?\.constructor !== 'CreatorScene'/);
+  assert.match(source, /scene\?\.sceneKind !== 'creator'/);
   assert.match(source, /routeSha256: routeHash/);
   assert.match(source, /--terrain-lift-to=/);
   assert.match(source, /--seq=/);

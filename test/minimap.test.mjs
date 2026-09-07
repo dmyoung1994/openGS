@@ -80,3 +80,25 @@ test('map reuses world forest-floor and fairway mowing fields', async () => {
   assert.doesNotMatch(source, /zone === 'fairway' \|\| zone === 'green' \|\| zone === 'tee'/,
     'map mowing cannot claim surfaces the world fairway shader does not mow');
 });
+
+
+test('collapsed map preserves identical pixels but redraws changed markers and restored layout', () => {
+  let draws = 0;
+  const noop = () => {};
+  const context = new Proxy({ drawImage: () => draws++ }, { get: (target, key) => target[key] ?? noop });
+  const map = Object.assign(Object.create(Minimap.prototype), {
+    available: true, opened: false, _course: {}, shotPlan: [], dpr: 1,
+    transform: { worldToMap: p => ({ x: p.x, y: p.z }) }, ctx: context,
+    hole: { greenStart: 0 }, range: { targets: [] },
+    el: { classList: { toggle: noop } }, help: {}, _marker: noop, _drawNorth: noop,
+  });
+  const state = { ball: { x: 0, z: 0 } };
+  map.update(state); map.update({ ...state, camera: { position: { x: 5 } } });
+  assert.equal(draws, 1);
+  state.ball.x = 1; map.update(state); assert.equal(draws, 2);
+  map.update({ ...state, canAim: true }); assert.equal(draws, 3);
+  map.opened = true; map.update(state); map.opened = false; map.update(state);
+  assert.equal(draws, 5);
+  map._course = {}; map.update(state); assert.equal(draws, 6);
+  map.range.targets = [{ pin: { x: 3, z: 4 } }]; map.update(state); assert.equal(draws, 7);
+});

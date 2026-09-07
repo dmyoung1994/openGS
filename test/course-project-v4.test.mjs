@@ -17,7 +17,7 @@ test('shipped v5 project validates and compiles to the existing strict runtime c
   assert.deepEqual(compiled.runtime, runtime);
   assert.equal(compiled.runtime.routing.holes.length, 3);
   assert.equal(compiled.runtime.landforms.length, 17);
-  assert.equal(compiled.normalized.environment.objectCount, 199);
+  assert.equal(compiled.normalized.environment.objectCount, 421);
 });
 
 test('v4 synthetic records migrate to reusable v5 definitions and placements', () => {

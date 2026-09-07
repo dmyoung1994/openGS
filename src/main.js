@@ -736,7 +736,9 @@ let pendingHazard = null;
 const launchMonitor = new DevelopmentLaunchMonitorAdapter();
 launchMonitor.subscribeShots((shot) => hit(launchShotToBallParams(shot)));
 await launchMonitor.connect();
-const panel = new MetricsPanel({ onHit: hit, onEnvironmentChange: previewEnvironment, onContinue: continuePlay });
+const panel = new MetricsPanel({ onHit: hit, onEnvironmentChange: previewEnvironment, onContinue: continuePlay,
+  onGreenGrid: enabled => { range?.setGreenGrid(enabled); sm.invalidateTemporalHistory('green grid toggled'); },
+});
 let surfaceMaterialsPreviewBaseline = null;
 const turfPanel = new TurfPanel({
   onApply: previewSurfaceMaterials,
@@ -1296,6 +1298,7 @@ async function buildCourse(course, { creatorCanvas = false } = {}) {
   });
   else freeCam.terrain = range.terrain;
   turfPanel.attach(range.terrain);   // live turf sliders (G) follow the rebuilt terrain
+  range.setGreenGrid(panel.greenGridEnabled);
   await minimap.attach(range);       // prepare the authoritative hole map without blocking loading animation
   syncDefaultAimTarget();
   range.terrain.uSunDir.value.copy(SUN); // compatibility baseline before shared daylight is installed
@@ -1668,6 +1671,7 @@ function selectHole(holeId) {
     throw new Error('Hole selection requires a routed course scene.');
   }
   range.setActiveHole(holeId);
+  range.setGreenGrid(panel.greenGridEnabled);
   configurePlayHole();
   aimTarget = null;
   minimap.setActiveHole(range.activeHole());
@@ -1693,9 +1697,6 @@ const builder = new BuilderPanel({
 // meter itself is mounted. Seed the value before route resolution so /creator.html
 // is a valid cold entry rather than depending on a prior range/menu transition.
 let _fps = 0;
-let _thumbCountdown = 0;
-let thumbRequest = 0;
-let thumbObjectUrl = null;
 
 // App shell: the premium landing menu routes between Practice (range), Course
 // Creator (builder), and Play (course select). On entering an in-scene view we drop
@@ -1709,8 +1710,6 @@ const shell = new Menu({
       if (freeCam.active) freeCam.exit();
       if (!flying) toAddress();
     }
-    // Refresh the Play card with a live render of the current course each time it opens.
-    if (v === 'play') requestThumb();
   },
   // Live figures for the Course Creator HUD (Objects / FPS / Status).
   getStats: () => {
@@ -1783,37 +1782,6 @@ function menuCinematic(dt) {
   sm.camera.up.set(0, 1, 0);
   sm.camera.lookAt(cx, 6, cz);
 }
-
-// Live course thumbnail for the Play card — a real render of the actual geometry,
-// captured from the existing menu camera. This used to teleport the LIVE camera to an
-// elevated overview for four frames before returning it. The jump polluted the temporal
-// AA/half-resolution AO history and produced horizontal bands across the grass just
-// before the menu camera resumed its pan. Capturing the settled menu render keeps the
-// thumbnail live without ever presenting a transient camera state to the player.
-function requestThumb() {
-  thumbRequest++;
-  if (_thumbCountdown === 0) _thumbCountdown = 4;
-}
-function thumbCapture() {
-  const request = thumbRequest, course = range;
-  // Encode the actual WebGPU canvas asynchronously; copying it to another canvas
-  // is blank on this path, and synchronous JPEG encoding stalls the first frames.
-  try {
-    sm.renderer.domElement.toBlob(blob => {
-      if (!blob || request !== thumbRequest || course !== range) return;
-      const previous = thumbObjectUrl;
-      thumbObjectUrl = URL.createObjectURL(blob);
-      shell.setCourseThumb(thumbObjectUrl);
-      if (previous) URL.revokeObjectURL(previous);
-    }, 'image/jpeg', 0.75);
-  }
-  catch (e) { /* canvas capture unavailable */ }
-}
-window.addEventListener('pagehide', () => {
-  thumbRequest++;
-  if (thumbObjectUrl) URL.revokeObjectURL(thumbObjectUrl);
-  thumbObjectUrl = null;
-});
 
 // Live rebuild: the Vite sidecar plugin fires this custom HMR event whenever
 // course.json changes (an agent edit, or a manual edit). Re-fetch + rebuild.
@@ -1916,7 +1884,6 @@ if (import.meta.hot) {
       if (result.mode === 'surface-materials-only') {
         builder.onAgentStatus({ message: 'Surface materials updated live; course, camera, and vegetation identities were preserved.' });
       }
-      setTimeout(requestThumb, 400);   // refresh the Play thumbnail to the new course
     } catch (error) {
       if (serial === liveCourseReloadSerial) builder.onCourseReloadFailed(error, event);
     }
@@ -2038,9 +2005,6 @@ function updateEnvironment(dt) {
 sm.onUpdate((dt, t) => {
   ingestQualityFrame();
   updateEnvironment(dt);
-  // Thumbnail grab: let the current camera settle for a few frames, then capture its
-  // real render. Never override the live camera for thumbnail generation.
-  if (_thumbCountdown > 0) { _thumbCountdown--; if (_thumbCountdown === 0) thumbCapture(); }
   updateFpsMeter();
   if (flying) {
     try {
@@ -2070,8 +2034,7 @@ sm.onUpdate((dt, t) => {
 
   }
 
-  // Menu view: slow cinematic orbit behind the overlay. The thumbnail countdown does
-  // not interrupt it; its final frame is the one we capture. In-scene views use the
+  // Menu view: slow cinematic orbit behind the overlay. In-scene views use the
   // free-fly cam when active, else the cinematic shot director.
   if (evaluatorCamera.active) evaluatorCamera.update?.(dt);
   else if (shell.view === 'menu') menuCinematic(dt);
@@ -2114,9 +2077,6 @@ sm.onUpdate((dt, t) => {
 
 loadingGreen?.stop();
 sm.start();
-
-// Prime the Play card with a real render once the scene (incl. trees) has settled.
-setTimeout(requestThumb, 2600);
 
 // Controls.
 window.addEventListener('keydown', (e) => {
@@ -2183,7 +2143,6 @@ window.golf = {
   // deliberately outside this first-frame contract.
   get environmentReady() { return Promise.all([environmentCatalogReady, environmentAssetIntegrityReady, visualAssetManifestReady, visualCriticalAssetsReady, range?.assetsReady, sm.weatherSky?.ready]); },
   get environmentLoadError() { return environmentLoadError; },
-  refreshThumb: requestThumb,
   toAddress,
   // Public requests share the watcher queue. Internal rebuild calls remain raw
   // so a queued preview/reset cannot await another operation behind itself.

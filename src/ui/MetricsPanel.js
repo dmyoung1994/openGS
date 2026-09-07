@@ -26,7 +26,9 @@ const ENV_SELECTS = [
 ];
 
 export class MetricsPanel {
-  constructor({ onHit, onEnvironmentChange, onContinue }) {
+  constructor({ onHit, onEnvironmentChange, onContinue, onGreenGrid }) {
+    this.onGreenGrid = onGreenGrid;
+    this.greenGridEnabled = false;
     this.onHit = onHit;
     this.onContinue = onContinue;
     this.onEnvironmentChange = onEnvironmentChange;
@@ -172,6 +174,27 @@ export class MetricsPanel {
     labToggle.setAttribute('aria-expanded', 'false');
     labToggle.textContent = 'Lab';
     document.body.appendChild(labToggle);
+
+    const gridToggle = document.createElement('button');
+    gridToggle.id = 'gs-green-grid';
+    gridToggle.type = 'button';
+    gridToggle.className = 'gs-glass';
+    gridToggle.textContent = 'Green grid';
+    gridToggle.setAttribute('aria-pressed', 'false');
+    gridToggle.title = '1 m squares · pulses flow downhill · faster and warmer means steeper';
+    const gridLegend = document.createElement('div');
+    gridLegend.id = 'gs-grid-legend';
+    gridLegend.className = 'gs-glass';
+    gridLegend.hidden = true;
+    gridLegend.innerHTML = '1 m grid · flows downhill<br><span style="color:#8ce9da">Level</span> → <span style="color:#ffdc81">3%</span> → <span style="color:#ff947a">6%+</span>';
+    gridToggle.setAttribute('aria-describedby', gridLegend.id);
+    gridToggle.addEventListener('click', () => {
+      this.greenGridEnabled = !this.greenGridEnabled;
+      gridToggle.setAttribute('aria-pressed', String(this.greenGridEnabled));
+      gridLegend.hidden = !this.greenGridEnabled;
+      this.onGreenGrid?.(this.greenGridEnabled);
+    });
+    document.body.append(gridToggle, gridLegend);
 
     const panel = document.createElement('section');
     panel.id = 'gs-launch-lab';
@@ -366,6 +389,14 @@ export class MetricsPanel {
         transition: opacity .2s, background .2s, transform .2s; }
       #gs-lab-toggle:hover, #gs-lab-toggle[aria-expanded="true"] { opacity: 1;
         background-color: rgba(255,255,255,.10); transform: translateY(-1px); }
+      #gs-green-grid { position:fixed;top:16px;left:98px;z-index:60;padding:10px 16px;
+        border-radius:999px;color:var(--shot-white);font:600 14px/1 var(--shot-font);cursor:pointer; }
+      #gs-green-grid[aria-pressed="true"] { color:#8ce9da;border-color:#8ce9da; }
+      #gs-green-grid:focus-visible { outline:2px solid #8ce9da;outline-offset:3px; }
+      #gs-grid-legend { position:fixed;top:62px;left:98px;z-index:60;padding:8px 12px;
+        border-radius:12px;color:var(--shot-white);font:11px/1.7 var(--shot-font);pointer-events:none; }
+      body:not([data-view="practice"]) #gs-green-grid,
+      body:not([data-view="practice"]) #gs-grid-legend { display:none; }
 
       .gs-ready { left: 50%; bottom: 26px; width: min(360px,calc(100vw - 32px)); height: 98px;
         border-radius: 28px; color: var(--shot-white); cursor: pointer; pointer-events: auto;

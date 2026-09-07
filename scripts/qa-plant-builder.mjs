@@ -1,5 +1,5 @@
 import {launch} from 'puppeteer-core';
-import {fitBrowserViewport} from './lib/browser-viewport.mjs';
+import {fitBrowserViewport,clickBrowserElement} from './lib/browser-viewport.mjs';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 const dir=await mkdtemp(`${tmpdir()}/plant-qa-`), errors=[];
@@ -21,7 +21,7 @@ await page.evaluate(async()=>{await window.golf.environmentReady;if(window.golf.
 const identity=await page.evaluate(()=>({url:location.href,course:window.golf.range.course.meta.name,backend:window.golf.sm.renderer.backend.constructor.name,webgpu:window.golf.sm.renderer.backend.isWebGPUBackend,adapter:window.golf.sm.renderer.backend.device.adapterInfo,dimensions:[window.golf.sm.renderer.domElement.width,window.golf.sm.renderer.domElement.height]}));
 console.log('identity',JSON.stringify(identity));
 if(!identity.webgpu || identity.dimensions[0]!==1920 || identity.dimensions[1]!==1080)throw new Error('Strict WebGPU 1080p contract failed');
-await page.click('#gb-plants');await page.waitForFunction(()=>document.querySelector('.plant-builder output')?.textContent.includes('segments'),{timeout:120000});
+await clickBrowserElement(page,'#gb-plants');await page.waitForFunction(()=>document.querySelector('.plant-builder output')?.textContent.includes('segments'),{timeout:120000});
 console.log('initial',await page.$eval('.plant-builder output',e=>e.textContent));
 const baseline=await page.evaluate(async()=>{
   const trees=window.golf.range._treePresentation.line.trees;trees.visible=false;

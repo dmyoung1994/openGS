@@ -103,11 +103,13 @@ export class ProceduralTreeForest {
     const bark = materialFor(definition.materials.bark, textures);
     if (definition.plant && !definition.materials.bark.textureUrl) {
       const spec = definition.plant.bark, coords = uv();
-      const noise = mx_noise_float(coords.mul(vec3(8, 0.7, 0).xy));
+      const noise = mx_noise_float(coords.mul(vec3(8, 4, 0).xy));
       const ridges = sin(coords.x.mul(spec.ridgeFrequency * Math.PI * 2).add(noise.mul(4))).mul(0.5).add(0.5);
-      bark.colorNode = materialColor.mul(ridges.mul(spec.variation).add(1 - spec.variation));
+      const grain = mx_noise_float(coords.mul(vec3(64, 32, 0).xy)).mul(0.5).add(0.5);
+      const relief = ridges.mul(0.8).add(grain.mul(0.2));
+      bark.colorNode = materialColor.mul(relief.mul(spec.variation).add(1 - spec.variation));
       if (!definition.materials.bark.normalUrl) {
-        const height = ridges.mul(spec.ridgeDepth);
+        const height = relief.mul(spec.ridgeDepth);
         const dx = positionView.dFdx(), dy = positionView.dFdy(), n = normalView;
         const rx = dy.cross(n), ry = n.cross(dx), determinant = dx.dot(rx);
         const gradient = rx.mul(height.dFdx()).add(ry.mul(height.dFdy())).mul(determinant.sign());
@@ -151,12 +153,13 @@ export class ProceduralTreeForest {
         // roots are seated per vertex against the terrain rather than being modelled
         // into the mesh. `rootBlend` is 0 everywhere on the trunk and foliage, so only
         // root stations move, easing in from the trunk collar to the tip.
+        const foliage = !draw.name.endsWith('branches');
         const rootBlend = attribute('rootBlend');
-        const base = this.rootSeating
+        // Only beauty bark shares a material with near roots.
+        const base = this.rootSeating && !foliage && !draw.name.includes('-shadow-')
           ? vec3(placed.x, this.rootSeating(placed, rootBlend.x, rootBlend.y.mul(attribute('treeScale').y)), placed.z)
           : placed;
         const weight = raw.y.max(0).div(height).pow(2).mul(treeInstance.x).mul(settings.strength * (1 - settings.stiffness * 0.8));
-        const foliage = !draw.name.endsWith('branches');
         const motion = (time, previous = false) => Fn(() => {
           const offset = vec3(0).toVar();
           If((previous ? this.previousWindActive : this.windActive).greaterThan(0.5), () => {

@@ -135,7 +135,7 @@ test('rough substrate derives a calibrated undercoat from the canonical blade pi
     'the upward-facing undercoat must compensate for the darker lit blade canopy');
   assert.match(terrain, /const c = turfUndercoatBase\(name, new Color\(\)\)/,
     'terrain rough must consume the calibrated canopy-matching undercoat');
-  assert.match(terrain, /rough: roughUndercoat\('rough'\), deepRough: roughUndercoat\('deepRough'\)/,
+  assert.match(terrain, /rough: roughUndercoat\('rough'\),[\s\S]*?deepRough: this\.groundCover === 'native-grasslands'[\s\S]*?: roughUndercoat\('deepRough'\)/,
     'both long-grass terrain classes must use the same calibrated undercoat');
   assert.match(terrain, /let zoneGrade = float\(0\.90\);[\s\S]*?float\(0\.90\), m\.rough/,
     'rough undercoat value must match the mean stable blade pigment instead of reopening dark gaps');

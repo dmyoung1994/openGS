@@ -15,8 +15,8 @@ import {
   estimateTreeCanopyRadius, normalizeTreeDefinition, normalizeTreePlacement,
 } from '../trees/TreeDefinition.js';
 
-// The named internal green contours the engine can bake (see greenContour in
-// Range.js). Course authors choose these names — raw heightfields are forbidden.
+// Legacy contour labels describe intent. Optional green.contours owns the actual
+// editable relief; no implicit radial pad is added from a label.
 export const CONTOURS = ['tilt', 'punchbowl', 'spine', 'tier', 'crown', 'saddle'];
 export const COURSE_SCHEMA_VERSION = 3;
 export const SHARED_SITE_COURSE_SCHEMA_VERSION = 4;
@@ -356,7 +356,7 @@ function validateCorridor(raw) {
 function validateGreen(raw, index, bounds) {
   const path = `course.greens[${index}]`;
   const green = object(raw, path);
-  rejectUnknown(green, new Set(['yards', 'x', 'z', 'r', 'contour', 'shape', 'pin']), path);
+  rejectUnknown(green, new Set(['yards', 'x', 'z', 'r', 'contour', 'shape', 'pin', 'contours', 'grade']), path);
   exactNumber(green.yards, `${path}.yards`);
   exactNumber(green.x, `${path}.x`);
   if (green.z !== undefined) exactNumber(green.z, `${path}.z`);
@@ -364,8 +364,10 @@ function validateGreen(raw, index, bounds) {
   enumValue(green.contour, new Set(CONTOURS), `${path}.contour`);
   const z = green.z ?? -green.yards * YARD_TO_M;
   if (!Number.isFinite(z)) fail(`${path}.z resolves to a non-finite value`);
-  const shape = validateShape(green.shape, { x: green.x, z, r: green.r }, bounds, `${path}.shape`);
+  const shape = validateShape(green.shape, { x: green.x, z, r: green.r }, bounds, `${path}.shape`, true);
   const result = { yards: green.yards, x: green.x, z, r: green.r, contour: green.contour, ...(shape ? { shape } : {}) };
+  if (green.grade !== undefined) result.grade = normalizeGreenGrade(green.grade, `${path}.grade`);
+  if (green.contours !== undefined) result.contours = normalizeGreenContours(green.contours, bounds, `${path}.contours`);
   if (green.pin !== undefined) {
     const pin = object(green.pin, `${path}.pin`);
     rejectUnknown(pin, new Set(['x', 'z']), `${path}.pin`);
@@ -375,6 +377,29 @@ function validateGreen(raw, index, bounds) {
     result.pin = Object.freeze({ x: pin.x, z: pin.z });
   }
   return Object.freeze(result);
+}
+
+export function normalizeGreenGrade(raw, path = 'green.grade') {
+  const value = object(raw, path);
+  rejectUnknown(value, new Set(['slopeX', 'slopeZ', 'blend']), path);
+  range(value.slopeX, -0.06, 0.06, `${path}.slopeX`);
+  range(value.slopeZ, -0.06, 0.06, `${path}.slopeZ`);
+  range(value.blend, 2, 40, `${path}.blend`);
+  if (Math.hypot(value.slopeX, value.slopeZ) > 0.06 + 1e-12) fail(`${path} total slope must not exceed 6%`);
+  return Object.freeze({ slopeX:value.slopeX, slopeZ:value.slopeZ, blend:value.blend });
+}
+
+// Reuse the semantic landform grammar, with a bounded green-scale envelope.
+export function normalizeGreenContours(raw, bounds, path = 'green.contours') {
+  const values = array(raw, path);
+  if (values.length > 12) fail(`${path} supports at most 12 contour features`);
+  return Object.freeze(values.map((value, index) => {
+    const contour = validateLandform(value, index, bounds);
+    range(contour.height, -3, 3, `${path}[${index}].height`);
+    range(contour.width, 1, 80, `${path}[${index}].width`);
+    range(contour.falloff, 1, 60, `${path}[${index}].falloff`);
+    return contour;
+  }));
 }
 
 function validateBunker(raw, index, bounds) {
@@ -389,9 +414,10 @@ function validateBunker(raw, index, bounds) {
   return Object.freeze({ ...bunker, ...(shape ? { shape } : {}) });
 }
 
-function validateShape(raw, feature, bounds, path) {
+function validateShape(raw, feature, bounds, path, green = false) {
   if (raw === undefined) return null;
-  if (!Array.isArray(raw) || raw.length < 6 || raw.length > 24) fail(`${path} must contain 6..24 world-space points`);
+  const maximum = green ? 48 : 24;
+  if (!Array.isArray(raw) || raw.length < 6 || raw.length > maximum) fail(`${path} must contain 6..${maximum} world-space points`);
   const points = raw.map((value, index) => {
     const point = object(value, `${path}[${index}]`);
     rejectUnknown(point, new Set(['x', 'z']), `${path}[${index}]`);
@@ -399,13 +425,13 @@ function validateShape(raw, feature, bounds, path) {
     exactNumber(point.z, `${path}[${index}].z`);
     if (!insideBounds(point, bounds)) fail(`${path}[${index}] is outside course.bounds`);
     const radial = Math.hypot(point.x - feature.x, point.z - feature.z);
-    if (radial < feature.r * 0.48 || radial > feature.r * 1.45) fail(`${path}[${index}] is outside the supported shape envelope`);
+    if ((!green && radial < feature.r * 0.48) || radial > feature.r * (green ? 2.5 : 1.45)) fail(`${path}[${index}] is outside the supported shape envelope`);
     return Object.freeze({ x: point.x, z: point.z });
   });
   if (Math.abs(polygonArea(points)) < feature.r * feature.r * 0.8) fail(`${path} has insufficient area`);
   if (polygonSelfIntersects(points)) fail(`${path} must not self-intersect`);
   if (signedDistanceToFeature({ ...feature, shape: points }, feature.x, feature.z) <= 0) fail(`${path} must contain the feature center`);
-  const outline = smoothClosedOutline(points);
+  const outline = smoothClosedOutline(points, green ? 12 : 3);
   if (polygonSelfIntersects(outline)) fail(`${path} smoothing produces a self-intersection`);
   if (signedDistanceToFeature({ ...feature, shape: outline }, feature.x, feature.z) <= 0) fail(`${path} smoothed outline must contain the feature center`);
   return outline;

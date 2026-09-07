@@ -439,7 +439,7 @@ test('WeatherSky and SceneManager own rebuild/disposal boundaries', async () => 
   assert.doesNotMatch(weather, /this\.skyTexture/);
   assert.match(scene, /this\._daylightPmremTarget\?\.dispose\(\)/);
   assert.match(scene, /this\.scene\.environment = null/);
-  assert.match(scene, /previous\?\.dispose\(\)/);
+  assert.match(scene, /previous\.dispose\(\)/);
 });
 
 test('WeatherSky readiness includes the pinned lunar map without captured-sky assets', async () => {

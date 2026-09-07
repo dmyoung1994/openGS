@@ -161,7 +161,10 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true, bran
           ? Math.max(ROOT_BARK_MIN_WRAP, Math.min(1, stations[i].radius / trunkRadius))
           : 1;
         uvs.push(j / ringCount * wrap, length);
-        rootBlend.push(stations[i].blend, stations[i].surface);
+        // Seating translates the station onto the soil; retain each vertex's
+        // height around that station or the outer ring collapses into a flat fin.
+        rootBlend.push(stations[i].blend, stations[i].surface
+          + (segments[0].role === 'root' ? p.y - point.y : 0));
         if (i && j < ringCount) {
           const a = start + (i - 1) * (ringCount + 1) + j, b = a + ringCount + 1;
           indices.push(a, b, a + 1, a + 1, b, b + 1);

@@ -112,7 +112,16 @@ The compiled `course.json` contract is:
   "tee":    { "x": 0, "z": 2, "boxHalfX": 3.2, "z0": -2, "z1": 6 },
   "corridor": { "c0": 32, "k": 0.11, "rough": 26 },  // fairway half-width(m) = c0 + (-z)*k; then a rough band of width `rough`; beyond that, deep rough
   "fringeW": 2.2,                                     // green collar width (m)
-  "greens":  [ { "yards": 150, "x": -14, "r": 9, "contour": "spine" } ],
+  "greens": [{
+    "yards": 150, "x": -14, "z": -137, "r": 10, "contour": "spine",
+    "shape": [{"x":-27,"z":-131},{"x":-29,"z":-142},{"x":-23,"z":-151},
+      {"x":-16,"z":-150},{"x":-11,"z":-141},{"x":-4,"z":-145},
+      {"x":2,"z":-140},{"x":0,"z":-131},{"x":-8,"z":-129},
+      {"x":-12,"z":-122},{"x":-20,"z":-123},{"x":-22,"z":-131}],
+    "grade": {"slopeX":0.003,"slopeZ":0.007,"blend":14},
+    "contours": [{"kind":"ridge","points":[{"x":-20,"z":-145},{"x":-17,"z":-131}],
+      "width":14,"height":0.2,"falloff":8}]
+  }],
   "bunkers": [ { "x": 20, "z": -86, "r": 5.0, "depth": 1.0, "pot": false } ],
   "ponds":   [ { "x": 55, "z": -122, "r": 15, "depth": 1.6 } ],
   "atmosphere": { "climate": "temperate-maritime", "season": "summer", "localTime": "15:30", "weather": "partly-cloudy", "cloudCoverage": 0.25, "windSpeedMph": 8, "windDirectionDegrees": 250 },
@@ -129,12 +138,36 @@ The compiled `course.json` contract is:
 }
 ```
 
-- **greens** — `yards` (z auto-derived if `z` omitted), `x`, `r` (~6–12 m), and one
-  named `contour`. Contour vocabulary (the ONLY internal shaping — never author raw
-  height noise): `tilt` (back-high, feeds front), `punchbowl` (gathers to centre),
-  `spine` (central ridge splits L/R pins), `tier` (two shelves), `crown` (pushed-up
-  turtleback), `saddle` (twin shoulders, central pass). Give each green ONE legible
-  contour and vary them across the set.
+- **greens** — `yards`, `x`, optional `z`, nominal `r` (3–40 m), legacy
+  `contour` intent label, optional `pin:{x,z}`, `shape`, `grade`, and `contours`.
+  Author `shape` as 6–48 sparse hole-local control points: concave bays, narrow
+  waists, angled entries and unequal lobes are supported. Controls may extend up
+  to 2.5 × r from the centre; there is no inner radial exclusion. The polygon and
+  its smooth quadratic spline must remain simple, enclose the centre and have
+  area at least 0.8 × r². The compiler samples the same smooth boundary for
+  surface classification, rendering, clearances, minimap and the reading grid.
+  Never pre-sample the spline in the project or paint a circular mask over it.
+  `contour` labels (`tilt`, `punchbowl`, `spine`, `tier`, `crown`, `saddle`) retain
+  old files' design intent; they do **not** generate relief by themselves.
+  Optional `grade:{slopeX,slopeZ,blend}` sets an underlying plane at the site's
+  natural centre elevation before contour features are added. Slopes are signed
+  height/metre in hole-local axes (0.01 = 1%), total magnitude at most 6%; `blend`
+  is 2–40 m outside the actual outline. The compiler rotates this slope with the
+  hole. This replaces incidental background bumps inside a deliberately graded
+  green and ties continuously into the surrounds, without adding a radial pad.
+  Omitted grade preserves legacy terrain. Check the combined slope after contours.
+  Actual green-owned relief is `contours`, up to 12 records using the existing
+  semantic landform grammar: `{kind,points:[{x,z}],width,height,falloff}` (no IDs).
+  Points are hole-local and transform with the green; width is 1–80 m, signed
+  height −3..3 m, falloff 1–60 m. Use broad `ridge`/`swale` lines and quiet
+  `shelf`/`plateau` regions. Rounded ridge/swale/channel/saddle profiles decay
+  across half the width; shelf/plateau/shoulder/bowl profiles keep a flat core
+  of half the width and use falloff for their outer shoulder. These add to the shared course landform and continue
+  smoothly beyond the mowing boundary; they change both rendering and physics.
+  Keep features within the intended green complex and away from unrelated play.
+  Own the silhouette, pin and contour edits in one undoable `green` mutation.
+  Start with a strategic contour concept and varied pin regions, not random noise
+  or concentric height pads. Verify local slope and low-speed putts in production.
 - **bunkers** — `x`, `z`, `r`, `depth` (m below grade), `pot` (bool). Bunkers are
   **cut INTO grade with no raised rim** (a raised ring reads as a meteor crater —
   see `bunker-design.md` intent, but note this engine has no `lip`/transition-bank
@@ -289,3 +322,18 @@ transition is intended). For transition records and registered profiles, read
   multiple selected cards is coherent at the project level but records independent
   object history. In direct live mode, preserve those same stable object boundaries
   in the v5 project and checkpoint only valid compilable states.
+
+## Creative intent and detached topology
+
+The live agent, staged proposals, and final review share a creative-intent brief.
+Persist the requested mode, signature shots, topology, and miss/recovery behavior
+in project.meta.notes. Treat explicit TGL-style or fantasy requests as spectacle
+architecture with authentic measured-ball physics. Report unfulfilled requirements
+in the final review instead of silently substituting a conventional hole.
+
+Detached playable platforms are not supported by the current authored schema.
+The opening creator green's finite outline is a presentation cutout; it does not
+provide arbitrary platform collision occupancy or void relief. Do not use it to
+claim a detached course is playable. That extension must share polygon boundaries
+between rendering and collision, define edge departures and misses/relief, and
+validate low-speed roll-offs before the agent can author dependent geometry.

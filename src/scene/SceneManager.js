@@ -398,12 +398,9 @@ export class SceneManager {
   // final node automatically, so highlight glare is composed in linear light.
   _setupPost() {
     if (!this.environmentTier) throw new Error('SceneManager post pipeline requires a resolved environment device tier.');
-    // Weather configuration can arrive immediately after WebGPU initialization,
-    // and a later authored weather change may rebuild the atmosphere graph. Release
-    // the old graph before replacing its handles so its full-resolution MRT and
-    // temporal targets do not remain resident or overlap the next frame.
+    // Replace weather-dependent effects, retaining the shared scene pass and its
+    // MRT attachments. Weather tiers do not change scene output or velocity.
     this._cloudTemporal?.dispose();
-    this._scenePass?.dispose();
     this._traa?.dispose();
     this._bloomPass?.dispose();
     this._sunShaftBlur?.dispose();
@@ -413,9 +410,9 @@ export class SceneManager {
     // TRAA (temporal AA) resolves the sub-pixel shimmer of thin grass blades that
     // MSAA can't. It needs MSAA OFF and an MRT scene pass exposing color +
     // velocity (motion vectors) plus depth so it can reproject the history.
-    const scenePass = pass(this.scene, this.camera, { samples: 0 });
+    const scenePass = this._scenePass ?? pass(this.scene, this.camera, { samples: 0 });
     scenePass.name = 'Scene MRT';
-    scenePass.setMRT(mrt({ output, velocity }));
+    if (!this._scenePass) scenePass.setMRT(mrt({ output, velocity }));
     // PassNode exposes resolutionScale internally in r185. Keep this assignment
     // local to the Scene MRT: the final RenderPipeline remains the output-size
     // presentation surface, while color/velocity/depth share one source size.
@@ -481,7 +478,7 @@ export class SceneManager {
       const shaftScale = economicalShafts ? 0.25 : 0.5;
       this._sunShafts.raymarchSteps.value = economicalShafts ? 24 : 48;
       this._sunShafts.resolutionScale = shaftScale;
-      this._sunShafts.distanceAttenuation.value = 0;
+      this._sunShafts.distanceAttenuation = float(0);
       this._sunShafts.maxDensity.value = 0.08;
       this._updateSunShaftDensity();
       this._sunShaftBlur = bilateralBlur(this._sunShafts.getTextureNode(), null, 2, 0.025);

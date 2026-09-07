@@ -2462,10 +2462,13 @@ function turfZoneMasks(sd, aux, waterSample, zones) {
   )).sub(0.5).mul(2.8);
   const edgeSD = sd.r.add(edgeWarp);
   // Green construction is not a biome ecotone. A reel/collar cut is a hard authored
-  // boundary, so both sides resolve over only eight centimetres and use the exact
-  // green SDF—no ecological warp and no metre-wide pigment blend.
-  const visualGreen = smoothstep(-0.04, 0.04, sd.g);
-  const visualFringe = smoothstep(-0.04, 0.04, aux.g);
+  // boundary, so resolve its pixel footprint using the authored green SDF,
+  // without ecological warp or a metre-wide pigment blend.
+  // Cover one pixel at distant/oblique views without widening the physical cut.
+  const greenAA = dFdx(sd.g).abs().add(dFdy(sd.g).abs()).mul(0.5).max(0.015);
+  const fringeAA = dFdx(aux.g).abs().add(dFdy(aux.g).abs()).mul(0.5).max(0.015);
+  const visualGreen = smoothstep(greenAA.negate(), greenAA, sd.g);
+  const visualFringe = smoothstep(fringeAA.negate(), fringeAA, aux.g);
   const maintainedTransition = smoothstep(-2.0, 2.0, edgeSD);
   // A wider but still bounded visual mix carries the same ecotone into albedo,
   // directional response, and bake ownership. It is not a gameplay mask.

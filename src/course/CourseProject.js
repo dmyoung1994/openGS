@@ -1,4 +1,4 @@
-import { DEFAULT_SURFACE_MATERIALS, normalizeCourse, normalizeSurfaceMaterials } from './course.js';
+import { DEFAULT_SURFACE_MATERIALS, normalizeGreenContours, normalizeGreenGrade, normalizeCourse, normalizeSurfaceMaterials } from './course.js';
 import {
   polylineDistance, polylineLength, polylinesCross, transformLocalPoint, transformTee,
 } from './RouteGeometry.js';
@@ -276,12 +276,17 @@ function compileSharedSite(project) {
 
 function transformFeature(feature, placement) {
   const point = transformLocalPoint(feature, placement);
+  const gradeDirection = feature.grade ? transformLocalPoint({x:feature.grade.slopeX,z:feature.grade.slopeZ}, {...placement,origin:{x:0,z:0}}) : null;
   return {
     ...stripId(feature),
     x: point.x,
     z: point.z,
     ...(feature.shape ? { shape: feature.shape.map((entry) => transformLocalPoint(entry, placement)) } : {}),
     ...(feature.pin ? { pin: transformLocalPoint(feature.pin, placement) } : {}),
+    ...(gradeDirection ? { grade:{...feature.grade,slopeX:gradeDirection.x,slopeZ:gradeDirection.z} } : {}),
+    ...(feature.contours ? { contours: feature.contours.map(contour => ({
+      ...contour, points: contour.points.map(point => transformLocalPoint(point, placement)),
+    })) } : {}),
   };
 }
 
@@ -651,15 +656,17 @@ function validateTee(raw, path, bounds) {
 
 function validateFeature(raw, path, bounds, kind) {
   const value = cloneObject(raw, path);
-  const allowed = kind === 'green' ? ['id', 'yards', 'x', 'z', 'r', 'contour', 'shape', 'pin']
+  const allowed = kind === 'green' ? ['id', 'yards', 'x', 'z', 'r', 'contour', 'shape', 'pin', 'contours', 'grade']
     : kind === 'bunker' ? ['id', 'x', 'z', 'r', 'depth', 'pot', 'shape']
       : ['id', 'x', 'z', 'r', 'depth', 'shape'];
-  exactKeys(value, allowed, path, ['shape', 'pin']); validatePoint(value, path, bounds); bounded(value.r, kind === 'green' ? 3 : 1.5, 80, `${path}.r`);
+  exactKeys(value, allowed, path, ['shape', 'pin', 'contours', 'grade']); validatePoint(value, path, bounds); bounded(value.r, kind === 'green' ? 3 : 1.5, 80, `${path}.r`);
   if (value.pin !== undefined) {
     value.pin = cloneObject(value.pin, `${path}.pin`);
     exactKeys(value.pin, ['x', 'z'], `${path}.pin`);
     value.pin = validatePoint(value.pin, `${path}.pin`, bounds);
   }
+  if (kind === 'green' && value.grade !== undefined) value.grade = normalizeGreenGrade(value.grade, `${path}.grade`);
+  if (kind === 'green' && value.contours !== undefined) value.contours = normalizeGreenContours(value.contours, bounds, `${path}.contours`);
   if (kind === 'green') { finite(value.yards, `${path}.yards`); nonEmpty(value.contour, `${path}.contour`); }
   else { bounded(value.depth, 0.3, 6, `${path}.depth`); if (kind === 'bunker' && typeof value.pot !== 'boolean') fail(`${path}.pot must be boolean`); }
   if (value.shape !== undefined) value.shape = array(value.shape, `${path}.shape`).map((point, index) => validatePoint(point, `${path}.shape[${index}]`, bounds));

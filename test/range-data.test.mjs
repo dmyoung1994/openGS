@@ -20,7 +20,7 @@ test('Beach Range is the sole deterministic practice-range dataset', () => {
 
 test('range routing has no obsolete course selector', async () => {
   const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
-  assert.match(source, /const coursePath = isRangePage \? '\/beach-range\.json' : '\/course\.json'/);
+  assert.match(source, /isRangePage \? '\/beach-range\.json' : '\/course\.json'/);
   assert.doesNotMatch(source, /premium-range|requestedCourse/);
   assert.match(source, /loadCourse\(coursePath, \{ catalogAssetIds: environmentCatalog\.byId \}\)/);
 });

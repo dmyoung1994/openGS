@@ -9,6 +9,12 @@ export const replacements = [
   ["\t\tcacheKey += this.context.id + ',';", "\t\tcacheKey += ( this.context.shaderCacheKey ?? this.context.id ) + ',';\n\t\tcacheKey += renderer.toneMapping + ',' + renderer.outputColorSpace + ',';"],
   ["attachmentState = `${ count }:${ format }:${ type }:${ renderTarget.samples }:${ renderTarget.depthBuffer }:${ renderTarget.stencilBuffer }`;",
     "attachmentState = `${ count }:${ renderTarget.textures.map( texture => `${ texture.format }:${ texture.type }:${ texture.colorSpace }` ).join( '/' ) }:${ renderTarget.samples }:${ renderTarget.depthBuffer }:${ renderTarget.stencilBuffer }`;"],
+  ["\t\t\tthis._compilationPromises.push( {\n\t\t\t\tobject,\n\t\t\t\tmaterial,",
+    "\t\t\tthis._compilationPromises.push( {\n\t\t\t\tobject,\n\t\t\t\tmaterial,\n\t\t\t\tmaterialSide: material.side,"],
+  ["\t\tfor ( const item of compilationPromises ) {\n",
+    "\t\tfor ( const item of compilationPromises ) {\n\n\t\t\t// Transparent two-pass rendering restores side before queued work runs.\n\t\t\tconst originalSide = item.material.side;\n\t\t\titem.material.side = item.materialSide;\n\t\t\ttry {\n"],
+  ["\t\t\t// Yield between objects to allow animation frames",
+    "\t\t\t} finally {\n\n\t\t\t\titem.material.side = originalSide;\n\n\t\t\t}\n\n\t\t\t// Yield between objects to allow animation frames"],
 ];
 
 export function transformRenderCache(source, edits, reverse = false) {
@@ -30,6 +36,7 @@ export async function patchThreeRenderCache({ reverse = false } = {}) {
   const targets = [
     ['src/renderers/common/RenderContexts.js', [replacements[0], replacements[2]]],
     ['src/renderers/common/RenderObject.js', [replacements[1]]],
+    ['src/renderers/common/Renderer.js', replacements.slice(3)],
     ['build/three.webgpu.js', replacements],
     ['build/three.webgpu.nodes.js', replacements],
   ];

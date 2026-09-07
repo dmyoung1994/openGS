@@ -4,7 +4,7 @@ import {
 } from 'three';
 import { MeshBasicNodeMaterial, MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
 import {
-  attribute, cameraPosition, float, mix, mx_noise_float, normalGeometry, normalWorld, positionGeometry, positionWorld,
+  attribute, cameraPosition, float, Fn, If, mix, mx_noise_float, normalGeometry, normalWorld, positionGeometry, positionWorld,
   oneMinus, smoothstep, texture, transformNormalToView, varying, vec2, vec3, vec4, vertexColor,
 } from 'three/tsl';
 import { Noise } from '../util/noise.js';
@@ -2414,8 +2414,17 @@ function worldMaterial(name, biome, {
   // disappear on pale/snow or low-mineral faces when rockDetail is near zero.
   // Fine biplanar breakup remains coverage-gated in `bump` below; the structural
   // normal uses one calibrated broad-face strength everywhere.
+  // Outside the completed blend, the course normal contributes nothing. Keep
+  // its sixteen height texel loads inside the branch that actually needs them.
+  const joinedNormal = edgeNormal ? Fn(() => {
+    const result = normalWorld.toVar();
+    If(worldEdgeDistance.lessThan(24), () => {
+      result.assign(mix(edgeNormal, normalWorld, smoothstep(0, 24, worldEdgeDistance)));
+    });
+    return result;
+  })() : normalWorld;
   material.normalNode = transformNormalToView(
-    (edgeNormal ? mix(edgeNormal, normalWorld, smoothstep(0, 24, worldEdgeDistance)) : normalWorld).add(bump)
+    joinedNormal.add(bump)
       .add(vertexReliefBump.mul(0.78).mul(alpineEcotone))
       .add(rockScanNormalDelta).normalize(),
   );

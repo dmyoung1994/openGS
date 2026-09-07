@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareSceneTextures } from '../src/scene/prepareSceneTextures.js';
+import { DataTexture } from 'three';
+import { texture } from 'three/tsl';
+
+test('shader graph textures are staged once without uploading pass-owned targets', async () => {
+  const map = new DataTexture(), target = new DataTexture();
+  target.isRenderTargetTexture = true;
+  const shared = texture(map);
+  const material = { colorNode: shared.rgb.mul(shared.r), roughnessNode: texture(target).r };
+  const uploaded = [];
+  const count = await prepareSceneTextures({ initTexture: value => uploaded.push(value) },
+    { traverse: callback => callback({ material }) });
+  assert.equal(count, 1);
+  assert.deepEqual(uploaded, [map]);
+});
 
 test('staged texture preparation uses exact existing maps once and leaves ownership untouched', async () => {
   const map = { isTexture: true }, owned = { isTexture: true };

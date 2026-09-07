@@ -254,3 +254,21 @@ test('division stops before a root is thinner than the bark drawn on it', () => 
       `generation ${g} must be thinner than the runner that shed it`);
   }
 });
+
+test('fully seated roots retain their rounded cross-section on sloping terrain', () => {
+  const plant = createTreePreset('tall-pine').plant;
+  const skeleton = { segments: [{ start: [0, -.1, 0], end: [1, -.3, 0],
+    radius0: .2, radius1: .1, level: 0, stem: -1, role: 'root',
+    rootBlend0: 1, rootBlend1: 1, rootSurface0: -.03, rootSurface1: -.03 }], leaves: [], blossoms: [] };
+  const meshes = compileTreeGeometry(skeleton, { plant });
+  const { position, rootBlend } = meshes.branches.attributes;
+  const offsets = [];
+  for (let i = 0; i < 16; i++) {
+    const ground = .2 * position.getX(i) + .1 * position.getZ(i);
+    const seated = ground - .04 + rootBlend.getY(i);
+    offsets.push(seated - ground);
+    assert.ok(Math.abs(rootBlend.getY(i) - (position.getY(i) + .1 - .03)) < 1e-6);
+  }
+  assert.ok(Math.max(...offsets) - Math.min(...offsets) > .3, 'seating must not flatten the ring');
+  for (const mesh of Object.values(meshes)) mesh.dispose();
+});

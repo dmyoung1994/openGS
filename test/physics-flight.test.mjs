@@ -9,7 +9,7 @@ import {
   reynolds,
   spinRatio,
 } from '../src/physics/aerodynamics.js';
-import { BALL, airViscosity } from '../src/physics/constants.js';
+import { BALL, GRAVITY, airViscosity } from '../src/physics/constants.js';
 import { BALL_FLIGHT_MODEL_EVIDENCE, GCQUAD_VALIDATION_CORPUS } from '../src/physics/calibration.js';
 import { Ball } from '../src/physics/Ball.js';
 import { deriveLaunchState, makeEnv, simulateFlight, stepRK4 } from '../src/physics/ballistics.js';
@@ -38,6 +38,27 @@ test('a rolling shot entering water requires recovery before its rest event', ()
   assert.equal(ball.angularVelocity.length(), 0);
 });
 const almost = (actual, expected, epsilon = 1e-8) => assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} != ${expected} ±${epsilon}`);
+
+test('pure rolling shares slope acceleration with rotation without inventing contact slip', () => {
+  const n = new Vector3(0, 1, -.04).normalize();
+  const terrain = { heightAt: (_x, z) => .04 * z, normalAt: () => n.clone(), surfaceAt: () => 'green' };
+  for (const direction of [new Vector3(0, .04, 1).normalize(), new Vector3(0, -.04, -1).normalize(), new Vector3(1, 0, 0)]) {
+    const ball = new Ball(terrain, stillAir);
+    ball.placeAt(0, 0);
+    ball.velocity.copy(direction);
+    ball.angularVelocity.copy(n).cross(direction).divideScalar(ball.radius);
+    ball.state = 'rolling';
+    const surf = surface('green'), dt = .002;
+    const gravity = new Vector3(0, -GRAVITY, 0);
+    gravity.addScaledVector(n, -gravity.dot(n));
+    const expected = direction.clone().multiplyScalar(1 - (surf.rollResistance * GRAVITY + surf.rollDrag) * n.y * dt)
+      .addScaledVector(gravity, dt / (1 + 2 / 5));
+    ball.update(dt);
+    assert.ok(ball.velocity.distanceTo(expected) < 1e-10);
+    const contactSlip = ball.angularVelocity.clone().cross(n.clone().multiplyScalar(-ball.radius)).add(ball.velocity);
+    assert.ok(contactSlip.length() < 1e-10, 'slope acceleration must preserve no-slip rolling');
+  }
+});
 
 test('metric-driven putts preserve surface, firmness, slope and frame-rate ordering', () => {
   const run = ({ name = 'green', firmness = 'medium', slope = 0, speed = 5, dt = 1 / 60 } = {}) => {

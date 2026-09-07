@@ -37,7 +37,7 @@ test('required environment assets fail closed before rendering', async () => {
   assert.match(main, /window\.golfBootstrap = Object\.freeze/);
   assert.match(main, /bootstrapDiagnostics\.stage === 'ready'/);
   assert.match(main, /await range\.assetsReady/);
-  assert.match(main, /loadCourse\('\/course\.json', \{ catalogAssetIds: environmentCatalog\.byId \}\)/);
+  assert.match(main, /loadCourse\(coursePath, \{ catalogAssetIds: environmentCatalog\.byId \}\)/);
   assert.doesNotMatch(main, /e\.code === 'Digit[12]'/);
   assert.match(range, /const backdropReady = this\.creatorCanvas \? Promise\.resolve\(\) : this\.backdrop\.assetsReady/,
     'the blank creator canvas may omit backdrop assets while authored courses still fail closed');

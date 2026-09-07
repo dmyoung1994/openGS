@@ -29,7 +29,7 @@ import {
   bunkerGradeAt, roundedHazardFeature, signedDistanceToFeature,
 } from '../course/featureGeometry.js';
 import { compileBiomeTransitionField } from '../course/BiomeRegistry.js';
-import { semanticLandformHeight } from '../course/SemanticLandforms.js';
+import { semanticLandformHeight, greenGradeHeight } from '../course/SemanticLandforms.js';
 import { ProceduralTreeForest, proceduralTreeCanopyRadius, proceduralTreeFlareRadius } from './ProceduralTrees.js';
 import { createCreatorCanvasFrame } from './CreatorCanvasFrame.js';
 import { createCreatorFringeGrass } from './CreatorFringeGrass.js';
@@ -38,6 +38,7 @@ import { createCreatorCup, GOLF_HOLE_RADIUS_M } from './CreatorCup.js';
 import { nearestRouteSignedDistance } from '../course/RouteGeometry.js';
 import { normalizeSurfaceMaterials } from '../course/course.js';
 import { Birds } from './Birds.js';
+import { createGreenReadingGrid } from './GreenReadingGrid.js';
 
 const _tex = new TextureLoader();
 const _gltf = new GLTFLoader();
@@ -163,7 +164,12 @@ export class PlayableCourseScene {
         ...this.routing.transitions.map((transition) => ({ points: transition.points, c0: transition.width, k: 0, rough: Math.max(1.5, transition.width * 0.75), kind: 'transition' })),
       ]
       : [];
-    this.landforms = course.landforms || [];
+    this.greenContours = this.targets.flatMap(green => green.contours ?? []);
+    this.landforms = [...(course.landforms || []), ...this.greenContours];
+    this.greenGrades = this.targets.filter(green => green.grade).map(green => ({
+      green, bounds:featureBounds(green),
+      datum:courseLandformHeight(this.noise,green.x,green.z) + semanticLandformHeight(course.landforms,green.x,green.z),
+    }));
     // Target furniture is deliberately shared within a playable-scene rebuild: one cloth
     // solver, one painted-number atlas/mesh, and merged poles/cups avoid allocating
     // a separate render asset per target.
@@ -178,7 +184,7 @@ export class PlayableCourseScene {
       });
       return Object.freeze({
         ...rounded,
-        ...bunkerDrainageAxis(this.noise, rounded, index, this.landforms),
+        ...bunkerDrainageAxis((x, z) => this._baseLandformHeight(x, z), rounded, index),
         _sandFeature: sandFeature,
       });
     });
@@ -396,18 +402,29 @@ export class PlayableCourseScene {
     return h;
   }
 
-  _baseHeight(x, z) {
+  _baseLandformHeight(x, z) {
     if (this.creatorCanvas) return semanticLandformHeight(this.landforms, x, z);
     // Collision-authoritative course form. One lateral drainage swale, offset
     // maintained-ground benches, and elongated low rolls create readable terrain
     // shadows from golfer height. Every primitive is metre-scaled and aperiodic;
     // the low-amplitude fBm breaks their shoulders without becoming random moguls.
     let h = courseLandformHeight(this.noise, x, z);
-    h += semanticLandformHeight(this.landforms, x, z);
+    h += semanticLandformHeight(this.course.landforms, x, z);
+    for (const {green, bounds, datum} of this.greenGrades) {
+      if (inFeatureBounds(bounds, x, z, green.grade.blend)) h = greenGradeHeight(green, datum, h, x, z);
+    }
+    h += semanticLandformHeight(this.greenContours, x, z);
 
-    // Greens inherit the continuous course landform. Their authored irregular SDF
+    return h;
+  }
+
+  _baseHeight(x, z) {
+    let h = this._baseLandformHeight(x, z);
+
+    // Greens inherit the course landform unless an explicit grade is authored. Their irregular SDF
     // still owns gameplay, cut height, pigment, roughness, and fringe. There is no
-    // additive per-green elevation pad: even an outline-aware shoulder produces
+    // automatic per-green elevation pad; explicit green.contours above contribute
+    // through the shared semantic landform sampler. An outline-aware pad produces
     // two conspicuous contour rings in the fixed overview camera.
 
     // Carve each bunker as a depression CUT INTO the grade — never a raised rim.
@@ -440,7 +457,7 @@ export class PlayableCourseScene {
         const extentX = Math.max(...tee.shape.map((point) => Math.abs(point.x - tee.x))) + 5;
         const extentZ = Math.max(...tee.shape.map((point) => Math.abs(point.z - tee.z))) + 5;
         const influence = Math.exp(-(((x - tee.x) ** 2) / (extentX ** 2) * 2.2 + ((z - tee.z) ** 2) / (extentZ ** 2) * 2.2));
-        const datum = courseLandformHeight(this.noise, tee.x, tee.z) + semanticLandformHeight(this.landforms, tee.x, tee.z);
+        const datum = this._baseLandformHeight(tee.x, tee.z);
         h = h * (1 - influence) + datum * influence;
       }
     } else {
@@ -522,6 +539,21 @@ export class PlayableCourseScene {
 
   activeHole() {
     return this.routingHoles.find((hole) => hole.holeId === this.activeHoleId) ?? null;
+  }
+
+  setGreenGrid(enabled) {
+    const green = this.targets[this.activeHole()?.greenStart ?? 0];
+    if (this.greenGrid && this._gridGreen !== green) {
+      this.group.remove(this.greenGrid);
+      this.greenGrid.traverse(object => { object.geometry?.dispose(); object.material?.dispose(); });
+      this.greenGrid = null;
+    }
+    if (enabled && green && !this.greenGrid) {
+      this.greenGrid = createGreenReadingGrid(this.terrain, green);
+      this._gridGreen = green;
+      this.group.add(this.greenGrid);
+    }
+    if (this.greenGrid) this.greenGrid.visible = enabled;
   }
 
   activeAim() {
@@ -1190,6 +1222,7 @@ export class PlayableCourseScene {
   }
 
   update(t) {
+    if (this.greenGrid?.visible) this.greenGrid.update(t);
     this.terrain.update(this.camera);
     for (const shadow of this.treeShadows || []) shadow.update();
     for (const beauty of this.treeBeauties || []) beauty.update(this.camera);
@@ -1380,9 +1413,8 @@ function pointInConvexShape(points, x, z) {
 // Resolve the actual local fall line from the same collision-authoritative course
 // form the bunker is cut into. The axis is cached on the compiled feature, so every
 // height sample receives one stable direction without repeating gradient probes.
-function bunkerDrainageAxis(noise, bunker, index, landforms = []) {
+function bunkerDrainageAxis(base, bunker, index) {
   const step = 0.6;
-  const base = (x, z) => courseLandformHeight(noise, x, z) + semanticLandformHeight(landforms, x, z);
   const gx = (base(bunker.x + step, bunker.z) - base(bunker.x - step, bunker.z)) / (step * 2);
   const gz = (base(bunker.x, bunker.z + step) - base(bunker.x, bunker.z - step)) / (step * 2);
   const length = Math.hypot(gx, gz);

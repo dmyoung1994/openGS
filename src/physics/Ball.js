@@ -19,6 +19,7 @@ import { cupCaptureSpeed, intersectCupEntry } from './cupInteraction.js';
 // 'carry' (first ground contact), 'bounce', 'groundContact' (at most once per
 // presented update while rolling), 'waterImpact', 'hazard', 'rest'.
 const FIXED_DT = 0.002; // s, physics substep
+const ROLLING_GRAVITY = 5 / 7; // Solid sphere: 1 / (1 + I / mr²), matching contact inertia.
 
 // Scratch vectors reused by the rolling solver (avoids per-substep allocation).
 const _r0 = new Vector3();
@@ -381,8 +382,8 @@ export class Ball {
     // r = -n * radius. A ball that just checked still carries BACKSPIN, whose
     // contact point slips forward, so it is not really rolling yet - it skids,
     // and kinetic friction keeps scrubbing (and can even reverse) it until the
-    // spin bleeds down to the rolling condition v = omega x r. A pure putt has
-    // no spin, so it rolls freely from the start. This single mechanism is what
+    // spin bleeds down to the rolling condition v + omega x r = 0. A zero-spin putt
+    // initially skids and acquires topspin before it rolls. This mechanism is what
     // makes approach shots CHECK and high-spin wedges ZIP BACK on a green while
     // a driver (little spin left) just releases.
     const omegaVec = _r2.copy(this.angularVelocity);
@@ -408,6 +409,7 @@ export class Ball {
       // Angular: torque bleeds the spin toward the rolling state.
       const dOmega = _r7.copy(n).cross(slipHat).multiplyScalar((5 * jFric) / (2 * radius));
       omegaVec.add(dOmega);
+      this.velocity.addScaledVector(gTangent, dt);
     } else {
       // --- Rolling: constant rolling resistance + speed-squared grass drag,
       // and lock the spin to the rolling state so no spurious slip reappears.
@@ -415,14 +417,14 @@ export class Ball {
       if (speed > 1e-4) {
         const fricDecel = surf.rollResistance * GRAVITY * cosT;
         const dragDecel = (surf.rollDrag || 0) * speed * speed * cosT;
-        this.velocity.addScaledVector(this.velocity, -(fricDecel + dragDecel) * dt / speed);
+        this.velocity.multiplyScalar(Math.max(0, 1 - (fricDecel + dragDecel) * dt / speed));
       }
+      // Static contact friction supplies the torque needed to roll downhill.
+      // Apply that acceleration before synchronizing spin, avoiding artificial slip.
+      this.velocity.addScaledVector(gTangent, dt * ROLLING_GRAVITY);
       // omega_roll = (n x v)/radius  (topspin consistent with pure rolling).
       omegaVec.copy(n).cross(this.velocity).multiplyScalar(1 / radius);
     }
-
-    // Slope drive applies in both regimes.
-    this.velocity.addScaledVector(gTangent, dt);
 
     const previousPosition = this._airStepStartPosition.copy(this.position);
     this.position.addScaledVector(this.velocity, dt);
@@ -454,7 +456,7 @@ export class Ball {
     // Stop only once it is genuinely crawling AND essentially rolling (not
     // mid-check or mid-zip), and the slope can't keep it going.
     const slopeTan = Math.hypot(n.x, n.z) / Math.max(cosT, 1e-4);
-    if (this.velocity.length() < surf.stopSpeed && slipMag < 0.4 && slopeTan < surf.rollResistance) {
+    if (this.velocity.length() < surf.stopSpeed && slipMag < 0.4 && slopeTan * ROLLING_GRAVITY < surf.rollResistance) {
       this.velocity.set(0, 0, 0);
       this.angularVelocity.set(0, 0, 0);
       this._syncSpinReport();

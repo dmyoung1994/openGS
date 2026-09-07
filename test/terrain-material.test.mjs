@@ -47,9 +47,9 @@ test('turf transitions and grazing response stay world-stable', async () => {
     'mown/rough bake transition needs an irregular world-space ecotone');
   assert.match(source, /const maintainedTransition\s*=\s*smoothstep\(-2\.0, 2\.0, edgeSD\)/,
     'mown/rough bake transition must follow a world-space shoulder, not a camera radius');
-  assert.match(source, /const visualGreen = smoothstep\(-0\.04, 0\.04, sd\.g\)/,
+  assert.match(source, /const visualGreen = smoothstep\(greenAA\.negate\(\), greenAA, sd\.g\)/,
     'green/collar construction must use the exact hard mowing cut');
-  assert.match(source, /const visualFringe = smoothstep\(-0\.04, 0\.04, aux\.g\)/,
+  assert.match(source, /const visualFringe = smoothstep\(fringeAA\.negate\(\), fringeAA, aux\.g\)/,
     'the collar outer cut must remain exact rather than inheriting a biome warp');
   assert.doesNotMatch(source, /targetWarp/,
     'green and fringe boundaries must not reuse the ecological fairway warp');

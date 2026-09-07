@@ -91,6 +91,9 @@ export class FlagClothSystem {
     this.renderPrevious.array.set(this.positions);
     this.renderPrevious.needsUpdate = true;
     const now = this.environment.time.value;
+    // Each launch starts a new environment clock. Keep the cloth shape, but do
+    // not carry fractional solver time from the previous shot into the new one.
+    if (now < this._simulatedTime) this._accumulator = 0;
     const elapsed = Math.max(0, Math.min(0.25, now - this._simulatedTime));
     this._simulatedTime = now;
     this._accumulator += elapsed;

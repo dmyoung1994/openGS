@@ -15,7 +15,7 @@ test('range target furniture uses recessed cups and one merged cloth draw', () =
   assert.match(source, /clearcoatRoughness: 0\.24/);
   assert.match(source, /targetPropsReady/);
   assert.match(source, /cupGeometry: new CylinderGeometry\(0\.075, 0\.075, 0\.035/);
-  assert.match(source, /dummy\.position\.set\(t\.x, y - 0\.026, t\.z\)/);
+  assert.match(source, /dummy\.position\.set\(pin\.x, y - 0\.026, pin\.z\)/);
   assert.match(source, /new FlagClothSystem/);
   assert.match(source, /this\.flagCloth\?\.update\(\)/);
   assert.doesNotMatch(source, /flagBaseGeometry|signGeometry|postGeometry|_placard/);

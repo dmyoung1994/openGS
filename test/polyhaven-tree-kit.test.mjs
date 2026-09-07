@@ -171,11 +171,11 @@ test('Fir Sapling Medium keeps a dense whole-component middle LOD', async () => 
 
 test('runtime tree catalog exposes the reviewed CC0 source kit', () => {
   const assets = manifest.assets.filter(({ category }) => category === 'tree');
-  assert.deepEqual(assets.map(({ id }) => id), required);
+  assert.deepEqual(assets.map(({ id }) => id), [...required, 'polyhaven-jacaranda-tree']);
   for (const asset of assets) {
     assert.equal(asset.license.spdx, 'CC0-1.0');
   }
-  assert.match(assets.at(-1).license.sourceUrl, /^https:\/\/www\.blendkit\.com\/asset-gallery-detail\//);
+  assert.match(assets.find(({ id }) => id === 'blendkit-palm-tree-medium-dense').license.sourceUrl, /^https:\/\/www\.blendkit\.com\/asset-gallery-detail\//);
   assert.doesNotMatch(JSON.stringify(manifest), /conifer_v8/i);
 });
 

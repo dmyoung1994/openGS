@@ -15,7 +15,8 @@ test('moving the pin preserves green geometry and changes the final aim target',
   changed.greens[0].pin = { x: changed.greens[0].x + 3, z: changed.greens[0].z - 2 };
   const normalized = normalizeCourse(changed);
   const { pin, ...geometry } = normalized.greens[0];
-  assert.deepEqual(geometry, baseline.greens[0]);
+  const { pin: priorPin, ...priorGeometry } = baseline.greens[0];
+  assert.deepEqual(geometry, priorGeometry);
   assert.deepEqual(pin, changed.greens[0].pin);
   assert.deepEqual(createHoleShotPlan(normalized.routing.holes[0], normalized.greens[0]).at(-1), { ...pin, role: 'green' });
   assert.deepEqual(normalized.greens.slice(1), baseline.greens.slice(1));
@@ -40,6 +41,7 @@ test('course compilation transforms the independent local pin with its routed ho
   const index = compiled.runtime.routing.holes[2].greenStart;
   const { pin, ...geometry } = compiled.runtime.greens[index];
   assert.deepEqual(pin, expected);
-  assert.deepEqual(geometry, baseline.runtime.greens[index]);
+  const { pin: priorPin, ...priorGeometry } = baseline.runtime.greens[index];
+  assert.deepEqual(geometry, priorGeometry);
   assert.deepEqual(compiled.normalized.greens[index].pin, expected);
 });

@@ -1,3 +1,5 @@
+import { signedDistanceToFeature } from './featureGeometry.js';
+
 // Editable v4 landforms compile into smooth signed height contributions on top of
 // the engine-owned geologic base. Render and collision sample this same function.
 export function semanticLandformHeight(landforms, x, z) {
@@ -31,4 +33,13 @@ function distanceToPolyline(x, z, points) {
 function smoothstep(edge0, edge1, value) {
   const amount = Math.max(0, Math.min(1, (value - edge0) / Math.max(1e-9, edge1 - edge0)));
   return amount * amount * (3 - 2 * amount);
+}
+
+// An explicitly authored base plane, tied to the site's centre elevation. The
+// actual green outline owns its C1-continuous blend through the surrounds.
+export function greenGradeHeight(green, datum, baseHeight, x, z) {
+  const { slopeX, slopeZ, blend } = green.grade;
+  const weight = smoothstep(-blend, 0, signedDistanceToFeature(green, x, z));
+  const plane = datum + slopeX * (x - green.x) + slopeZ * (z - green.z);
+  return baseHeight + (plane - baseHeight) * weight;
 }

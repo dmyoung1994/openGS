@@ -21,7 +21,7 @@ const forestFixture = {
 test('shipped course validates against the shipped runtime catalog constraints', () => {
   const catalog = new Map(shippedCatalog.assets.map((asset) => [asset.id, asset]));
   const normalized = normalizeCourse(structuredClone(shippedCourse), { catalogAssetIds: catalog });
-  assert.equal(normalized.environment.objectCount, 199);
+  assert.equal(normalized.environment.objectCount, 421);
 });
 
 test('shared-site normalization is deterministic and preserves every routed hole', () => {
@@ -35,7 +35,7 @@ test('shared-site normalization is deterministic and preserves every routed hole
   assert.ok(first.greens.every((green) => green.shape?.length >= 18));
   assert.ok(first.bunkers.every((bunker) => !bunker.shape || bunker.shape.length >= 18));
   assert.equal(first.routing.holes.length, 3);
-  assert.equal(first.environment.objectCount, 199);
+  assert.equal(first.environment.objectCount, 421);
   assert.deepEqual(first.environment.assembly, []);
   assert.deepEqual(first.environment.edgeDressing, []);
   assert.deepEqual(first.environment.scatter, []);
@@ -43,7 +43,7 @@ test('shared-site normalization is deterministic and preserves every routed hole
 
 test('forest course uses the authored procedural pines across the routed course', () => {
   const { environment } = normalizeCourse(structuredClone(shippedCourse));
-  assert.equal(environment.proceduralTrees.length, 111);
+  assert.equal(environment.proceduralTrees.length, 333);
   assert.deepEqual([...new Set(environment.proceduralTrees.map(tree => tree.definitionId))], ['tall-pine']);
   assert.ok(environment.proceduralTreeDefinitions.some(definition => definition.id === 'tall-pine'));
   const trees = environment.proceduralTrees;
@@ -84,6 +84,7 @@ test('feature outlines reject self intersections and preserve the circle fallbac
   assert.throws(() => normalizeCourse(invalid), /self-intersect|contain the feature center|insufficient area/);
   const legacy = structuredClone(shippedCourse);
   delete legacy.greens[0].shape;
+  delete legacy.greens[0].pin;
   const normalized = normalizeCourse(legacy);
   assert.equal(normalized.greens[0].shape, undefined);
 });

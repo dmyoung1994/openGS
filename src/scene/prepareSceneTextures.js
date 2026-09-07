@@ -11,10 +11,22 @@ export async function prepareSceneTextures(renderer, scene) {
     }
   });
   const textures = new Set();
+  const nodes = [], visited = new Set();
   for (const material of materials) {
     for (const value of [...Object.values(material), ...(material.userData?.ownedTextures || [])]) {
       if (value?.isTexture && !value.isRenderTargetTexture) textures.add(value);
+      if (value?.isNode) nodes.push(value);
     }
+  }
+  // Node materials keep authored maps in their expression graph, not map slots.
+  // Visit shared subexpressions once; render-target inputs remain pass-owned.
+  while (nodes.length) {
+    const node = nodes.pop();
+    if (visited.has(node)) continue;
+    visited.add(node);
+    const texture = node.value;
+    if (texture?.isTexture && !texture.isRenderTargetTexture) textures.add(texture);
+    nodes.push(...node.getChildren());
   }
   for (const texture of textures) {
     renderer.initTexture(texture);

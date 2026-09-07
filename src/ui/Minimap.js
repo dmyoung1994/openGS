@@ -309,6 +309,15 @@ export class Minimap {
     this._lastState = state;
     if (!this.available || !this._course || !this.transform) return;
     const { ball, camera, aimTarget, aimOrigin, canAim = false } = state;
+    const green = this.range?.targets?.[this.hole.greenStart];
+    const pin = green?.pin ?? green;
+    const drawState = JSON.stringify([this.opened, ball?.x, ball?.z,
+      aimTarget?.x, aimTarget?.z, aimTarget?.role, aimOrigin?.x, aimOrigin?.z,
+      canAim, pin?.x, pin?.z]);
+    // The collapsed map has no camera marker. Keep its exact pixels until a
+    // displayed value changes; opening still uses the latest camera/state.
+    if (!this.opened && this._drawnCourse === this._course
+      && this._drawnPlan === this.shotPlan && this._drawnState === drawState) return;
     const context = this.ctx;
     context.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     context.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
@@ -335,7 +344,6 @@ export class Minimap {
       this._planMarker(point, point.label);
     }
 
-    const green = this.range?.targets?.[this.hole.greenStart];
     if (green) this._marker(green.pin ?? green, 6, '#d9ef91', 'G');
     const tee = this.hole.tees?.[0];
     if (tee) this._marker(tee, 5, '#e8c98c', 'T');
@@ -383,6 +391,9 @@ export class Minimap {
     } else {
       this.help.textContent = canAim ? 'Click map to aim.' : 'Aim is locked while the ball is in flight.';
     }
+    this._drawnCourse = this._course;
+    this._drawnPlan = this.shotPlan;
+    this._drawnState = drawState;
   }
 
   _drawVegetation(context) {
