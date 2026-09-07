@@ -5,7 +5,7 @@ self.onmessage = ({ data: { definition, seed } }) => {
     const started = performance.now(), skeleton = generateTreeSkeleton(definition, { seed });
     const radial = Math.round(definition.plant?.quality.radialSegments ?? 9);
     const tiers = [0, 1, 2].map(tier => {
-      const geometry = compileTreeGeometry(skeleton, { radialSegments: Math.max(3, radial - tier * 3), leafStride: [1, 2, 4][tier], plant: definition.plant, includeRoots: tier === 0 });
+      const geometry = compileTreeGeometry(skeleton, { radialSegments: Math.max(3, radial - tier * 3), leafStride: [1, 4, 12][tier], plant: definition.plant, includeRoots: tier === 0, branchTolerance: tier === 0 ? 0 : skeleton.bounds.size[1] / (tier === 1 ? 1200 : 360) });
       const packed = packTreeGeometry(geometry);
       for (const mesh of Object.values(geometry)) mesh.dispose();
       return packed;

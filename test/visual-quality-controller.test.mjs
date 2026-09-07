@@ -168,8 +168,8 @@ test('Auto catches sustained small target misses and ignores loading windows', (
   const controller = new VisualQualityController({ tier: 'high', hardwareConcurrency: 6, persist: false });
   observe(controller, 0, 2000, { frameMs: 33.45 });
   controller.ingestSample({ eligible: false });
-  assert.equal(observe(controller, 4000, 6000, { frameMs: 33.45 }).activeMode, 'quality');
-  assert.equal(observe(controller, 6020, 8000, { frameMs: 33.45 }).activeMode, 'balanced');
+  assert.equal(observe(controller, 4000, 6000, { frameMs: 33.45 }).activeMode, 'balanced');
+  assert.equal(observe(controller, 6020, 8000, { frameMs: 33.45 }).activeMode, 'battery');
 });
 
 test('Auto requires ten seconds of headroom, trials promotion, and delays failed retries', () => {
@@ -189,6 +189,7 @@ test('Auto requires ten seconds of headroom, trials promotion, and delays failed
 
 test('Auto respects hardware ceiling and CPU bottlenecks', () => {
   const controller = new VisualQualityController({ tier: 'high', hardwareConcurrency: 6, persist: false });
+  assert.equal(controller.activeMode, 'balanced');
   assert.equal(observe(controller, 0, 12000, { frameMs: 8, gpuMs: 6, cpuMs: 4 }).activeMode, 'quality');
   const limited = observe(controller, 12020, 16000, { frameMs: 40, gpuMs: 8, cpuMs: 38 });
   assert.equal(limited.activeMode, 'balanced'); assert.equal(limited.observation.limitingWork, 'cpu');

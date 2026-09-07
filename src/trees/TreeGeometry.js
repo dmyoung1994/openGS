@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Vector3 } from 'three';
+import { BufferAttribute, BufferGeometry, Line3, Vector3 } from 'three';
 
 // Bark ridges are laid across the NORMALIZED circumference, so every tube gets the
 // same ridge count regardless of girth: a thin root packs the trunk's whole count
@@ -47,8 +47,36 @@ function meshBuffer(positions, uvs, indices, rootBlend = null) {
   return geometry;
 }
 
+// Keep endpoints and any station whose centreline or taper exceeds the error
+// budget. Every branch survives; only redundant intermediate tube rings go.
+function simplifyStations(stations, tolerance) {
+  if (!tolerance || stations.length < 3) return stations;
+  const keep = new Set([0, stations.length - 1]);
+  const line = new Line3(), point = new Vector3(), closest = new Vector3();
+  let arc = 0;
+  for (let i = 0; i < stations.length; i++) {
+    if (i) arc += point.fromArray(stations[i].point).distanceTo(closest.fromArray(stations[i - 1].point));
+    stations[i].arc = arc;
+  }
+  const split = (first, last) => {
+    const a = stations[first], b = stations[last];
+    line.start.fromArray(a.point); line.end.fromArray(b.point);
+    let worst = tolerance, at = -1;
+    for (let i = first + 1; i < last; i++) {
+      const station = stations[i]; point.fromArray(station.point);
+      const t = line.start.equals(line.end) ? 0 : line.closestPointToPointParameter(point, true);
+      const error = point.distanceTo(line.at(t, closest)) + Math.abs(station.radius - (a.radius + (b.radius - a.radius) * t));
+      if (error > worst) { worst = error; at = i; }
+    }
+    if (at < 0) return;
+    keep.add(at); split(first, at); split(at, last);
+  };
+  split(0, stations.length - 1);
+  return stations.filter((_, i) => keep.has(i));
+}
+
 // One shared ring per stem station: no interior cylinder caps or shading seams.
-function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
+function woodGeometry(skeleton, radialSegments, plant, includeRoots = true, branchTolerance = 0) {
   const positions = [], uvs = [], indices = [], rootBlend = [], stems = new Map();
   const flutingPhase = flutingPhases(skeleton.seed ?? 1);
   for (const segment of skeleton.segments) {
@@ -63,9 +91,9 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
     list.push(segment);
   }
   for (const segments of new Set(stems.values())) {
-    const stations = [
+    const stations = simplifyStations([
       { point: segments[0].start, radius: segments[0].radius0, blend: segments[0].rootBlend0 ?? 0, surface: segments[0].rootSurface0 ?? 0 },
-      ...segments.map(s => ({ point: s.end, radius: s.radius1, blend: s.rootBlend1 ?? 0, surface: s.rootSurface1 ?? 0 }))];
+      ...segments.map(s => ({ point: s.end, radius: s.radius1, blend: s.rootBlend1 ?? 0, surface: s.rootSurface1 ?? 0 }))], segments[0].role === 'root' ? 0 : branchTolerance);
     // A rounded hump facets badly at trunk resolution. Roots are near-tier only and
     // few, so they can afford a denser ring than the wood they grow from.
     const ringCount = segments[0].role === 'root' ? radialSegments + 6 : radialSegments;
@@ -82,6 +110,7 @@ function woodGeometry(skeleton, radialSegments, plant, includeRoots = true) {
       if (!right || right.lengthSq() < 0.1) right = new Vector3().crossVectors(tangent, Math.abs(tangent.y) < 0.95 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0)).normalize();
       const forward = new Vector3().crossVectors(right, tangent).normalize();
       if (i) length += point.distanceTo(new Vector3(...stations[i - 1].point));
+      if (stations[i].arc !== undefined) length = stations[i].arc;
       for (let j = 0; j <= ringCount; j++) {
         const angle = j / ringCount * Math.PI * 2;
         let radius = stations[i].radius;
@@ -204,11 +233,12 @@ function foliageGeometry(records, stride) {
   geometry.setAttribute('color', new BufferAttribute(new Float32Array(colors), 3));
   return geometry;
 }
-export function compileTreeGeometry(skeleton, { radialSegments = 9, leafStride = 1, plant, includeRoots = true } = {}) {
+export function compileTreeGeometry(skeleton, { radialSegments = 9, leafStride = 1, plant, includeRoots = true, branchTolerance = 0 } = {}) {
+  if (!Number.isFinite(branchTolerance) || branchTolerance < 0) throw new RangeError('Branch tolerance must be finite and non-negative');
   radialSegments = Math.max(3, Math.round(radialSegments)); leafStride = Math.max(1, Math.round(leafStride));
   const foliageVertices = [...skeleton.leaves, ...skeleton.blossoms].reduce((n, leaf, i) => n + (i % leafStride ? 0 : 12 * (['compound', 'pinnate', 'spray', 'cluster'].includes(leaf.shape) ? leaf.leaflets ?? 9 : leaf.shape === 'flower' ? 5 : 1)), 0);
   if (foliageVertices + skeleton.segments.length * (radialSegments + 1) * 2 > 1000000) throw new RangeError('Plant geometry exceeds one million vertices; reduce foliage count, leaflets, or radial resolution');
-  return { branches: woodGeometry(skeleton, radialSegments, plant, includeRoots), leaves: foliageGeometry(skeleton.leaves, leafStride), blossoms: foliageGeometry(skeleton.blossoms, leafStride) };
+  return { branches: woodGeometry(skeleton, radialSegments, plant, includeRoots, branchTolerance), leaves: foliageGeometry(skeleton.leaves, leafStride), blossoms: foliageGeometry(skeleton.blossoms, leafStride) };
 }
 export function packTreeGeometry(geometry) {
   return Object.fromEntries(Object.entries(geometry).map(([key, mesh]) => [key, { position: mesh.attributes.position.array, normal: mesh.attributes.normal.array, uv: mesh.attributes.uv.array, rootBlend: mesh.attributes.rootBlend.array, ...(mesh.attributes.color ? { color: mesh.attributes.color.array } : {}), index: mesh.index.array }]));

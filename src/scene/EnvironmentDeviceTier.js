@@ -125,7 +125,10 @@ export function selectInitialVisualQualityMode({
   const memoryGiB = finite(deviceMemoryGiB);
 
   if (tierId === 'high' && cores >= 12 && memoryGiB >= 8) return 'ultra';
-  if (tierId === 'high') return 'quality';
+  // High WebGPU limits describe capacity, not frame throughput. The six-core
+  // mobile-class device misses the dense forest's first-shot budget in quality;
+  // start balanced and let measured headroom earn the higher workload.
+  if (tierId === 'high') return cores > 0 && cores <= 6 ? 'balanced' : 'quality';
   if (tierId === 'balanced') return 'balanced';
   return 'battery';
 }

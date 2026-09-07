@@ -1,5 +1,5 @@
 import {
-  Color, DoubleSide, Group, InstancedMesh, Matrix4, Object3D,
+  Box3, Color, DoubleSide, Group, InstancedMesh, Matrix4, Object3D,
   SRGBColorSpace, TextureLoader, Vector3, Frustum, Sphere, RepeatWrapping, InstancedBufferAttribute,
 } from 'three';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
@@ -98,7 +98,7 @@ export class ProceduralTreeForest {
   _buildBatch(definition, variant, records, textures, key) {
     const prepared = this.prepared.get(key);
     const skeleton = prepared?.skeleton ?? generateTreeSkeleton(definition, { seed: deriveSeed(this.seed, `${definition.id}:${variant}`) });
-    const tiers = prepared ? prepared.geometryTiers : [0, 1, 2].map(tier => compileTreeGeometry(skeleton, { radialSegments: Math.max(3, (definition.plant?.quality.radialSegments ?? 9) - tier * 3), leafStride: [1, 2, 4][tier], plant: definition.plant, includeRoots: tier === 0 }));
+    const tiers = prepared ? prepared.geometryTiers : [0, 1, 2].map(tier => compileTreeGeometry(skeleton, { radialSegments: Math.max(3, (definition.plant?.quality.radialSegments ?? 9) - tier * 3), leafStride: [1, 4, 12][tier], plant: definition.plant, includeRoots: tier === 0, branchTolerance: tier === 0 ? 0 : skeleton.bounds.size[1] / (tier === 1 ? 1200 : 360) }));
     this.prepared.delete(key);
     const bark = materialFor(definition.materials.bark, textures);
     if (definition.plant && !definition.materials.bark.textureUrl) {
@@ -182,7 +182,12 @@ export class ProceduralTreeForest {
 
       }
     }
-    const batch = { definition, variant, records, skeleton, draws, shadows, tiers, shadowTier: 1, generationMs: prepared?.generationMs ?? 0, cacheHit: prepared?.cacheHit ?? false };
+    // Coverage-compensated distant sprays can extend beyond the source skeleton.
+    // Visibility must enclose every rendered tier, including independent shadows.
+    const bounds = new Box3(new Vector3(...skeleton.bounds.min), new Vector3(...skeleton.bounds.max));
+    for (const tier of tiers) for (const geometry of Object.values(tier)) bounds.union(geometry.boundingBox);
+    const cullingSphere = bounds.getBoundingSphere(new Sphere());
+    const batch = { definition, variant, records, skeleton, cullingSphere, draws, shadows, tiers, shadowTier: 1, generationMs: prepared?.generationMs ?? 0, cacheHit: prepared?.cacheHit ?? false };
     for (const draw of Object.values(shadows)) {
       draw.onBeforeShadow = (_renderer, _object, _camera, shadowCamera) => this._writeStableShadows(batch, shadowCamera);
     }
@@ -203,8 +208,8 @@ export class ProceduralTreeForest {
     // large-course streaming makes this CPU scan measurable.
     for (const record of batch.records) {
       setTreeTransform(dummy, record);
-      sphere.center.set(...batch.skeleton.bounds.center).applyMatrix4(dummy.matrix);
-      sphere.radius = Math.hypot(...batch.skeleton.bounds.size) * 0.5 * Math.max(dummy.scale.x, dummy.scale.y, dummy.scale.z) + windMargin;
+      sphere.copy(batch.cullingSphere).applyMatrix4(dummy.matrix);
+      sphere.radius += windMargin;
       if (frustum && !frustum.intersectsSphere(sphere)) continue;
       for (const draw of Object.values(batch.shadows)) {
         draw.setMatrixAt(count, dummy.matrix);
@@ -256,12 +261,12 @@ export class ProceduralTreeForest {
       const counts = [0, 0, 0];
       for (const record of batch.records) {
         setTreeTransform(dummy, record);
-        this.sphere.center.set(...batch.skeleton.bounds.center).applyMatrix4(dummy.matrix);
-        this.sphere.radius = Math.hypot(...batch.skeleton.bounds.size) * 0.5 * record.scale + (batch.definition.plant?.wind.strength ?? 0) * ((this.environment?.baseWind.value.length() ?? 0) * 3 + 4);
+        this.sphere.copy(batch.cullingSphere).applyMatrix4(dummy.matrix);
+        this.sphere.radius += (batch.definition.plant?.wind.strength ?? 0) * ((this.environment?.baseWind.value.length() ?? 0) * 3 + 4);
         const distance = Math.max(0.1, cameraPosition.distanceTo(this.sphere.center));
         const pixels = batch.skeleton.bounds.size[1] * record.scale * viewportHeight * Math.abs(camera.projectionMatrix.elements[5]) / (camera.isOrthographicCamera ? 2 : 2 * distance);
         const quality = batch.definition.plant?.quality ?? { nearPixels: 300, farPixels: 90 };
-        const detailScale = this.policy === 'battery' ? 1.5 : this.policy === 'balanced' ? 1.15 : 1;
+        const detailScale = this.policy === 'battery' ? 2.5 : this.policy === 'balanced' ? 1.75 : 1;
         const nearPixels = quality.nearPixels * detailScale, farPixels = quality.farPixels * detailScale;
         let tier = this.policy === 'ultra' ? 0 : pixels >= nearPixels ? 0 : pixels >= farPixels ? 1 : 2;
         const previous = force ? tier : record.tier ?? tier;

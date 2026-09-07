@@ -57,7 +57,7 @@ test('auto visual quality starts from capability tier without changing renderer 
   }), 'ultra', 'Chrome-capped desktop memory must still permit an Ultra start');
   assert.equal(selectInitialVisualQualityMode({
     limits: limits(), hardwareConcurrency: 6, deviceMemoryGiB: 8,
-  }), 'quality');
+  }), 'balanced', 'mobile-class Auto starts within the measured dense-forest budget');
   assert.equal(selectInitialVisualQualityMode({
     limits: limits(), hardwareConcurrency: 8, deviceMemoryGiB: 8,
   }), 'quality', 'a high-tier phone/tablet hint must not be promoted to Ultra');

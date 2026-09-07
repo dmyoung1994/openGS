@@ -10,10 +10,10 @@ try {
  page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
  page.on('response',r=>{if(r.status()>=400)errors.push(`${r.status()} ${r.url()}`)});
  page.on('requestfailed',r=>errors.push(`${r.url()} ${r.failure()?.errorText}`));
- await page.goto('http://127.0.0.1:4173/play.html?course=current&start=1',{waitUntil:'domcontentloaded'});
+ await page.goto(new URL('/play.html?course=current&start=1',process.env.VIEWER_URL||'http://127.0.0.1:4173').href,{waitUntil:'domcontentloaded'});
  await page.waitForFunction(()=>window.golfBootstrap?.ready&&window.golf,{timeout:180000});
- const identity=await page.evaluate(()=>({url:location.href,title:document.title,view:document.body.dataset.view,scene:window.golf.range.sceneKind,webgpu:window.golf.sm.renderer.backend.isWebGPUBackend,trees:window.golf.range.treeWorkloadDiagnostics(),creatorVisible:document.querySelector('#gb-panel')?.getBoundingClientRect().width>0}));
- if(!identity.webgpu||identity.view!=='practice'||identity.creatorVisible||identity.trees.sourceCount!==111)throw Error('Play identity failed '+JSON.stringify(identity));
+ const identity=await page.evaluate(()=>({url:location.href,title:document.title,view:document.body.dataset.view,scene:window.golf.range.sceneKind,webgpu:window.golf.sm.renderer.backend.isWebGPUBackend,trees:window.golf.range.treeWorkloadDiagnostics(),authoredTrees:window.golf.range.course.environment.proceduralTrees.length,creatorVisible:document.querySelector('#gb-panel')?.getBoundingClientRect().width>0}));
+ if(!identity.webgpu||identity.scene!=='play'||identity.view!=='practice'||identity.creatorVisible||!identity.authoredTrees||identity.trees.sourceCount!==identity.authoredTrees)throw Error('Play identity failed '+JSON.stringify(identity));
  await fitBrowserViewport(page,1920,1080,{benchmark:true});
 
  await page.evaluate(()=>{
@@ -54,7 +54,7 @@ try {
   windows.push(sample);
   console.log(JSON.stringify({window:index+1,fps:sample.fps,p95:sample.p95,mode:sample.quality.activeMode}));
   await writeFile(`${directory}/report.json`,JSON.stringify({identity,before,windows,errors},null,2));
-  if(sample.resolution[0]!==1920||sample.resolution[1]!==1080||sample.quality.renderScale!==1||sample.simulationFrozen||sample.trees.sourceCount!==111)throw Error('Endurance fidelity changed');
+  if(sample.resolution[0]!==1920||sample.resolution[1]!==1080||sample.quality.renderScale!==1||sample.simulationFrozen||sample.trees.sourceCount!==identity.authoredTrees)throw Error('Endurance fidelity changed');
   if(errors.length)throw Error(JSON.stringify(errors));
  }
  await page.evaluate(()=>{window.endurance.stop=true});

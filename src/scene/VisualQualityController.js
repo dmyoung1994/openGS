@@ -638,10 +638,9 @@ export class VisualQualityController {
   _changeAutoActiveMode(delta, atMs, reason) {
     const currentIndex = PROFILE_MODE_ORDER.indexOf(this._activeMode);
     const nextIndex = currentIndex + delta;
-    const startingIndex = PROFILE_MODE_ORDER.indexOf(this._startingMode);
-    // Auto may recover only as far as the capability-derived starting ceiling.
-    // Spare capacity can restore quality without exceeding the hardware ceiling.
-    if (delta > 0 && nextIndex > startingIndex) return false;
+    const ceiling = this._tier.id === 'high' && this._startingMode !== 'ultra' ? 'quality' : this._startingMode;
+    // A conservative startup choice must not cap measured quality recovery.
+    if (delta > 0 && nextIndex > PROFILE_MODE_ORDER.indexOf(ceiling)) return false;
     const nextMode = PROFILE_MODE_ORDER[nextIndex];
     if (!nextMode) return false;
 
