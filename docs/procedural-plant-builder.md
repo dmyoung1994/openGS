@@ -11,6 +11,21 @@ The eight starting forms are spreading oak, whorled fir, tall pine, palm, weepin
 multi-stem shrub, flowering shrub, and clipped hedge. They are editable form
 presets, not claims of species-level botanical accuracy.
 
+The Tall Pine preset now starts with a heavier trunk (ratio 0.022), stronger
+primary/secondary branches, longer limbs and larger overlapping needle sprays.
+Its nominal trunk is 37.5% thicker; seed-1 crown bounds are about one-third wider.
+Branch and spray counts remain unchanged. Choose **Tall pine** or **Reset** to use
+these defaults; saved course and library definitions retain their authored values.
+
+The September 6 crown pass passes 27 focused tests and the production build.
+Matched production WebGPU 1080p builder captures, preset selection, undo and
+camera travel through all three detail tiers are recorded in
+`/tmp/pine-crowns-ack3IQ/report.json` with no console/network errors. The single
+preview retains 50,244 near triangles before and after. Open-ground samples run
+42–49 fps after the change; the woodland comparison remains around 21–24 fps
+(`/tmp/pine-crowns-fLUUv8/report.json`). These short builder measurements do not
+certify sustained 30 fps or a full forest using the revised definition.
+
 ## Controls and data
 
 - `version: 2` opts into `plant` controls. Unversioned definitions still load.

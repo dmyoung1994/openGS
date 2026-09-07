@@ -30,11 +30,12 @@ export function createTreePreset(name = 'spreading-oak', seed = 1) {
     Object.assign(d.plant.structure, { rootCount: 5, rootSpread: 4.0, rootDepth: 0.8, rootRise: 0.45, rootFlatten: 1.9, buttress: 0.5, buttressCount: 5 });
   }
   if (name === 'tall-pine') {
-    p.gScale = 25; p.gScaleV = 1.2; p.ratio = 0.016; p.levels = 3;
-    Object.assign(p.levelsParameters[1], { branches: 26, baseSize: 0.38, downAngle: 76, downAngleV: 12, length: 0.16, lengthV: 0.025, curve: -18, branchPattern: 'whorled' });
-    Object.assign(p.levelsParameters[2], { branches: 8, length: 0.38, lengthV: 0.04, downAngle: 48, curve: 16 });
-    Object.assign(p.leaves, { shape: 'spray', count: 3200, scale: 0.55, scaleX: 0.8 });
-    d.plant.foliage.leaflets = 5; d.plant.life.deciduous = 0;
+    p.gScale = 25; p.gScaleV = 1.2; p.ratio = 0.022; p.levels = 3;
+    Object.assign(p.levelsParameters[1], { branches: 26, baseSize: 0.34, downAngle: 76, downAngleV: 12, length: 0.20, lengthV: 0.035, radiusMod: 0.58, curve: -18, branchPattern: 'whorled' });
+    Object.assign(p.levelsParameters[2], { branches: 8, length: 0.44, lengthV: 0.06, radiusMod: 0.38, downAngle: 48, curve: 16 });
+    // Overlap fuller sprays along the existing twigs without multiplying meshes.
+    Object.assign(p.leaves, { shape: 'spray', count: 3200, scale: 0.72, scaleX: 1 });
+    Object.assign(d.plant.foliage, { leaflets: 5, attachmentStart: 0.18, spread: 0.08 }); d.plant.life.deciduous = 0;
     d.materials.bark.color = '#685344'; d.materials.leaves.color = '#385738';
     Object.assign(d.plant.structure, { rootCount: 6, rootSpread: 4.3, rootDepth: 0.85, rootRise: 0.45, rootFlatten: 2.0, buttress: 0.55, buttressCount: 6 });
   }

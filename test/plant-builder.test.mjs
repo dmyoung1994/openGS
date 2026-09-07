@@ -43,6 +43,20 @@ test('plant profiles, settings, and versions reject invalid authoring input', ()
   d.plant = {}; delete d.version; assert.throws(() => normalizeTreeDefinition(d), /version/);
 });
 
+test('mature pine retains substantial wood and crown within its mesh budget', () => {
+  for (const seed of [1, 2, 3]) {
+    const definition = createTreePreset('tall-pine', seed), skeleton = generateTreeSkeleton(definition);
+    const trunk = skeleton.segments.find(s => s.level === 0 && s.role !== 'root');
+    assert.ok(trunk.radius0 > 1, 'mature pine needs a substantial flared base');
+    assert.ok(skeleton.bounds.size[0] > 14 && skeleton.bounds.size[2] > 14, 'crown must carry lateral mass');
+    assert.equal(skeleton.stemCount, 235, 'fullness must not multiply branch topology');
+    assert.ok(skeleton.leaves.length <= 3200);
+    const geometry = compileTreeGeometry(skeleton, { plant: definition.plant });
+    assert.ok(Object.values(geometry).reduce((n, mesh) => n + mesh.index.count / 3, 0) < 53000);
+    for (const mesh of Object.values(geometry)) mesh.dispose();
+  }
+});
+
 test('plant LOD follows the camera and preserves offscreen shadow casters', () => {
   const definition = createTreePreset();
   const camera = new PerspectiveCamera(45, 1, 0.1, 2000); camera.position.set(0, 5, 25); camera.lookAt(0, 7, 0);
