@@ -77,10 +77,24 @@ test('water is a cheap shared-daylight material with depth, shore, and coherent 
   assert.match(source, /const bankFade = smoothstep/);
   assert.match(source, /skyRadiance\(reflectedDirection, \{ includeSun: false \}\)/,
     'water reflection must use the shared analytic sky rather than a second target');
-  assert.match(source, /const fresnel = float\(0\.018\)/,
-    'analytic reflection must be aggressively capped at a grazing view');
-  assert.match(source, /oneMinus\(viewDotNormal\)\.pow\(5\)\.mul\(0\.28\)/,
-    'water reflection must use a bounded per-pixel Schlick Fresnel response');
+  // The Fresnel response was previously scaled by 0.28 and clamped to 0.30, so water
+  // could never reflect more than a third of the sky at any view angle and its authored
+  // body colour dominated from every camera. It is now a real dielectric Schlick term
+  // reaching a near-perfect mirror at grazing incidence.
+  assert.match(source, /const WATER_F0 = 0\.02;/,
+    'water must use the normal-incidence reflectance of a real dielectric');
+  assert.match(source, /const fresnel = float\(WATER_F0\)/);
+  assert.match(source, /oneMinus\(viewDotNormal\)\.pow\(5\)\.mul\(1 - WATER_F0\)/,
+    'water reflection must use a per-pixel Schlick Fresnel that reaches a mirror at grazing');
+  assert.doesNotMatch(source, /const fresnel[\s\S]{0,220}?\.clamp\(0, 0\.30\)/,
+    'the grazing reflection must not be capped back below a physical dielectric response');
+  // Energy conservation: what the surface reflects it does not also transmit.
+  assert.match(source, /surfaceColor\.mul\(surfaceLight\)\.mul\(oneMinus\(fresnel\)\)/,
+    'the water body must be attenuated by the reflected fraction, not simply added to it');
+  // The body is an authored absolute radiance, so it has to follow scene illumination
+  // or a pond keeps its daylight brightness at dusk and glows against a dark scene.
+  assert.match(source, /const surfaceLight = this\.environment\.surfaceLight/,
+    'water body colour must scale with the shared scene illumination');
   assert.match(source, /const sunGlint = smoothstep\(0\.994, 0\.9995, sunAlignment\)/,
     'optional glint must follow the shared sun direction and remain narrow');
   assert.match(source, /world-anchored wave bands|world-anchored wave/);
@@ -142,7 +156,7 @@ test('water is a cheap shared-daylight material with depth, shore, and coherent 
 });
 
 test('Range gives water shared environment bindings without a reflection target', async () => {
-  const range = await readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8');
+  const range = await readFile(new URL('../src/scene/PlayableCourseScene.js', import.meta.url), 'utf8');
   const main = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   assert.doesNotMatch(range, /skyRadiance/);
   assert.doesNotMatch(main, /skyRadiance: sm\.weatherSky/);

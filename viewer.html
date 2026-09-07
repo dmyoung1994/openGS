@@ -48,34 +48,15 @@
     </div>
     <div id="hint">WASD move &middot; Space up &middot; Ctrl down &middot; Shift boost &middot; drag to look &middot; G turf panel &middot; F frame asset</div>
     <div id="err"></div>
-    <aside id="foliageLab" aria-label="Foliage laboratory">
+    <aside id="foliageLab" aria-label="Procedural tree laboratory">
       <div class="row"><span>DIST</span><span id="foliageDistances"></span></div>
       <div class="row"><span>AZ</span><span id="foliageAzimuths"></span></div>
-      <div class="row"><span>TEXTURE</span><button type="button" data-texture="ktx2">KTX2</button><button type="button" data-texture="png">PNG</button></div>
-      <div class="row"><span>SUBJECT</span><button type="button" data-subject="tree">TREE</button><button type="button" data-subject="atlas">ATLAS</button><button type="button" data-subject="cards">CARDS</button><button type="button" data-subject="mip">MIP</button></div>
-      <div class="row"><span>MIP</span><button type="button" data-query="mip" data-value="0">0</button><button type="button" data-query="mip" data-value="4">4</button><button type="button" data-query="mip" data-value="8">8</button></div>
+      <div class="row"><span>VARIANT</span><button type="button" data-variant="0">0</button><button type="button" data-variant="1">1</button><button type="button" data-variant="2">2</button><button type="button" data-variant="3">3</button></div>
       <div class="row"><span>DEBUG</span><span id="foliageDebugModes"></span></div>
       <div class="row"><span>BG</span><button type="button" data-background="sky">SKY</button><button type="button" data-background="light">LIGHT</button><button type="button" data-background="dark">DARK</button></div>
-      <div class="row"><span>ALPHA</span><button type="button" data-query="alphaTest" data-value="0.12">.12</button><button type="button" data-query="alphaTest" data-value="0.20">.20</button><button type="button" data-query="alphaTest" data-value="0.32">.32</button><button type="button" disabled title="Alpha-to-coverage requires MSAA; production TRAA uses a non-MSAA WebGPU target">A2C N/A</button></div>
-      <div class="row"><span>ROUGH</span><button type="button" data-query="roughness" data-value="0">0</button><button type="button" data-query="roughness" data-value="0.5">.5</button><button type="button" data-query="roughness" data-value="1">1</button></div>
-      <div class="row"><span>NORMAL</span><button type="button" data-query="normalShape" data-value="0">0</button><button type="button" data-query="normalShape" data-value="0.5">.5</button><button type="button" data-query="normalShape" data-value="1">1</button></div>
-      <div class="row"><span>TRANS</span><button type="button" data-query="transmission" data-value="0">0</button><button type="button" data-query="transmission" data-value="1">1</button><button type="button" data-query="transmission" data-value="2">2</button></div>
       <div class="row"><span>SUN</span><button type="button" data-sun="fixed">FIXED</button><button type="button" data-sun="moving">MOVING</button></div>
-      <div id="foliageDiagnostics" data-testid="foliage-diagnostics">waiting for foliage diagnostics…</div>
+      <div id="foliageDiagnostics" data-testid="procedural-tree-diagnostics">waiting for tree diagnostics…</div>
     </aside>
-    <!-- Candidate-only local foliage descriptors for the authoring viewer. -->
-    <script>
-      globalThis.__GOLF_LOCAL_FOLIAGE_PACKS__ = {
-        'local.southern-live-oak.augusta.v1': {
-          rootUrl: '/assets/trees_candidates/generated_southern_live_oak/processed/v1',
-          compatibilityVersion: 1,
-        },
-        'local.loblolly-pine.southeast.v1': {
-          rootUrl: '/assets/trees_candidates/generated_loblolly_pine/processed/v1',
-          compatibilityVersion: 1,
-        },
-      };
-    </script>
     <script type="module" src="/src/viewer/main.js"></script>
   </body>
 </html>

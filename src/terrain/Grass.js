@@ -1,5 +1,5 @@
 import {
-  BasicEnvironmentNode, InstancedBufferGeometry, BufferAttribute, Mesh, MeshPhongNodeMaterial,
+  EnvironmentNode, InstancedBufferGeometry, BufferAttribute, Mesh, MeshPhongNodeMaterial,
   DataTexture, RedFormat, UnsignedByteType, NearestFilter,
   Color, DoubleSide, IndirectStorageBufferAttribute, Matrix4, StorageBufferAttribute,
   StorageInstancedBufferAttribute,
@@ -8,21 +8,33 @@ import {
 import {
   Fn, If, atomicAdd, atomicLoad, atomicStore, float, int, instanceIndex, ivec2, mrt, mx_noise_float,
   mix, positionGeometry, smoothstep, storage, textureLevel, textureLoad, transformNormalToView,
-  uniform, uvec2, uvec3, uint, uv, vec2, vec3, vec4, varying, workgroupArray,
+  uniform, uvec2, uvec4, uint, uv, vec2, vec3, vec4, varying, workgroupArray,
   workgroupBarrier, workgroupId, localId,
 } from 'three/tsl';
 import { disposeComputeNodes, disposeWebGPUAttributes } from '../scene/WebGPUResourceDisposal.js';
 import { coastTextureBlendWeights } from '../scene/CoastSandDetail.js';
-import { turfBladeBase } from './turfColor.js';
+import { turfBladeBase, NATIVE_GRASS_PIGMENT } from './turfColor.js';
+import {
+  bakeDenseCanopyMask, CANOPY_MASK_MAX, GRASS_GROWABLE_BIT,
+  CANOPY_DISTANCE_MAX_METERS, CANOPY_THINNED_DENSITY, CANOPY_THINNING_DEPTH_METERS,
+  canopyOwnsExclusiveSurface,
+} from './CanopyField.js';
 
-// SceneManager supplies the shared PMREM through the builder rather than setting a
-// material-local envMap. Keep Phong on that same real environment path so this
-// cheaper foliage model does not silently lose the course's shared daylight.
-class SharedEnvironmentGrassPhongMaterial extends MeshPhongNodeMaterial {
+// Native EnvironmentNode owns PMREM sampling, rotation and intensity. Phong's
+// Lambert diffuse consumes `irradiance`, whereas the physical model consumes
+// `iblIrradiance`; bridge those accumulators without BasicEnvironmentNode's final
+// reflected-colour multiplication (which darkens light instead of adding it).
+class DiffuseEnvironmentNode extends EnvironmentNode {
+  setup( builder ) {
+    super.setup( builder );
+    builder.context.irradiance.addAssign( builder.context.iblIrradiance );
+  }
+}
+
+export class SharedEnvironmentGrassPhongMaterial extends MeshPhongNodeMaterial {
   setupEnvironment( builder ) {
-    const explicitEnvironment = super.setupEnvironment( builder );
-    if ( explicitEnvironment ) return explicitEnvironment;
-    return builder.environmentNode ? new BasicEnvironmentNode( builder.environmentNode ) : null;
+    const environment = super.setupEnvironment( builder )?.envNode ?? builder.environmentNode;
+    return environment ? new DiffuseEnvironmentNode( environment ) : null;
   }
 }
 
@@ -43,7 +55,9 @@ const GRID = 192;
 const CELL = TILE_SIZE / GRID;
 const CANDIDATE_JITTER_MARGIN = CELL * 0.45;
 const CANDIDATES_PER_TILE = GRID * GRID;
-const WORKGROUP = 256;
+// A 64-lane scan maps cleanly to the target GPU's execution width; larger groups
+// only add scan barriers and shared-memory traffic for this three-tier compactor.
+const WORKGROUP = 64;
 const GROUPS_PER_TILE = CANDIDATES_PER_TILE / WORKGROUP;
 const BLADE_SEGMENTS = 3;
 // One compacted record stream feeds three indexed commands in the same mesh and
@@ -56,13 +70,35 @@ const GRASS_LOD_MID_RADIUS = 1.10;
 const GRASS_LOD_TRIANGLES = Object.freeze( [ 12, 8, 4 ] );
 const GRASS_LOD_INDEX_COUNTS = Object.freeze( [ 36, 24, 12 ] );
 const GRASS_LOD_FIRST_INDICES = Object.freeze( [ 0, 36, 60 ] );
-const GRASS_LOD_CAPACITIES = Object.freeze( [ 393_216, 262_144, 786_432 ] );
-const GRASS_LOD_OFFSETS = Object.freeze( [ 0, 393_216, 655_360 ] );
-// This is the authored workload ceiling: 393216*12 + 262144*8 + 786432*4.
-// The record allocation is merely the exact storage implied by those triangle
-// reservations. Overflow remains fail-loud; population LOD never aims at it.
-const GRASS_TRIANGLE_BUDGET = 9_961_472;
-const MAX_VISIBLE_BLADE_RECORDS = 1_441_792;
+// Per-tier record reservations. These were previously 393,216 / 262,144 / 786,432,
+// a split that did not match how blades actually distribute. Measured occupancy over
+// eleven camera poses across Beach Range, Pineglass and the Grasslands reference
+// (`scripts/qa-grass-lod-occupancy.mjs`) peaked at:
+//
+//   near 143,724 of 393,216 (36.6%)   mid 108,729 of 262,144 (41.5%)
+//   far  786,610 of 786,432 (100.02%, an overflow)
+//
+// So the two cheap-to-reserve near tiers idled on ~400k slots while the far tier —
+// three quarters of every blade in the scene — was the one that blew its reservation.
+// Overflow is fail-loud by design (see _buildDrawFinalizeCompute: any tier over its
+// cap zeroes ALL THREE draw commands, so the entire field vanishes rather than
+// showing a moving LOD hole). That makes far-tier headroom a correctness property,
+// not a nicety.
+//
+// The tiers now reserve roughly 1.8x/2.4x/2.0x their measured peaks. Grass was
+// measured at ~17.6 ms of a 173 ms frame — about 10%, and entirely inside Scene MRT;
+// it is absent from the shadow and water-reflection passes — so the far tier is
+// bought with headroom rather than rationed against a budget it does not dominate.
+const GRASS_LOD_CAPACITIES = Object.freeze( [ 262_144, 262_144, 1_572_864 ] );
+// Contiguous partition of the record buffers: 0, 262144, 262144+262144.
+const GRASS_LOD_OFFSETS = Object.freeze( [ 0, 262_144, 524_288 ] );
+// The authored workload ceiling implied by those reservations, and the exact record
+// storage they need: 262144*12 + 262144*8 + 1572864*4, and the capacity sum. Both
+// are asserted against the capacities in test/grass-camera-footprint.test.mjs, so a
+// capacity edit that forgets these fails rather than silently aliasing two tiers.
+// Overflow remains fail-loud; population LOD never aims at these.
+const GRASS_TRIANGLE_BUDGET = 11_534_336;
+const MAX_VISIBLE_BLADE_RECORDS = 2_097_152;
 
 const BLADE_H = { rough: 0.20, deepRough: 0.32 };
 // The packed R8 bit is deliberately broader than the surfaces which finally grow
@@ -94,17 +130,12 @@ const ROUGH_COVERAGE_MIN = 0.64;
 const ROUGH_COVERAGE_MAX = 0.88;
 const ROUGH_COLONY_FLOOR = 0.88;
 // The already-sampled R8 grass mask carries one exact growable-surface bit and a
-// seven-bit dense-canopy field. A single crown contributes at most 63/127: enough
-// for a restrained ~26% reduction only at its centre. Smooth overlap from multiple
-// authored scaled crowns drives the strong 38–45% forest response. The 55% floor
-// means even the densest overlap remains living understory rather than a cutout.
-const GRASS_GROWABLE_BIT = 128;
-const CANOPY_MASK_MAX = 127;
-const CANOPY_CROWN_WEIGHT = 63;
-const CANOPY_KERNEL_POWER = 0.5;
-const CANOPY_DENSE_START = 0.05;
-const CANOPY_DENSE_END = 0.85;
-const CANOPY_DENSITY_FLOOR = 0.55;
+// seven-bit dense-canopy field. A crown reaches full weight at its centre and
+// tapers smoothly to zero at the authored radius. Dense pine shade should reveal
+// the pine-straw substrate rather than preserve a sunlit grass carpet, so that
+// ground cover — and only that one — retires blades outright beneath a crown.
+// Every other cover has no substrate material to hand the ground over to, and
+// thins toward CANOPY_THINNED_DENSITY over the mask's own baked distance instead.
 // One continuous density curve replaces discrete "half/quarter" LOD shelves. Near
 // blades use the full candidate field; a world-stable random threshold then retires
 // individual blades gradually until the rough texture owns the distant appearance.
@@ -211,47 +242,7 @@ export function isGrassCandidateSurface( name ) {
 // field, GPU allocation, or shader fetch. The second remap is monotone and bounded;
 // world-space continuity comes from smooth crown kernels and irregular authored
 // overlap, not camera/ball distance or a periodic procedural mask.
-export function bakeDenseCanopyMask( data, nx, nz, { minX, minZ, spacing }, placements = [] ) {
-  if ( !( data instanceof Uint8Array ) || data.length !== nx * nz ) {
-    throw new Error( 'Dense canopy bake requires the existing one-byte-per-texel grass field.' );
-  }
-  for ( const placement of placements ) {
-    const radius = Number( placement.canopyRadius );
-    if ( !Number.isFinite( placement.x ) || !Number.isFinite( placement.z )
-      || !Number.isFinite( radius ) || radius <= 0 ) continue;
-    const ix0 = Math.max( 0, Math.floor( ( placement.x - radius - minX ) / spacing ) );
-    const ix1 = Math.min( nx - 1, Math.ceil( ( placement.x + radius - minX ) / spacing ) );
-    const iz0 = Math.max( 0, Math.floor( ( placement.z - radius - minZ ) / spacing ) );
-    const iz1 = Math.min( nz - 1, Math.ceil( ( placement.z + radius - minZ ) / spacing ) );
-    for ( let iz = iz0; iz <= iz1; iz ++ ) {
-      const wz = minZ + iz * spacing;
-      for ( let ix = ix0; ix <= ix1; ix ++ ) {
-        const wx = minX + ix * spacing;
-        const normalizedDistance = Math.hypot( wx - placement.x, wz - placement.z ) / radius;
-        if ( normalizedDistance >= 1 ) continue;
-        // Conifer shade/light interception remains meaningful across the crown
-        // projection, not only at the trunk. The square-root shoulder broadens
-        // the smooth response inside the exact catalog radius without extending
-        // the footprint by a single texel beyond that authored crown.
-        const inward = Math.pow( 1 - normalizedDistance, CANOPY_KERNEL_POWER );
-        const smoothCrown = inward * inward * ( 3 - 2 * inward );
-        const index = iz * nx + ix;
-        // The strongest local crown owns suppression. Summing every overlap made
-        // the denser 136-tree perimeter erase nearly half the same grass roots
-        // repeatedly and exposed the terrain between otherwise dense blades.
-        data[ index ] = Math.max( data[ index ],
-          Math.round( smoothCrown * CANOPY_CROWN_WEIGHT ) );
-      }
-    }
-  }
-  for ( let index = 0; index < data.length; index ++ ) {
-    const overlap = data[ index ] / CANOPY_MASK_MAX;
-    const t = Math.max( 0, Math.min( 1,
-      ( overlap - CANOPY_DENSE_START ) / ( CANOPY_DENSE_END - CANOPY_DENSE_START ) ) );
-    data[ index ] = Math.round( t * t * ( 3 - 2 * t ) * CANOPY_MASK_MAX );
-  }
-  return data;
-}
+export { bakeDenseCanopyMask } from './CanopyField.js';
 
 // One curve owns both stochastic thinning and the terminal fade. The shaped falloff
 // keeps the near field full while moving most of the cost inward;
@@ -307,6 +298,12 @@ export class Grass {
     }
 
     this.terrain = terrain;
+    this.nativeGrasslands = terrain.groundCover === 'native-grasslands';
+    // Only a ground cover with its own exclusive canopy material may retire blades
+    // beneath a crown; everything else thins instead. Resolved once here so the
+    // decision is a shader-build branch and pine courses keep their exact program.
+    this.canopyExclusiveSurface = canopyOwnsExclusiveSurface( terrain.groundCover );
+    this._bladeHeight = this.nativeGrasslands ? { rough: 0.12, deepRough: 1.15 } : BLADE_H;
     this.camera = camera;
     this.renderer = renderer;
     this.motionHistory = motionHistory;
@@ -315,17 +312,20 @@ export class Grass {
     this.workloadPolicy = normalizeGrassWorkloadPolicy( workloadPolicy );
     this._motionReady = false;
     this._cameraForwardScratch = new Vector3();
+    this._viewProjectionScratch = new Matrix4();
 
     // Terrain owns the one authoritative GPU height texture.  Recreating the same
     // R32F image here needlessly consumes a second WebGPU allocation (and risks the
     // render and blade surfaces drifting if either upload changes).
-    const { dataTex } = this._bakeTextures( terrain, canopyPlacements );
+    const { dataTex, owned } = this._bakeTextures( terrain, canopyPlacements );
+    this._ownsDataTexture = owned;
     const heightTex = terrain.heightTexture;
     const zoneTex = terrain.zoneTexture;
+    const zoneAuxTex = terrain.zoneAuxTexture;
     const biomeTextures = terrain.biomeTransitionTextures;
-    if ( ! heightTex || ! zoneTex ) throw new Error( 'Grass requires Terrain height and zone textures.' );
+    if ( ! heightTex || ! zoneTex || ! zoneAuxTex ) throw new Error( 'Grass requires Terrain height and zone textures.' );
     this._const = {
-      heightTex, zoneTex, dataTex,
+      heightTex, zoneTex, zoneAuxTex, dataTex,
       biomeLandTex: biomeTextures?.land ?? null,
       biomeWaterTex: biomeTextures?.water ?? null,
       nx: terrain.nx, nz: terrain.nz,
@@ -367,6 +367,10 @@ export class Grass {
     // StorageBufferNode does not proxy BufferAttribute.count; the GPU allocation's
     // authoritative element count lives on the attribute itself.
     this._tileCount = this._tileOrigins.value.count;
+    this._dispatchDimensionLimit = renderer.backend.device.limits.maxComputeWorkgroupsPerDimension;
+    if ( Math.max( GROUPS_PER_TILE, this._tileCount ) > this._dispatchDimensionLimit ) {
+      throw new Error( `Grass tile dispatch exceeds this GPU's ${this._dispatchDimensionLimit}-workgroup dimension limit.` );
+    }
     this._makeGpuState();
 
     this.mesh = new Mesh( this._geometry(), this._material() );
@@ -388,6 +392,7 @@ export class Grass {
   }
 
   _bakeTextures( terrain, canopyPlacements ) {
+    if (terrain.canopyTexture) return { dataTex: terrain.canopyTexture, owned: false };
     const { nx, nz } = terrain;
 
     // Candidate classification is a broad turf-domain bit; the filtered zone SDF
@@ -415,7 +420,7 @@ export class Grass {
     dataTex.minFilter = dataTex.magFilter = NearestFilter;
     dataTex.generateMipmaps = false;
     dataTex.needsUpdate = true;
-    return { dataTex };
+    return { dataTex, owned: true };
   }
 
   _makeTileOrigins() {
@@ -455,9 +460,10 @@ export class Grass {
         // Bilinear height reconstruction stays inside the extrema of these exact
         // source samples. Include root tolerance below and the tallest authored
         // blade above so the frustum test encloses the complete visible canopy.
-        heightBounds[ tileIndex * 2 ] = Number.isFinite( minHeight ) ? minHeight - 0.05 : 0;
+        heightBounds[ tileIndex * 2 ] = Number.isFinite( minHeight )
+          ? minHeight - Math.max(0.05, this._bladeHeight.deepRough * ROOT_BURY_FRACTION) : 0;
         heightBounds[ tileIndex * 2 + 1 ] = Number.isFinite( maxHeight )
-          ? maxHeight + BLADE_H.deepRough + 0.06 : BLADE_H.deepRough;
+          ? maxHeight + this._bladeHeight.deepRough + 0.06 : this._bladeHeight.deepRough;
         data[ n ++ ] = originX;
         data[ n ++ ] = 0;
         data[ n ++ ] = originZ;
@@ -485,7 +491,9 @@ export class Grass {
     this._recordAnchor = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADE_RECORDS * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADE_RECORDS );
     this._recordShape = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADE_RECORDS * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADE_RECORDS );
     this._recordColor = storage( new StorageInstancedBufferAttribute( new Float32Array( MAX_VISIBLE_BLADE_RECORDS * 4 ), 4 ), 'vec4', MAX_VISIBLE_BLADE_RECORDS );
-    this._recordId = storage( new StorageInstancedBufferAttribute( new Uint32Array( MAX_VISIBLE_BLADE_RECORDS * 3 ), 3, Uint32Array ), 'uvec3', MAX_VISIBLE_BLADE_RECORDS );
+    // WGSL storage vec3 already occupies four words. Allocate that layout directly
+    // so the first upload does not repack two million records on the main thread.
+    this._recordId = storage( new StorageInstancedBufferAttribute( new Uint32Array( MAX_VISIBLE_BLADE_RECORDS * 4 ), 4, Uint32Array ), 'uvec4', MAX_VISIBLE_BLADE_RECORDS );
 
     this._candidateDispatchAttr = new IndirectStorageBufferAttribute( new Uint32Array( [ 0, 1, 1 ] ), 3 );
     this._candidateDispatch = storage( this._candidateDispatchAttr, 'uint', 3 );
@@ -496,11 +504,13 @@ export class Grass {
     this._tileCompute = this._buildTileCompute();
     this._tileFinalizeCompute = this._buildTileFinalizeCompute();
     this._candidateCompute = this._buildCandidateCompute();
+    this._retainedMotionCompute = this._buildRetainedMotionCompute();
     this._drawFinalizeCompute = this._buildDrawFinalizeCompute();
     this._clearCompute.name = 'Grass GPU reset';
     this._tileCompute.name = 'Grass tile classify';
     this._tileFinalizeCompute.name = 'Grass tile dispatch finalize';
     this._candidateCompute.name = 'Grass blade compact';
+    this._retainedMotionCompute.name = 'Grass retained wind motion';
     this._drawFinalizeCompute.name = 'Grass indirect draw finalize';
   }
 
@@ -630,10 +640,12 @@ export class Grass {
   _buildTileFinalizeCompute() {
     return Fn( () => {
       const tiles = atomicLoad( this._tileCounter.element( uint( 0 ) ) );
-      // Exact workgroup count for the next compute submission. This is indirect GPU
-      // dispatch, not a CPU count or readback.
-      this._candidateDispatch.element( uint( 0 ) ).assign( tiles.mul( uint( GROUPS_PER_TILE ) ) );
-      this._candidateDispatch.element( uint( 1 ) ).assign( uint( 1 ) );
+      // Keep complete tiles in Y and their workgroups in X. Flattening both into
+      // X exceeded WebGPU's 65535 minimum limit at just 114 active tiles and caused
+      // the indirect dispatch to do no work. This layout has no padding or dropped
+      // candidates, and its two dimensions are checked against the actual device.
+      this._candidateDispatch.element( uint( 0 ) ).assign( uint( GROUPS_PER_TILE ) );
+      this._candidateDispatch.element( uint( 1 ) ).assign( tiles );
       this._candidateDispatch.element( uint( 2 ) ).assign( uint( 1 ) );
     } )().compute( 1 );
   }
@@ -660,6 +672,9 @@ export class Grass {
     const recordId = this._recordId;
     const lodCounters = this._lodCounters;
     const overflow = this._overflow;
+    // Ground cover is fixed for the life of this compute, so the canopy policy is a
+    // shader-build branch: pine courses emit the exact program they always did.
+    const canopyExclusiveSurface = this.canopyExclusiveSurface;
     const cam = this.uCameraPosition;
     const previousCam = this.uPreviousCameraPosition;
     const cameraForward = this.uCameraForwardXZ;
@@ -677,12 +692,9 @@ export class Grass {
 
     return Fn( () => {
       const lid = localId.x;
-      // The indirect X dimension is expressed in complete workgroups. Decode the
-      // tile and local lane from those native ids instead of dividing/modding a
-      // flattened global invocation by 36,864 for every candidate.
-      const group = workgroupId.x;
-      const activeSlot = group.div( uint( GROUPS_PER_TILE ) );
-      const groupInTile = group.mod( uint( GROUPS_PER_TILE ) );
+      // Indirect Y selects the compacted tile; X selects its full workgroup.
+      const activeSlot = workgroupId.y;
+      const groupInTile = workgroupId.x;
       const fullLocalCandidate = groupInTile.mul( uint( WORKGROUP ) ).add( lid );
       const activeRecord = activeTiles.element( activeSlot );
       const tile = activeRecord.shiftRight( uint( ACTIVE_TILE_RECORD_SHIFT ) );
@@ -752,19 +764,39 @@ export class Grass {
         const data = textureLoad( c.dataTex, ivec2( int( uvx.mul( c.nx - 1 ).add( 0.5 ).clamp( 0.0, c.nx - 1 ) ), int( uvz.mul( c.nz - 1 ).add( 0.5 ).clamp( 0.0, c.nz - 1 ) ) ) );
         const packedGround = data.x.mul( 255.0 ).add( 0.5 ).floor();
         const canopyMask = packedGround.mod( GRASS_GROWABLE_BIT ).div( CANOPY_MASK_MAX );
-        const turfCandidate = packedGround.greaterThanEqual( GRASS_GROWABLE_BIT );
+        const grassSurfaceCandidate = packedGround.greaterThanEqual( GRASS_GROWABLE_BIT );
+        // Pine litter is an exclusive surface material. Any authored crown habitat
+        // belongs to that material, so long-rough geometry is admitted only on the
+        // actual rough/deep-rough side of the shared habitat boundary.
+        //
+        // Every OTHER ground cover has no litter bed to hand the ground over to, so
+        // the same hard reject used to leave a bald disc of `canopyRadius * 1.1` under
+        // each tree with nothing drawn in it. There the crown thins the grass instead,
+        // reading off the distance-inward metres already baked into the mask's low
+        // seven bits — so this needs no rebake and no change to candidate identity.
+        const turfCandidate = canopyExclusiveSurface
+          ? grassSurfaceCandidate.and( canopyMask.lessThanEqual( 0.0 ) )
+          : grassSurfaceCandidate;
+        const canopyKeep = canopyExclusiveSurface ? null : mix(
+          float( 1.0 ), float( CANOPY_THINNED_DENSITY ),
+          smoothstep( 0.0, CANOPY_THINNING_DEPTH_METERS / CANOPY_DISTANCE_MAX_METERS, canopyMask ),
+        );
         // The tile ceiling was rounded upward from the exact maximum base target.
-        // Multiplying it by the same final canopy keep factor therefore remains an
-        // upper bound on the final predicate. Reject dead surface/canopy lanes here,
+        // Reject dead surface and pine-material lanes here,
         // before the zone fetch and three ecological noise evaluations. A zero mask
         // multiplies by exactly one, so surviving non-canopy lanes retain the exact
         // accepted evaluation path below.
-        const canopyKeep = mix( 1.0, CANOPY_DENSITY_FLOOR, canopyMask );
-        const surfaceDensityUpper = densityUpper.mul( canopyKeep );
+        //
+        // Scaling the ceiling by the same factor the final target gets keeps it a
+        // genuine upper bound (canopyKeep <= 1, so target*keep <= upper*keep), which
+        // preserves both the early rejection's cheapness under crowns and the tile
+        // dispatch bounds computed from the unscaled ceiling.
+        const surfaceDensityUpper = canopyKeep ? densityUpper.mul( canopyKeep ) : densityUpper;
         const canReachExactDensity = inBounds.and( turfCandidate )
           .and( hC.lessThan( surfaceDensityUpper ) );
         If( canReachExactDensity, () => {
         const zoneSD = textureLevel( c.zoneTex, vec2( uvx, uvz ), 0.0 );
+        const zoneAuxSD = textureLevel( c.zoneAuxTex, vec2( uvx, uvz ), 0.0 );
         const biomeLand = c.biomeLandTex
           ? textureLevel( c.biomeLandTex, vec2( uvx, uvz ), 0.0 )
           : vec4( 1, 0, 0, 0 );
@@ -783,7 +815,7 @@ export class Grass {
           .mul( float( 1 ).sub( coastWeights.beachWeight) )
           .mul( float( 1 ).sub( biomeWater.g.max( biomeWater.b ) ) )
           .clamp( 0.0, 1.0 );
-        roughMask.assign( smoothstep( -SURFACE_TRANSITION_M, SURFACE_TRANSITION_M, zoneSD.r.add( c.roughWidth ) ) );
+        roughMask.assign( smoothstep( -SURFACE_TRANSITION_M, SURFACE_TRANSITION_M, zoneAuxSD.r ) );
         const edgeWarp = mx_noise_float( vec3( worldX.mul( 0.045 ), worldZ.mul( 0.036 ), 317.0 ) )
           .sub( 0.5 ).mul( 2.8 );
         const edgeSD = zoneSD.r.add( edgeWarp );
@@ -792,11 +824,11 @@ export class Grass {
         // the same smooth curve as the rendered rough instead of exposing candidate
         // cells or the coarser CPU surface grid.
         const clearForFairway = smoothstep( -2.0, 2.0, edgeSD );
-        const clearForFringe = smoothstep( -SURFACE_TRANSITION_M, 0.0, zoneSD.g.add( c.fringeWidth ) );
+        const clearForFringe = smoothstep( -SURFACE_TRANSITION_M, 0.0, zoneAuxSD.g );
         const clearForSand = smoothstep( -SURFACE_TRANSITION_M, 0.0, zoneSD.b );
         const clearForTee = smoothstep( -SURFACE_TRANSITION_M, 0.0, zoneSD.a );
         const cleared = clearForFairway.max( clearForFringe ).max( clearForSand ).max( clearForTee );
-        hMax.assign( mix( BLADE_H.deepRough, BLADE_H.rough, roughMask )
+        hMax.assign( mix( this._bladeHeight.deepRough, this._bladeHeight.rough, roughMask )
           .mul( float( 1 ).sub( cleared ) ).mul( vegetationWeight ) );
 
         const dx = worldX.sub( cam.x );
@@ -826,21 +858,18 @@ export class Grass {
         const coverageRange = mix( ROUGH_COVERAGE_MIN, ROUGH_COVERAGE_MAX, densityBlend );
         const colonyCoverage = mix( ROUGH_COLONY_FLOOR, 1.0, colony );
         const roughCoverage = coverageRange.mul( mix( colonyCoverage, 1.0, 0.65 ) );
-        const densityTarget = keepProb.mul( tuftDensity ).mul( roughCoverage )
-          .mul( vegetationWeight ).toVar();
-        // Outside authored dense-canopy overlap this branch is false, leaving the
-        // canonical density expression bit-for-bit intact. Inside connected forest
-        // footprints it retires only stable world-cell candidates and never changes
-        // blade width, height, reach, LOD radius, or camera-relative tail.
-        If( canopyMask.greaterThan( 0.0 ), () => {
-          densityTarget.mulAssign( mix( 1.0, CANOPY_DENSITY_FLOOR, canopyMask ) );
-        } );
+        const baseDensityTarget = keepProb.mul( tuftDensity ).mul( roughCoverage )
+          .mul( vegetationWeight );
+        const densityTarget = ( canopyKeep
+          ? baseDensityTarget.mul( canopyKeep )
+          : baseDensityTarget ).toVar();
         const keepCandidate = hC.lessThan( densityTarget );
         heightClass.assign( mix( 0.62, 1.36, mix( hD, tuft, 0.55 ) )
           .mul( mix( 0.94, 1.06, ecological ) ) );
         const ecologicalWidth = mix( hE, tuft, 0.30 )
           .add( ecological.sub( 0.5 ).mul( 0.20 ) ).clamp( 0.0, 1.0 );
         widthBase.assign( mix( ROUGH_BLADE_WIDTH_MIN_M, ROUGH_BLADE_WIDTH_MAX_M, ecologicalWidth ) );
+        if (this.nativeGrasslands) widthBase.mulAssign( mix( 0.55, 1.0, roughMask ) );
         alive.assign( inBounds.and( turfCandidate ).and( hMax.greaterThan( 0.002 ) )
           .and( keepCandidate ).select( uint( 1 ), uint( 0 ) ) );
         } );
@@ -901,7 +930,9 @@ export class Grass {
             const color = c.bladeColor[ name ];
             return vec3( color.r, color.g, color.b );
           };
-          const surfaceColor = mix( bladeColorNode( 'deepRough' ), bladeColorNode( 'rough' ), roughMask );
+          const nativePigment = mix( vec3( ...NATIVE_GRASS_PIGMENT.living ), vec3( ...NATIVE_GRASS_PIGMENT.straw ),
+            smoothstep( 0.25, 0.75, mix( hD, ecological, 0.6 ) ) );
+          const surfaceColor = mix( this.nativeGrasslands ? nativePigment : bladeColorNode( 'deepRough' ), bladeColorNode( 'rough' ), roughMask );
           const groundY = this._sampleHeight( uvx, uvz );
           const visibleHeight = hMax.mul( heightClass.mul( 0.68 ).add( 0.24 ).clamp( 0.58, 1.0 ) );
           const rootBurial = visibleHeight.mul( ROOT_BURY_FRACTION );
@@ -911,7 +942,7 @@ export class Grass {
           const orient = hA.mul( 6.2831853 ).add( ecological.sub( 0.5 ).mul( 0.55 ) );
           const orientCos = orient.cos();
           const orientSin = orient.sin();
-          const lean = smoothstep( 0.05, 0.25, hMax ).mul( mix( 0.30, 0.62, tuft ) )
+          const lean = smoothstep( 0.05, 0.25, hMax ).mul( mix( this.nativeGrasslands ? 0.08 : 0.30, this.nativeGrasslands ? 0.30 : 0.62, tuft ) )
             .mul( mix( 0.84, 1.18, hA ) ).mul( mix( 0.90, 1.10, ecological ) );
           // Species/age grading: mature blades carry warmer yellow-green pigment,
           // younger/wetter blades retain a cooler blue-green cast. This is albedo
@@ -974,16 +1005,39 @@ export class Grass {
               previousDensityScale, previousFarTierScale,
             ) );
           } );
-          recordId.element( dst ).assign( uvec3(
+          recordId.element( dst ).assign( uvec4(
             tile.mul( uint( CANDIDATES_PER_TILE ) ).add( localCandidate ),
             packUnorm4x8( vec4( currentWind, previousWind ).div( 32.0 ).add( 0.5 ) ),
             packUnorm4x8( vec4( currentLod, previousLod ) ),
+            uint( 0 ),
           ) );
         } ).Else( () => {
           atomicStore( overflow.element( uint( 0 ) ), uint( 1 ) );
         } );
       } );
     } )().compute( 1, [ WORKGROUP ] );
+  }
+
+  _buildRetainedMotionCompute() {
+    return Fn( () => {
+      const slot = instanceIndex;
+      const lod = slot.greaterThanEqual( uint( GRASS_LOD_OFFSETS[ 2 ] ) ).select( uint( 2 ),
+        slot.greaterThanEqual( uint( GRASS_LOD_OFFSETS[ 1 ] ) ).select( uint( 1 ), uint( 0 ) ) );
+      const offset = lod.equal( uint( 2 ) ).select( uint( GRASS_LOD_OFFSETS[ 2 ] ),
+        lod.equal( uint( 1 ) ).select( uint( GRASS_LOD_OFFSETS[ 1 ] ), uint( 0 ) ) );
+      If( slot.sub( offset ).lessThan( atomicLoad( this._lodCounters.element( lod ) ) ), () => {
+        const anchor = this._recordAnchor.element( slot ).xyz;
+        const state = this._recordId.element( slot ).toVar();
+        const currentWind = this.environment.windAt( anchor, this.environment.time ).xz;
+        const previousWind = this.environment.windAt( anchor, this.environment.previousTime ).xz;
+        state.y.assign( packUnorm4x8( vec4( currentWind, previousWind ).div( 32.0 ).add( 0.5 ) ) );
+        // The footprint is unchanged. Previous LOD must now equal current LOD,
+        // including the first stationary frame after a moving-camera rebuild.
+        const currentLod = state.z.bitAnd( uint( 65535 ) );
+        state.z.assign( currentLod.bitOr( currentLod.shiftLeft( uint( 16 ) ) ) );
+        this._recordId.element( slot ).assign( state );
+      } );
+    } )().compute( MAX_VISIBLE_BLADE_RECORDS, [ WORKGROUP ] );
   }
 
   _buildDrawFinalizeCompute() {
@@ -1023,7 +1077,7 @@ export class Grass {
     const pos = [];
     const uv = [];
     for ( let row = 0; row <= BLADE_SEGMENTS; row ++ ) {
-      const y = row / BLADE_SEGMENTS;
+      const y = this.nativeGrasslands && row === 2 ? 0.82 : row / BLADE_SEGMENTS;
       // z=0/1 selects the two crossed world-space blade planes in the vertex
       // function. Keeping this in the existing position attribute avoids a new
       // per-instance stream and lets one render item issue all three indirect commands.
@@ -1076,8 +1130,16 @@ export class Grass {
     // Geometry has only four fixed T rows (0, 1/3, 2/3, 1). These are the exact
     // authored upper-third profile values at those rows, avoiding smoothstep + a
     // non-integer pow for every current/history vertex while retaining its silhouette.
-    const taper = t.lessThan( 0.5 ).select( float( 1.0 ),
+    let taper = t.lessThan( 0.5 ).select( float( 1.0 ),
       t.lessThan( 0.9 ).select( float( 0.9616200671 ), float( 0.06 ) ) );
+    if (this.nativeGrasslands) {
+      // A stable minority of stems carry a narrow stalk and an upper seed spike.
+      // Reuse the existing rows/LOD topology; no new candidates or draw streams.
+      const seedStem = stableId.mod( uint( 7 ) ).equal( uint( 0 ) );
+      const seedTaper = t.lessThan( 0.5 ).select( float( 0.12 ),
+        t.lessThan( 0.9 ).select( float( 1.45 ), float( 0.06 ) ) );
+      taper = seedStem.select( seedTaper, taper );
+    }
     const leanDirection = vec2( shape.y, shape.x.negate() );
     const bendT = t.mul( t );
     const sideX = mix( shape.x, shape.y, plane );
@@ -1141,7 +1203,7 @@ export class Grass {
     // The colour curve only changes at the four authored blade rows. Evaluate those
     // values in the vertex stage and interpolate the resulting pigment, rather than
     // recomputing a quadratic for every fragment in the dense crossed canopy.
-    const bladeColor = colour.xyz.mul( mix( 0.88, 1.0, bladeLift ) )
+    const bladeColor = colour.xyz.mul( mix( this.nativeGrasslands ? 0.55 : 0.88, 1.0, bladeLift ) )
       .toVarying( 'vGrassBladeColor' );
     mat.colorNode = bladeColor;
     // The old ribbon was opaque from edge to edge, so thousands of intersecting
@@ -1190,7 +1252,9 @@ export class Grass {
       this._cameraForwardScratch.x / forwardLength,
       this._cameraForwardScratch.z / forwardLength,
     );
-    this.uViewProjection.value.multiplyMatrices( cam.projectionMatrix, cam.matrixWorldInverse );
+    this._viewProjectionScratch.multiplyMatrices( cam.projectionMatrix, cam.matrixWorldInverse );
+    const projectionChanged = !this.uViewProjection.value.equals( this._viewProjectionScratch );
+    this.uViewProjection.value.copy( this._viewProjectionScratch );
     if ( firstUpdate ) {
       this.uPreviousCameraPosition.value.copy( cam.position );
       this.uPreviousCameraForwardXZ.value.copy( this.uCameraForwardXZ.value );
@@ -1209,6 +1273,27 @@ export class Grass {
       this.uPreviousDensityScale.value = this.uDensityScale.value;
       this.uPreviousFarTierScale.value = this.uFarTierScale.value;
     }
+    const c = this._const;
+    const textureRevision = [ c.heightTex, c.zoneTex, c.zoneAuxTex, c.dataTex,
+      c.biomeLandTex, c.biomeWaterTex ].map( texture => texture?.version ?? -1 ).join( ':' );
+    const footprintChanged = firstUpdate || projectionChanged
+      || !this.uCameraPosition.value.equals( this.uPreviousCameraPosition.value )
+      || !this.uCameraForwardXZ.value.equals( this.uPreviousCameraForwardXZ.value )
+      || this.uRadius.value !== this.uPreviousRadius.value
+      || this.uDensityScale.value !== this.uPreviousDensityScale.value
+      || this.uFarTierScale.value !== this.uPreviousFarTierScale.value
+      || textureRevision !== this._compactedTextureRevision;
+    if ( !footprintChanged ) {
+      // A first stationary frame settles previous LOD/wind. After that, zero
+      // base wind AND zero turbulence leave the entire retained state unchanged.
+      const calm = this.environment.baseWind.value.lengthSq() === 0
+        && this.environment.windProfile.value.w === 0;
+      if ( !calm || !this._calmMotionSettled ) this.renderer.compute( this._retainedMotionCompute );
+      this._calmMotionSettled = calm;
+      return;
+    }
+    this._calmMotionSettled = false;
+    this._compactedTextureRevision = textureRevision;
     // Ordered GPU submissions are required: each stage consumes only GPU-written
     // buffers from the prior stage. No count crosses the CPU/GPU boundary.
     this.renderer.compute( this._clearCompute );
@@ -1224,6 +1309,7 @@ export class Grass {
     const overflowData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._overflow.value));
     const lodData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._lodCounters.value));
     const activeTileData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._tileCounter.value));
+    const dispatchData = new Uint32Array(await this.renderer.getArrayBufferAsync(this._candidateDispatchAttr));
     const triangleCount = lodData.reduce(( sum, count, lod ) => (
       sum + count * GRASS_LOD_TRIANGLES[ lod ]
     ), 0);
@@ -1241,6 +1327,8 @@ export class Grass {
         midRadius: this.radius * GRASS_LOD_MID_RADIUS,
       },
       activeTileCount: activeTileData[0],
+      candidateDispatch: Array.from( dispatchData ).slice( 0, 3 ),
+      dispatchDimensionLimit: this._dispatchDimensionLimit,
       lodCameraPosition: this.uCameraPosition.value.toArray(),
       lodCameraForwardXZ: this.uCameraForwardXZ.value.toArray(),
       nominalRadius: this.radius,
@@ -1264,6 +1352,7 @@ export class Grass {
       this._tileCompute,
       this._tileFinalizeCompute,
       this._candidateCompute,
+      this._retainedMotionCompute,
       this._drawFinalizeCompute,
     ]);
     this.mesh.geometry.dispose();
@@ -1283,6 +1372,6 @@ export class Grass {
       this._drawArgsAttr,
     ]);
     // `heightTex` and `zoneTex` are owned by Terrain and shared with its material.
-    this._const.dataTex.dispose();
+    if (this._ownsDataTexture) this._const.dataTex.dispose();
   }
 }

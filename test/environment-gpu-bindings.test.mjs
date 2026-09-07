@@ -1,10 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { vec3 } from 'three/tsl';
 import {
   ENVIRONMENT_FRAME_STATE_VERSION, ENVIRONMENT_WIND_ALGORITHM_VERSION,
   EnvironmentFrameState,
 } from '../src/environment/EnvironmentFrameState.js';
-import { EnvironmentGpuBindings } from '../src/environment/EnvironmentGpuBindings.js';
+import { EnvironmentGpuBindings, resolveDaylightSkyEnvelope } from '../src/environment/EnvironmentGpuBindings.js';
+
+test('sky and diffuse fill share one daylight envelope with nonzero sunset twilight', () => {
+  assert.deepEqual(resolveDaylightSkyEnvelope(1, 1).toArray(), [1, 1]);
+  const sunset = resolveDaylightSkyEnvelope(14601.617 / 85000, 0.03544);
+  assert.ok(Math.abs(sunset.x - 0.5398609) < 0.001);
+  assert.equal(sunset.y, 1);
+  assert.ok(resolveDaylightSkyEnvelope(0, -0.05).x > 0);
+  assert.deepEqual(resolveDaylightSkyEnvelope(0, -0.4).toArray(), [0, 0]);
+});
 
 function state() {
   return new EnvironmentFrameState({
@@ -34,6 +44,8 @@ test('GPU bindings mirror authoritative current and previous environment snapsho
   assert.equal(bindings.previousTime.value, 0);
   assert.equal(bindings.sunIntensity.value, data[7]);
   assert.equal(bindings.sunIlluminanceScale.value, data[7] / 85000);
+  assert.deepEqual(bindings.daylightSkyEnvelope.value.toArray(),
+    resolveDaylightSkyEnvelope(data[7] / 85000, bindings.sunDirection.value.y).toArray());
   assert.deepEqual(bindings.sunColor.value.toArray(), Array.from(data.slice(8, 11)));
   data.slice(48, 51).forEach((value, index) => {
     assert.ok(Math.abs(bindings.moonDirection.value.toArray()[index] - value) < 1e-6);
@@ -73,4 +85,19 @@ test('daylight revision changes only when authored sun or atmosphere changes', (
 
 test('GPU bindings fail closed without the versioned environment snapshot', () => {
   assert.throws(() => new EnvironmentGpuBindings({}), /EnvironmentFrameState/);
+});
+
+test('material airlight uses the shared celestial sky without embedding solar discs', () => {
+  const bindings = new EnvironmentGpuBindings(state());
+  const skyRadiance = bindings.skyRadiance;
+  let calls = 0;
+  bindings.skyRadiance = function(direction, options) {
+    calls++;
+    assert.deepEqual(options, { includeSun: false });
+    assert.ok(direction.isNode);
+    return skyRadiance.call(this, direction, options);
+  };
+  assert.ok(bindings.aerialPerspective(vec3(0.2), vec3(0, 0, -1), 10000).isNode);
+  assert.equal(calls, 1, 'a separate palette fog cannot match the rendered twilight sky');
+  assert.throws(() => bindings.aerialPerspective(vec3(0.2), vec3(0, 0, -1), Infinity), /requires TSL/);
 });

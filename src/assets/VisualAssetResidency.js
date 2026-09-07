@@ -337,7 +337,10 @@ export class VisualAssetResidency {
         state.state = 'loading';
         state.startedAt = this._now();
         onStage?.({ stage: 'loading', fileId: file.id, assetId, url: file.url });
-        return this.fetchImpl(file.url, { cache: 'reload', signal });
+        // Preloads/loaders may already have fetched this exact URL. Honor HTTP
+        // freshness/revalidation instead of downloading it again unconditionally;
+        // cached responses still pass the same size + SHA-256 verification below.
+        return this.fetchImpl(file.url, { cache: 'default', signal });
       })
       .then((response) => {
         if (!response?.ok) {

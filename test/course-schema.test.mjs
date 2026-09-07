@@ -3,118 +3,88 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { CourseSchemaError, normalizeCourse } from '../src/course/course.js';
 import { polygonArea } from '../src/course/featureGeometry.js';
+import { validateEnvironmentCatalog } from '../src/environment/EnvironmentCatalog.js';
+import { resolveEnvironmentPlacements } from '../src/environment/EnvironmentPlacement.js';
+import { legacyTreeDefinition } from '../src/trees/TreeDefinition.js';
 
 const coursePath = new URL('../course.json', import.meta.url);
 const shippedCourse = JSON.parse(await readFile(coursePath, 'utf8'));
 const catalogPath = new URL('../public/assets/environment/catalog.json', import.meta.url);
 const shippedCatalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+// Validation fixtures must not depend on the live course retaining catalog assemblies.
+const forestFixture = {
+  id: 'schema-forest', assetIds: ['polyhaven-pine-tree-01'], seed: 1, count: 0,
+  minSpacing: 8, semantic: 'forest-cluster',
+  region: { kind: 'bounds', minX: -420, maxX: -416, minZ: 0, maxZ: 4 },
+};
 
 test('shipped course validates against the shipped runtime catalog constraints', () => {
   const catalog = new Map(shippedCatalog.assets.map((asset) => [asset.id, asset]));
   const normalized = normalizeCourse(structuredClone(shippedCourse), { catalogAssetIds: catalog });
-  assert.equal(normalized.environment.objectCount, 509);
+  assert.equal(normalized.environment.objectCount, 421);
 });
 
-test('course v3 normalization is deterministic and preserves gameplay features', () => {
+test('shared-site normalization is deterministic and preserves every routed hole', () => {
   const first = normalizeCourse(structuredClone(shippedCourse));
   const second = normalizeCourse(structuredClone(shippedCourse));
   assert.deepEqual(first, second);
-  assert.equal(first.greens.length, 6);
+  assert.equal(first.greens.length, 3);
   assert.equal(first.bunkers.length, 7);
-  assert.equal(first.ponds.length, 1);
-  assert.ok(first.ponds[0].shape?.length >= 18, 'ponds use the normalized authored outline');
-  assert.equal(first.biome, 'temperate-maritime');
+  assert.equal(first.ponds.length, 0);
+  assert.equal(first.biome, 'temperate-alpine');
   assert.ok(first.greens.every((green) => green.shape?.length >= 18));
   assert.ok(first.bunkers.every((bunker) => !bunker.shape || bunker.shape.length >= 18));
-  assert.equal(first.environment.objectCount, 509);
-  assert.deepEqual(first.environment.edgeDressing, [],
-    'photographic HDR forest supplies the distant enclosure without authored edge rows');
-  assert.deepEqual(first.environment.assembly.filter(({ id }) => id.startsWith('forest-cluster-')).map(({ id, semantic, count }) => ({ id, semantic, count })), [
-    { id: 'forest-cluster-left-foreground', semantic: 'forest-cluster', count: 9 },
-    { id: 'forest-cluster-right-foreground', semantic: 'forest-cluster', count: 8 },
-    { id: 'forest-cluster-left-midground', semantic: 'forest-cluster', count: 10 },
-    { id: 'forest-cluster-right-midground', semantic: 'forest-cluster', count: 9 },
-    { id: 'forest-cluster-left-shoulder', semantic: 'forest-cluster', count: 7 },
-    { id: 'forest-cluster-right-shoulder', semantic: 'forest-cluster', count: 6 },
-    { id: 'forest-cluster-left-backdrop', semantic: 'forest-cluster', count: 8 },
-    { id: 'forest-cluster-right-backdrop', semantic: 'forest-cluster', count: 7 },
-  ]);
-  assert.deepEqual(first.environment.scatter.map((record) => record.id), [
-    'fern-drift-left-foreground', 'fern-drift-right-moisture', 'fern-drift-left-mid',
-    'fern-drift-right-mid', 'fern-drift-left-backdrop', 'fern-drift-right-backdrop',
-    'fern-contact-left-front-log', 'fern-contact-right-mid-log', 'fern-contact-left-back-log',
-    'fern-contact-left-outcrop', 'fern-contact-pond-outcrop', 'fern-contact-back-outcrop',
-    'fern-understory-left-foreground', 'fern-understory-right-foreground',
-    'fern-understory-left-midground', 'fern-understory-right-midground',
-  ]);
+  assert.equal(first.routing.holes.length, 3);
+  assert.equal(first.environment.objectCount, 421);
+  assert.deepEqual(first.environment.assembly, []);
+  assert.deepEqual(first.environment.edgeDressing, []);
+  assert.deepEqual(first.environment.scatter, []);
 });
 
-test('maritime revision uses mature palms in layered side lines with a central window', () => {
-  const normalized = normalizeCourse(structuredClone(shippedCourse));
-  const environment = normalized.environment;
-  const catalog = new Map(shippedCatalog.assets.map((asset) => [asset.id, asset]));
-  const isTree = (assetId) => catalog.get(assetId)?.category === 'tree';
-  const explicitTrees = environment.placements.filter(({ assetId }) => isTree(assetId));
-  const distributedTreeRecords = [...environment.assembly, ...environment.edgeDressing]
-    .filter(({ assetIds }) => assetIds.some(isTree));
-  const distributedTrees = distributedTreeRecords.reduce((sum, record) => sum + record.count, 0);
-  assert.equal(explicitTrees.length, 19, 'authored hero, anchor, mid-tier, and understory trees remain');
-  assert.equal(distributedTrees, 154);
-  assert.equal(explicitTrees.length + distributedTrees, 173);
-  // One reviewed palm source owns every standing tree. Physical target-height
-  // scaling supplies deliberate young, middle, and mature silhouettes without
-  // an asset-specific multiplier or a mismatched LOD family.
-  const species = new Set(explicitTrees.map(({ assetId }) => assetId));
-  assert.deepEqual([...species], ['blendkit-palm-tree-medium-dense']);
-  assert.ok(distributedTreeRecords.every(({ assetIds }) => assetIds.length === 1 && assetIds[0] === 'blendkit-palm-tree-medium-dense'));
-  const heights = explicitTrees.map(({ assetId, scale }) => catalog.get(assetId).dimensions.height * scale);
-  const ageClasses = new Set(heights.map((h) => (h < 12 ? 'young' : h > 15 ? 'mature' : 'middle')));
-  assert.deepEqual([...ageClasses].sort(), ['mature', 'middle', 'young'],
-    'catalog anchors retain a natural range of palm heights');
-  const forestRecords = distributedTreeRecords.filter(({ semantic }) => semantic === 'forest-cluster' || semantic === 'course-boundary');
-  assert.ok(forestRecords.some(({ region }) => region.maxZ > -125), 'foreground community exists');
-  assert.ok(forestRecords.some(({ region }) => region.minZ < -180 && region.maxZ > -250), 'midground community exists');
-  assert.ok(forestRecords.some(({ region }) => region.minZ < -300),
-    'authored backdrop communities reinforce the photographic horizon');
-  assert.ok(forestRecords.every(({ region }) => region.maxX < -52 || region.minX > 52),
-    'tree bands frame the narrower range while preserving the central downrange opening');
-  const sideLines = forestRecords.filter(({ id }) => id.startsWith('grandfir-side-line-'));
-  assert.equal(sideLines.length, 4);
-  assert.ok(sideLines.some(({ id, region, count }) => id.endsWith('-left')
-    && region.minZ <= -330 && region.maxZ >= 10 && count === 42),
-  'the unobstructed left side line runs continuously through the back range');
-  assert.ok(sideLines.filter(({ id }) => id.startsWith('grandfir-side-line-right-')).length === 3,
-    'the pond side uses three overlapping depth bands instead of forcing trees through water');
-  assert.equal(forestRecords.filter(({ id }) => id.includes('understory')).length, 0,
-    'forest communities should not recreate a repeated understory curtain');
-  assert.ok(environment.objectCount <= 700, 'authored ecology must remain within the declared 700-object composition ceiling');
-  assert.ok(environment.objectCount <= environment.objectBudget && environment.objectBudget <= 700);
+test('forest course uses the authored procedural pines across the routed course', () => {
+  const { environment } = normalizeCourse(structuredClone(shippedCourse));
+  assert.equal(environment.proceduralTrees.length, 333);
+  assert.deepEqual([...new Set(environment.proceduralTrees.map(tree => tree.definitionId))], ['tall-pine']);
+  assert.ok(environment.proceduralTreeDefinitions.some(definition => definition.id === 'tall-pine'));
+  const trees = environment.proceduralTrees;
+  assert.ok(trees.some(tree => tree.z > 300));
+  assert.ok(trees.some(tree => tree.z < -170));
+  assert.ok(trees.some(tree => tree.x < -350));
+  assert.ok(trees.some(tree => tree.x > -45));
+  assert.ok(environment.objectCount <= environment.objectBudget && environment.objectBudget <= 720);
 });
 
-test('pond uses an asymmetric alpine basin with one shallow neck and preserved scale', () => {
-  const pond = shippedCourse.ponds[0];
-  const radii = pond.shape.map(({ x, z }) => Math.hypot(x - pond.x, z - pond.z));
-  assert.ok(pond.shape.length >= 12, 'basin needs enough authored controls for a readable inlet');
-  assert.ok(Math.min(...radii) < 9 && Math.max(...radii) > 15,
-    'kidney basin needs a narrow neck and two broader lobes');
-  assert.ok(Math.max(...radii) - Math.min(...radii) > 6,
-    'pond outline must not collapse to an ellipse');
-  assert.ok(Math.abs(polygonArea(pond.shape)) > 520 && Math.abs(polygonArea(pond.shape)) < 680,
-    'basin area must stay close to the authored pond strategy');
+test('Pineglass resolves its catalog ground dressing alongside the procedural canopy', () => {
+  const catalog = validateEnvironmentCatalog(structuredClone(shippedCatalog));
+  const normalized = normalizeCourse(structuredClone(shippedCourse), { catalogAssetIds: catalog.byId });
+  const terrain = { heightAt: () => 0, normalAt: () => ({ x: 0, y: 1, z: 0 }) };
+  const placements = resolveEnvironmentPlacements(normalized, catalog, terrain);
+  assert.equal(placements.length, 88);
+  assert.equal(placements.filter(({ assetId }) => catalog.byId.get(assetId).category === 'tree').length, 0);
+  assert.equal(placements.filter(({ assetId }) => assetId === 'polyhaven-fern-02').length, 70);
+  assert.equal(placements.filter(({ assetId }) => ['deadwood', 'rock'].includes(catalog.byId.get(assetId).category)).length, 18);
+  assert.equal(placements.length + normalized.environment.proceduralTrees.length, normalized.environment.objectCount);
+});
+
+test('forest routing stays water-free and uses shaped strategic surfaces', () => {
   const normalized = normalizeCourse(structuredClone(shippedCourse));
-  assert.ok(normalized.ponds[0].shape.length >= 18,
-    'the authoritative contour pipeline must retain the high-resolution basin');
+  assert.deepEqual(normalized.ponds, []);
+  assert.ok(normalized.greens.every(({ shape }) => shape.length >= 18));
+  assert.ok(normalized.bunkers.every(({ shape }) => shape.length >= 18));
+  assert.ok(Math.abs(polygonArea(normalized.greens[0].shape)) > 250);
 });
 
 test('feature outlines reject self intersections and preserve the circle fallback', () => {
   const invalid = structuredClone(shippedCourse);
+  const green = invalid.greens[0];
   invalid.greens[0].shape = [
-    { x: -12, z: -50 }, { x: 0, z: -39 }, { x: -12, z: -39 },
-    { x: 0, z: -50 }, { x: -6, z: -52 }, { x: -6, z: -38 },
+    { x: green.x - 6, z: green.z - 6 }, { x: green.x + 6, z: green.z + 6 }, { x: green.x - 6, z: green.z + 6 },
+    { x: green.x + 6, z: green.z - 6 }, { x: green.x, z: green.z - 8 }, { x: green.x, z: green.z + 8 },
   ];
   assert.throws(() => normalizeCourse(invalid), /self-intersect|contain the feature center|insufficient area/);
   const legacy = structuredClone(shippedCourse);
   delete legacy.greens[0].shape;
+  delete legacy.greens[0].pin;
   const normalized = normalizeCourse(legacy);
   assert.equal(normalized.greens[0].shape, undefined);
 });
@@ -131,57 +101,62 @@ test('course schema rejects unknown fields and unknown catalog assets instead of
   assert.throws(() => normalizeCourse(unknownAsset), /unknown catalog asset/);
 });
 
-test('course foliage uses a stable versioned alias instead of runtime asset paths', () => {
-  const aliased = structuredClone(shippedCourse);
-  aliased.environment.foliageAlias = 'builtin.douglas-fir.pnw.v1';
-  assert.equal(normalizeCourse(aliased).environment.foliageAlias, 'builtin.douglas-fir.pnw.v1');
-  for (const invalid of ['/assets/tree.ktx2', 'douglas-fir', 'builtin.douglas-fir.pnw.v0']) {
-    const malformed = structuredClone(shippedCourse);
-    malformed.environment.foliageAlias = invalid;
-    assert.throws(() => normalizeCourse(malformed), /versioned.*alias/);
-  }
+test('habitatMassId is strict and limited to forest-layer assemblies', () => {
+  const wrongSemantic = structuredClone(shippedCourse);
+  wrongSemantic.environment.assembly.push({ ...structuredClone(forestFixture), semantic: 'habitat-cluster', habitatMassId: 'invalid-habitat-mass' });
+  assert.throws(() => normalizeCourse(wrongSemantic), /habitatMassId is allowed only for forest-layer/);
 
-  const mixed = structuredClone(shippedCourse);
-  mixed.environment.foliageAliases = [
-    'builtin.douglas-fir.pnw.v1',
-    'builtin.italian-cypress.mediterranean.v1',
-    'local.monterey-cypress.coastal.v1',
-  ];
-  const normalized = normalizeCourse(mixed);
-  assert.deepEqual(normalized.environment.foliageAliases, mixed.environment.foliageAliases);
-  assert.ok(Object.isFrozen(normalized.environment.foliageAliases));
+  const malformed = structuredClone(shippedCourse);
+  malformed.environment.assembly.push({ ...structuredClone(forestFixture), habitatMassId: 'Bad Mass' });
+  assert.throws(() => normalizeCourse(malformed), /habitatMassId must be a stable kebab-case identifier/);
+});
 
-  for (const foliageAliases of [[], ['douglas-fir'], [
-    'builtin.douglas-fir.pnw.v1', 'builtin.douglas-fir.pnw.v1',
-  ], [
-    'local.first.private.v1', 'local.second.private.v1',
-    'local.third.private.v1', 'local.fourth.private.v1',
-  ]]) {
-    const malformed = structuredClone(shippedCourse);
-    malformed.environment.foliageAliases = foliageAliases;
-    assert.throws(() => normalizeCourse(malformed), /foliageAliases/);
-  }
-  const ambiguous = structuredClone(mixed);
-  ambiguous.environment.foliageAlias = 'builtin.douglas-fir.pnw.v1';
-  assert.throws(() => normalizeCourse(ambiguous), /not both/);
+test('course procedural trees use reusable strict definitions instead of foliage aliases', () => {
+  const authored = structuredClone(shippedCourse);
+  authored.environment.proceduralTreeDefinitions.push(legacyTreeDefinition('douglas-fir'));
+  const normalized = normalizeCourse(authored);
+  assert.equal(normalized.environment.proceduralTreeDefinitions.at(-1).id, 'builtin-douglas-fir');
+  assert.ok(Object.isFrozen(normalized.environment.proceduralTreeDefinitions.at(-1)));
+
+  const missing = structuredClone(shippedCourse);
+  missing.environment.proceduralTrees.push({
+    id: 'missing-definition-tree', definitionId: 'does-not-exist', x: 100, z: -300,
+    rotationY: 0, scale: 1, seed: 1, age: 1, health: 1, windExposure: 0.5,
+  });
+  assert.throws(() => normalizeCourse(missing), /missing definition/);
+
+  const rawPath = structuredClone(authored);
+  rawPath.environment.proceduralTreeDefinitions[0].materials.leaves.textureUrl = '/private/generated.png';
+  assert.throws(() => normalizeCourse(rawPath), /same-origin procedural-tree/);
+
+  const legacy = structuredClone(shippedCourse);
+  legacy.environment.foliageAlias = 'builtin.douglas-fir.pnw.v1';
+  assert.throws(() => normalizeCourse(legacy), /foliageAlias is not allowed/);
 });
 
 test('explicit environment objects cannot violate protected course clearances', () => {
   const onGreen = structuredClone(shippedCourse);
+  const green = onGreen.greens[0];
   onGreen.environment.placements.push({
-    id: 'tree-on-green', assetId: 'polyhaven-tree-small-02', x: -6, z: -45.72, rotationY: 0, scale: 1,
+    id: 'tree-on-green', assetId: 'polyhaven-tree-small-02', x: green.x, z: green.z, rotationY: 0, scale: 1,
   });
   assert.throws(() => normalizeCourse(onGreen), /green clearance/);
 
   const inFairway = structuredClone(shippedCourse);
+  const routePoint = inFairway.routing.holes[0].route.points[2];
   inFairway.environment.placements.push({
-    id: 'tree-in-fairway', assetId: 'polyhaven-tree-small-02', x: 0, z: -320, rotationY: 0, scale: 1,
+    id: 'tree-in-fairway', assetId: 'polyhaven-tree-small-02', x: routePoint.x, z: routePoint.z, rotationY: 0, scale: 1,
   });
   assert.throws(() => normalizeCourse(inFairway), /fairway clearance/);
 });
 
 test('distributed regions apply the declared clearance for each protected feature', () => {
   const candidate = structuredClone(shippedCourse);
+  candidate.environment.objectBudget += 1;
+  const safe = forestFixture.region;
+  candidate.environment.placements = []; candidate.environment.proceduralTrees = [];
+  delete candidate.routing; candidate.meta.schema = 3;
+  candidate.ponds = [{ x: -400, z: 2, r: 8, depth: 1 }];
   candidate.environment.scatter.push({
     id: 'water-bank-specific-clearance',
     assetIds: ['polyhaven-boulder-01'],
@@ -191,21 +166,47 @@ test('distributed regions apply the declared clearance for each protected featur
     // Outside the boulder's 1 m radius + 3 m water clearance, but well inside
     // its unrelated 14 m green clearance. The former max-clearance shortcut
     // incorrectly rejected this valid shoreline region.
-    region: { kind: 'bounds', minX: 83.1, maxX: 83.4, minZ: -110.2, maxZ: -109.8 },
+    region: { kind: 'bounds', ...safe },
   });
   assert.doesNotThrow(() => normalizeCourse(candidate));
+});
+
+test('forest-layer envelopes may cross a fairway buffer while other distributed semantics remain strict', () => {
+  const separatorForest = structuredClone(shippedCourse);
+  const forest = structuredClone(forestFixture);
+  separatorForest.environment.assembly.push(forest);
+  forest.count = 0;
+  forest.region = {
+    kind: 'bounds', minX: -167, maxX: -163, minZ: -147, maxZ: -145,
+  };
+  assert.doesNotThrow(() => normalizeCourse(separatorForest));
+
+  const separatorUnderstory = structuredClone(separatorForest);
+  separatorUnderstory.environment.assembly.find(({ id }) => id === forest.id).semantic = 'forest-understory';
+  assert.doesNotThrow(() => normalizeCourse(separatorUnderstory));
+
+  const ordinaryTreeLine = structuredClone(separatorForest);
+  const ordinary = ordinaryTreeLine.environment.assembly.find(({ id }) => id === forest.id);
+  ordinary.semantic = 'tree-line';
+  ordinary.assetIds = ['polyhaven-pine-tree-01'];
+  delete ordinary.habitatMassId;
+  assert.throws(
+    () => normalizeCourse(ordinaryTreeLine),
+    /region intersects fairway clearance/,
+  );
 });
 
 test('course environment budget is hard-capped at 3000 objects', () => {
   const overBudget = structuredClone(shippedCourse);
   overBudget.environment.objectBudget = 3000;
+  const safe = forestFixture.region;
   overBudget.environment.scatter.push({
     id: 'too-many-trees',
     assetIds: ['polyhaven-tree-small-02'],
     seed: 5,
     count: 3001,
     minSpacing: 6,
-    region: { kind: 'bounds', minX: 92, maxX: 104, minZ: -330, maxZ: -300 },
+    region: { kind: 'bounds', ...safe },
   });
   assert.throws(() => normalizeCourse(overBudget), /exceeding its hard budget/);
 });

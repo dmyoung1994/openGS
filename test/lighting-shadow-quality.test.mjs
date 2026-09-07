@@ -59,12 +59,31 @@ test('resolved lighting keeps the exact tree shadow layer and stable focus footp
 
   lighting.follow(10, 10, {
     camera: { position: { x: 20, z: 20 } },
-    cameraWeight: 0.5,
     now: 3,
   });
   assert.equal(lighting.sun.shadow.needsUpdate, true);
-  assert.equal(lighting.readDiagnostics().focus.x, 15);
-  assert.equal(lighting.readDiagnostics().focus.z, 15);
+  assert.equal(lighting.readDiagnostics().focus.x, 20);
+  assert.equal(lighting.readDiagnostics().focus.z, 20);
+  lighting.dispose();
+});
+
+test('production tiers spend shadow resolution on the camera-visible region', () => {
+  const lighting = new Lighting(new Scene(), direction, {
+    id: 'high', shadowMapSize: 2048, shadow: { extent: 60 },
+  });
+  lighting.follow(0, 0, { camera: { position: { x: 10, z: 20 } }, now: 0 });
+  const diagnostics = lighting.readDiagnostics();
+  assert.equal(diagnostics.courseCoverage, null);
+  assert.ok(diagnostics.texelSizeMeters.x < 0.06);
+  assert.equal(diagnostics.focus.x, 10);
+  assert.equal(diagnostics.focus.z, 20);
+  lighting.sun.shadow.needsUpdate = false;
+  lighting.markShadowRendered(1);
+  const target = lighting.sun.target.position.clone();
+  lighting.follow(300, -400, { camera: { position: { x: 10, z: 20 } }, now: 2 });
+  assert.deepEqual(lighting.sun.target.position.toArray(), target.toArray());
+  assert.equal(lighting.sun.shadow.needsUpdate, false,
+    'ball movement must not move a stationary camera shadow footprint');
   lighting.dispose();
 });
 

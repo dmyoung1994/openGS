@@ -7,6 +7,7 @@ const MIB = 1024 * 1024;
 const freezeTier = (tier) => Object.freeze({
   ...tier,
   gtao: Object.freeze({ ...tier.gtao }),
+  shadow: Object.freeze({ ...tier.shadow }),
   trees: Object.freeze({ ...tier.trees }),
 });
 
@@ -16,14 +17,11 @@ export const ENVIRONMENT_DEVICE_TIERS = Object.freeze({
     pixelRatioCap: 2,
     gtao: { resolutionScale: 0.5, samples: 8 },
     shadowMapSize: 2048,
+    shadow: { extent: 60 },
     grassRadius: 43,
-    // Full modeled geometry through the playable foreground. The former 10 m near
-    // band was far too tight to matter: measured from a mid-fairway camera it left
-    // 1 of ~16 visible trees on LOD0 and put the whole tree line on decimated or
-    // card representations, which is what made the forest read thin. Raising the
-    // band to 70 m doubled resident LOD0 trees (4 -> 8) for no measurable GPU cost
-    // (10.4 ms vs 10.6 ms union); 95 m cost ~2 ms and 130 m ~3 ms, so 70 m is the
-    // knee. From the tee the whole line is beyond 130 m and stays on cards either way.
+    // Base distance budget; Trees.js applies catalog-role residency on top. Mature
+    // overstory receives the long foreground/midground range, while native saplings
+    // keep a modest band so subpixel regeneration does not consume hero geometry.
     trees: { lodNear: 70, lodFar: 140 },
   }),
   balanced: freezeTier({
@@ -31,6 +29,7 @@ export const ENVIRONMENT_DEVICE_TIERS = Object.freeze({
     pixelRatioCap: 1.5,
     gtao: { resolutionScale: 0.5, samples: 6 },
     shadowMapSize: 1536,
+    shadow: { extent: 45 },
     grassRadius: 42,
     trees: { lodNear: 52, lodFar: 110 },
   }),
@@ -39,6 +38,7 @@ export const ENVIRONMENT_DEVICE_TIERS = Object.freeze({
     pixelRatioCap: 1.25,
     gtao: { resolutionScale: 0.4, samples: 4 },
     shadowMapSize: 1024,
+    shadow: { extent: 30 },
     grassRadius: 38,
     trees: { lodNear: 34, lodFar: 80 },
   }),
@@ -125,7 +125,10 @@ export function selectInitialVisualQualityMode({
   const memoryGiB = finite(deviceMemoryGiB);
 
   if (tierId === 'high' && cores >= 12 && memoryGiB >= 8) return 'ultra';
-  if (tierId === 'high') return 'quality';
+  // High WebGPU limits describe capacity, not frame throughput. The six-core
+  // mobile-class device misses the dense forest's first-shot budget in quality;
+  // start balanced and let measured headroom earn the higher workload.
+  if (tierId === 'high') return cores > 0 && cores <= 6 ? 'balanced' : 'quality';
   if (tierId === 'balanced') return 'balanced';
   return 'battery';
 }
@@ -142,6 +145,7 @@ export function environmentTierSnapshot(tier) {
     pixelRatioCap: tier.pixelRatioCap,
     gtao: { ...tier.gtao },
     shadowMapSize: tier.shadowMapSize,
+    shadow: { ...tier.shadow },
     grassRadius: tier.grassRadius,
     trees: { ...tier.trees },
   };

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "catalogId": "claude-golfsim-procedural-trees",
+  "assets": [
+    {
+      "id": "imagegen-live-oak",
+      "label": "ImageGen Live Oak",
+      "biomes": ["temperate-maritime"],
+      "form": "broad spreading evergreen oak",
+      "definitionUrl": "/assets/procedural-trees/imagegen-live-oak/definition.json",
+      "referenceUrl": "/assets/procedural-trees/imagegen-live-oak/reference.png",
+      "provenance": "ImageGen reference fitted by the deterministic procedural tree builder",
+      "validation": "tree-builder-v1"
+    }
+  ]
+}

@@ -82,3 +82,24 @@ test('temporal cuts invalidate history and waitForFrames uses deterministic noti
   f.evaluator.setFov(48);
   assert.deepEqual(f.reasons, ['evaluator camera cut']);
 });
+
+test('movePose preserves temporal history for continuous editor-camera motion', () => {
+  const f = fixture();
+  f.evaluator.enter();
+  f.evaluator.setPose({ position: [3, 4, 5], lookAt: [3, 4, 0], fov: 50 });
+  assert.deepEqual(f.reasons, ['evaluator camera cut']);
+
+  f.evaluator.movePose({ position: [3.5, 4, 4.5], lookAt: [3, 4, 0], fov: 50 });
+  assert.equal(f.evaluator.continuousMotionActive, true);
+  f.evaluator.notifyFrame(1);
+  assert.equal(f.evaluator.continuousMotionActive, true);
+  f.evaluator.movePose({ position: [4, 4, 4], lookAt: [3, 4, 0], fov: 50 });
+  f.evaluator.notifyFrame(2);
+  assert.equal(f.evaluator.continuousMotionActive, true);
+  f.evaluator.notifyFrame(3);
+  assert.equal(f.evaluator.continuousMotionActive, false);
+
+  assert.deepEqual(f.evaluator.getState().position, [4, 4, 4]);
+  assert.deepEqual(f.evaluator.getState().lookAt, [3, 4, 0]);
+  assert.deepEqual(f.reasons, ['evaluator camera cut']);
+});

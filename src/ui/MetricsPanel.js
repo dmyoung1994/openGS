@@ -4,7 +4,7 @@
 import { DEVELOPMENT_LAUNCH_PRESETS } from '../input/DevelopmentLaunchMonitorAdapter.js';
 
 const FIELDS = [
-  { key: 'ballSpeed', label: 'Ball speed', unit: 'mph', min: 40, max: 200, step: 1 },
+  { key: 'ballSpeed', label: 'Ball speed', unit: 'mph', min: 0.1, max: 200, step: 0.1 },
   { key: 'launchAngle', label: 'Launch angle', unit: '°', min: 0, max: 50, step: 0.1 },
   { key: 'launchDirection', label: 'Launch direction (L/R)', unit: '°', min: -30, max: 30, step: 0.5, directional: true },
   { key: 'spinRate', label: 'Spin rate', unit: 'rpm', min: 0, max: 12000, step: 50 },
@@ -13,7 +13,7 @@ const FIELDS = [
 
 const ENV_FIELDS = [
   { key: 'windSpeed', label: 'Wind', unit: 'mph', min: 0, max: 40, step: 1, def: 0 },
-  { key: 'windDir', label: 'Wind from', unit: '°', min: 0, max: 360, step: 5, def: 0 },
+  { key: 'windDir', label: 'Wind toward', unit: '°', min: 0, max: 360, step: 5, def: 0 },
   { key: 'altitude', label: 'Altitude', unit: 'm', min: 0, max: 3000, step: 50, def: 0 },
   { key: 'temperatureC', label: 'Temp', unit: '°C', min: -5, max: 45, step: 1, def: 15 },
   { key: 'cloudCover', label: 'Cloud cover', unit: '%', min: 0, max: 70, step: 5, def: 38 },
@@ -26,8 +26,11 @@ const ENV_SELECTS = [
 ];
 
 export class MetricsPanel {
-  constructor({ onHit, onEnvironmentChange }) {
+  constructor({ onHit, onEnvironmentChange, onContinue, onGreenGrid }) {
+    this.onGreenGrid = onGreenGrid;
+    this.greenGridEnabled = false;
     this.onHit = onHit;
+    this.onContinue = onContinue;
     this.onEnvironmentChange = onEnvironmentChange;
     this.values = { ...DEVELOPMENT_LAUNCH_PRESETS['7-iron'] };
     this.env = Object.fromEntries([
@@ -46,13 +49,17 @@ export class MetricsPanel {
       ...this.values,
       // This stays private development metadata. The player presentation has no
       // club field, and real providers may omit it until their SDK supplies one.
-      optional: this.club ? { clubLabel: this.club } : undefined,
+      optional: {
+        clubSpeed: this.values.clubSpeed,
+        ...(this.club ? { clubLabel: this.club } : {}),
+      },
     };
   }
 
   getParams() {
     return {
       ballSpeed: this.values.ballSpeed,
+      clubSpeed: this.values.clubSpeed,
       launchAngle: this.values.launchAngle,
       azimuth: this.values.launchDirection,
       spinRate: this.values.spinRate,
@@ -131,7 +138,14 @@ export class MetricsPanel {
 
   showAddress() {
     this.setLive('');
+    this.setContinuation(null);
     this._setState('address');
+  }
+
+  setContinuation(label) {
+    const button = this.root.querySelector('.gs-play-continue');
+    button.hidden = !label;
+    button.textContent = label ?? '';
   }
 
   setLive(text) {
@@ -160,6 +174,27 @@ export class MetricsPanel {
     labToggle.setAttribute('aria-expanded', 'false');
     labToggle.textContent = 'Lab';
     document.body.appendChild(labToggle);
+
+    const gridToggle = document.createElement('button');
+    gridToggle.id = 'gs-green-grid';
+    gridToggle.type = 'button';
+    gridToggle.className = 'gs-glass';
+    gridToggle.textContent = 'Green grid';
+    gridToggle.setAttribute('aria-pressed', 'false');
+    gridToggle.title = '1 m squares · pulses flow downhill · faster and warmer means steeper';
+    const gridLegend = document.createElement('div');
+    gridLegend.id = 'gs-grid-legend';
+    gridLegend.className = 'gs-glass';
+    gridLegend.hidden = true;
+    gridLegend.innerHTML = '1 m grid · flows downhill<br><span style="color:#8ce9da">Level</span> → <span style="color:#ffdc81">3%</span> → <span style="color:#ff947a">6%+</span>';
+    gridToggle.setAttribute('aria-describedby', gridLegend.id);
+    gridToggle.addEventListener('click', () => {
+      this.greenGridEnabled = !this.greenGridEnabled;
+      gridToggle.setAttribute('aria-pressed', String(this.greenGridEnabled));
+      gridLegend.hidden = !this.greenGridEnabled;
+      this.onGreenGrid?.(this.greenGridEnabled);
+    });
+    document.body.append(gridToggle, gridLegend);
 
     const panel = document.createElement('section');
     panel.id = 'gs-launch-lab';
@@ -247,12 +282,14 @@ export class MetricsPanel {
           ${resultMetric('Landing', 'gs-result-landing')}
           ${resultMetric('Rollout', 'gs-result-rollout')}
         </div>
+        <button class="gs-play-continue" type="button" hidden></button>
       </section>
 
       <div class="gs-shot-status gs-glass" role="status"></div>
     `;
     document.body.appendChild(root);
     root.querySelector('.gs-ready').addEventListener('click', () => this.onHit?.());
+    root.querySelector('.gs-play-continue').addEventListener('click', () => this.onContinue?.());
 
     this.root = root;
     this.status = root.querySelector('.gs-shot-status');
@@ -320,6 +357,10 @@ export class MetricsPanel {
       }
       .gs-shot-ui { position: fixed; inset: 0; z-index: 55; pointer-events: none;
         color: var(--shot-white); font-family: var(--shot-font); font-variant-numeric: tabular-nums; }
+      .gs-play-continue { grid-column: 1 / -1; justify-self: end; pointer-events: auto;
+        padding: 10px 16px; border: 1px solid rgba(255,255,255,.4); border-radius: 10px;
+        color: white; background: #244c32; font: inherit; cursor: pointer; }
+      .gs-play-continue:focus-visible { outline: 2px solid white; outline-offset: 3px; }
       .gs-glass, #gs-lab-toggle { border: 1px solid var(--shot-glass-border);
         background:
           radial-gradient(120% 95% at 16% -14%, rgba(255,255,255,.16), transparent 52%),
@@ -348,6 +389,14 @@ export class MetricsPanel {
         transition: opacity .2s, background .2s, transform .2s; }
       #gs-lab-toggle:hover, #gs-lab-toggle[aria-expanded="true"] { opacity: 1;
         background-color: rgba(255,255,255,.10); transform: translateY(-1px); }
+      #gs-green-grid { position:fixed;top:16px;left:98px;z-index:60;padding:10px 16px;
+        border-radius:999px;color:var(--shot-white);font:600 14px/1 var(--shot-font);cursor:pointer; }
+      #gs-green-grid[aria-pressed="true"] { color:#8ce9da;border-color:#8ce9da; }
+      #gs-green-grid:focus-visible { outline:2px solid #8ce9da;outline-offset:3px; }
+      #gs-grid-legend { position:fixed;top:62px;left:98px;z-index:60;padding:8px 12px;
+        border-radius:12px;color:var(--shot-white);font:11px/1.7 var(--shot-font);pointer-events:none; }
+      body:not([data-view="practice"]) #gs-green-grid,
+      body:not([data-view="practice"]) #gs-grid-legend { display:none; }
 
       .gs-ready { left: 50%; bottom: 26px; width: min(360px,calc(100vw - 32px)); height: 98px;
         border-radius: 28px; color: var(--shot-white); cursor: pointer; pointer-events: auto;
@@ -370,8 +419,9 @@ export class MetricsPanel {
         letter-spacing: -.03em; color: var(--shot-white); }
       .gs-live-unit, .gs-result-unit { margin-left: 5px; font-size: 13px; color: var(--shot-muted); }
 
-      .gs-results { left: 50%; bottom: 16px; width: min(1180px,calc(100vw - 32px)); min-height: 238px;
-        padding: 24px 32px 22px; border-radius: 30px;
+      .gs-results { left: 50%; bottom: 16px; width: min(1180px,calc(100vw - 32px));
+        padding: 12px 20px; border-radius: 22px; display: grid;
+        grid-template-columns: minmax(330px,3fr) minmax(0,8fr); gap: 20px; align-items: center;
         /* Keep the held data optically stable over the moving result orbit. The
            layered translucent fill retains the liquid-glass depth, but this one
            large surface does not repeatedly recapture/blur the WebGPU canvas. */
@@ -380,15 +430,16 @@ export class MetricsPanel {
           linear-gradient(180deg,rgba(24,43,31,.86),rgba(8,20,13,.82));
         -webkit-backdrop-filter: none; backdrop-filter: none;
         transform: translate(-50%,0); transition: opacity .18s ease, visibility .18s; }
-      .gs-result-hero { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); max-width: 760px; }
-      .gs-hero-metric { min-width: 0; padding-right: 28px; }
-      .gs-hero-metric + .gs-hero-metric { border-left: 1px solid rgba(255,255,255,.26); padding-left: 28px; }
-      .gs-result-value { display: inline-block; margin-top: 5px; font-size: clamp(34px,4vw,50px); line-height: .98;
+      .gs-result-hero { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
+      .gs-hero-metric { min-width: 0; padding-right: 16px; }
+      .gs-hero-metric + .gs-hero-metric { border-left: 1px solid rgba(255,255,255,.26); padding-left: 16px; }
+      .gs-results .gs-result-label, .gs-results .gs-data-label { font-size: 11px; }
+      .gs-result-value { display: inline-block; margin-top: 3px; font-size: clamp(24px,2.4vw,30px); line-height: 1;
         font-weight: 640; letter-spacing: -.04em; color: var(--shot-white); }
       .gs-hero-metric:last-child .gs-result-value { color: var(--shot-green); }
-      .gs-result-rule { height: 1px; margin: 20px 0 17px; background: linear-gradient(90deg,rgba(255,255,255,.34),rgba(255,255,255,.11) 72%,transparent); }
-      .gs-result-data { display: grid; grid-template-columns: repeat(8,minmax(0,1fr)); gap: 18px; }
-      .gs-data-value { display: block; margin-top: 5px; font-size: 18px; line-height: 1.1; font-weight: 590;
+      .gs-result-rule { display: none; }
+      .gs-result-data { display: grid; grid-template-columns: repeat(8,minmax(0,1fr)); gap: 12px; }
+      .gs-data-value { display: block; margin-top: 3px; font-size: 14px; line-height: 1.1; font-weight: 590;
         color: var(--shot-white); white-space: nowrap; }
 
       .gs-shot-status { position: absolute; left: 50%; top: 92px; transform: translateX(-50%);
@@ -431,19 +482,20 @@ export class MetricsPanel {
       body:not([data-view="practice"]) #gs-lab-toggle,
       body:not([data-view="practice"]) #gs-launch-lab { display: none !important; }
       @media (max-width: 900px) {
-        .gs-results { padding: 20px 22px 18px; }
-        .gs-result-data { grid-template-columns: repeat(4,minmax(0,1fr)); row-gap: 14px; }
+        .gs-results { padding: 10px 14px; grid-template-columns: 1fr; gap: 10px; }
+        .gs-result-data { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px 12px; }
       }
       @media (max-width: 620px) {
         #gs-lab-toggle { top: 10px; left: 10px; }
         .gs-panel { top: 58px; left: 10px; width: calc(100vw - 20px); }
+        .gs-results { bottom: 10px; width: calc(100vw - 20px); padding: 10px 12px; border-radius: 18px; }
         .gs-result-hero { gap: 0; }
         .gs-hero-metric { padding-right: 12px; }
         .gs-hero-metric + .gs-hero-metric { padding-left: 12px; }
-        .gs-result-label { font-size: 11px; }
-        .gs-result-value { font-size: clamp(27px,9vw,38px); }
-        .gs-result-unit { display: block; margin: 3px 0 0; }
-        .gs-result-data { grid-template-columns: repeat(2,minmax(0,1fr)); }
+        .gs-result-value { font-size: clamp(22px,7vw,30px); }
+        .gs-result-unit { margin-left: 3px; }
+        .gs-data-value { font-size: 12px; }
+        .gs-result-data { grid-template-columns: repeat(4,minmax(0,1fr)); }
         .gs-live-metric { padding: 13px 16px; }
         .gs-live-value { font-size: 26px; }
       }
@@ -476,7 +528,7 @@ function resultMetric(label, id) {
 
 function formatOffline(value) {
   const direction = value >= 0 ? 'R' : 'L';
-  return { value: `${direction} ${Math.abs(value).toFixed(1)}`, unit: 'yd' };
+  return { value: Math.abs(value).toFixed(1), unit: Math.abs(value) < 0.05 ? 'yd' : `yd ${direction}` };
 }
 
 function fmt(value) {

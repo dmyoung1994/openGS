@@ -60,6 +60,7 @@ export class EvaluatorCamera {
     this._saved = null;
     this._frame = 0;
     this._frameSequence = 0;
+    this._continuousMotionUntilSequence = 0;
     this._waiters = [];
     this._lookAt = this._lookAtFromCamera(camera.position);
     this._pose = {
@@ -72,6 +73,13 @@ export class EvaluatorCamera {
 
   get owned() { return this.active; }
   get simulationFrozen() { return !!this.sceneManager.freezeSimulation; }
+  // Keep adaptive renderer workloads fixed while a live editor/evaluator dolly
+  // is producing frames. Two presented frames of quiet terminate the motion
+  // window; this is long enough to cover a move submitted between animation
+  // ticks without turning evaluator ownership into a permanent quality lock.
+  get continuousMotionActive() {
+    return this.active && this._frameSequence < this._continuousMotionUntilSequence;
+  }
 
   // Kept as an explicit hook so the main loop can give evaluator ownership a
   // stable update slot. The pose is intentionally not damped or re-resolved.
@@ -96,6 +104,7 @@ export class EvaluatorCamera {
     // the evaluator owns it. Its prior active state is restored in exit().
     if (this.freeCamera?.active) this.freeCamera.exit();
     this.active = true;
+    this._continuousMotionUntilSequence = this._frameSequence;
     return this.getState();
   }
 
@@ -122,6 +131,7 @@ export class EvaluatorCamera {
       }
     }
     this._saved = null;
+    this._continuousMotionUntilSequence = this._frameSequence;
     this._invalidate('evaluator camera restore');
     return this.getState();
   }
@@ -151,6 +161,37 @@ export class EvaluatorCamera {
       fov: nextFov,
       lookAt: nextLookAt ?? this._lookAtFromQuaternion(nextPosition, nextQuaternion),
     }, changed);
+    return this.getState();
+  }
+
+  /**
+   * Move an owned evaluator camera without declaring a temporal cut.
+   *
+   * Use this for continuous dollies, walkthroughs, and authoring-camera paths.
+   * `setPose()` remains the deterministic cut API for jumping between review
+   * viewpoints. Renderers can therefore preserve motion/temporal history while
+   * the course editor moves the same camera over successive live frames.
+   */
+  movePose({ position, lookAt, quaternion: q, fov } = {}) {
+    this._requireOwnership();
+    if (position === undefined) throw new TypeError('movePose requires position.');
+    const nextPosition = vector(position, 'position');
+    if (lookAt !== undefined && q !== undefined) {
+      throw new TypeError('movePose accepts either lookAt or quaternion, not both.');
+    }
+    const nextLookAt = lookAt === undefined ? null : vector(lookAt, 'lookAt');
+    const nextQuaternion = q !== undefined
+      ? quaternion(q, 'quaternion')
+      : this._quaternionLookingAt(nextPosition, nextLookAt ?? this._lookAtFromCamera(nextPosition));
+    const nextFov = fov === undefined ? this.camera.fov : finiteNumber(fov, 'fov');
+    if (nextFov <= 0 || nextFov >= 180) throw new RangeError('fov must be greater than 0 and less than 180 degrees.');
+    this._applyCamera({
+      position: nextPosition,
+      quaternion: nextQuaternion,
+      fov: nextFov,
+      lookAt: nextLookAt ?? this._lookAtFromQuaternion(nextPosition, nextQuaternion),
+    }, false);
+    this._continuousMotionUntilSequence = this._frameSequence + 2;
     return this.getState();
   }
 
@@ -246,6 +287,7 @@ export class EvaluatorCamera {
       namespace: this.namespace,
       owned: this.active,
       frozen: this.simulationFrozen,
+      continuousMotionActive: this.continuousMotionActive,
       position: plainVector(this.camera.position),
       quaternion: plainQuaternion(this.camera.quaternion),
       lookAt: plainVector(this._lookAt),

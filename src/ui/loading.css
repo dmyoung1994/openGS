@@ -1,0 +1,20 @@
+#loading.has-green {
+  background: transparent;
+  align-items: end;
+  padding: 0 24px max(28px, 5vh);
+  pointer-events: none;
+}
+#loading.has-green > div {
+  padding: 18px 28px;
+  border-radius: 18px;
+  background: rgb(10 14 18 / 78%);
+  border: 1px solid rgb(230 242 225 / 12%);
+  backdrop-filter: blur(12px);
+  max-width: min(90vw, 520px);
+}
+#loading.has-green .title { font-size: 16px; }
+#loading.has-green .stage { margin-top: 10px; font-size: 12px; }
+body:has(#loading:not(.hidden)) :is(.gs-shot-ui, #gb-panel, .gm-map-panel, #gs-creator-hud) { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  #loading { transition: none; }
+}

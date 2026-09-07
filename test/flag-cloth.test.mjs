@@ -16,6 +16,45 @@ function run(system, env, frames = 480) {
   for (let frame = 0; frame < frames; frame++) { env.time.value += 1 / 120; system.update(); }
 }
 
+test('a new shot clock retires the previous epoch remainder without resetting cloth', () => {
+  const env = environment({ x: 3, y: 0, z: 1 });
+  const sample = env.sampleWindCpu;
+  const times = [];
+  env.sampleWindCpu = (position, time, out) => {
+    assert.ok(Number.isFinite(time) && time >= 0, `invalid wind time ${time}`);
+    times.push(time);
+    return sample(position, time, out);
+  };
+  const cloth = new FlagClothSystem({ anchors: [{ x: 0, y: 2.3, z: 0 }], environment: env });
+  env.time.value = 0.02;
+  cloth.update();
+  const shape = cloth.positions.slice();
+  env.time.value = 0;
+  cloth.update();
+  assert.deepEqual(cloth.positions, shape);
+  env.time.value = 1 / 120;
+  cloth.update();
+  assert.equal(times.at(-1), 0);
+  assert.equal(cloth.diagnostics().finite, true);
+  cloth.dispose();
+});
+
+test('cloth motion history retains the last presented shape across multiple physics steps', () => {
+  const env = environment({ x: 8, y: 0.3, z: 3 });
+  const cloth = new FlagClothSystem({ anchors: [{ x: 0, y: 2.3, z: 0 }], environment: env });
+  const initial = cloth.positions.slice();
+  env.time.value += 1 / 30;
+  cloth.update();
+  assert.deepEqual(cloth.renderPrevious.array, initial);
+  assert.notDeepEqual(cloth.positions, initial);
+  assert.notDeepEqual(cloth.renderPrevious.array, cloth.previous, 'solver history is not render history');
+  const lastPresented = cloth.positions.slice();
+  cloth.update();
+  assert.deepEqual(cloth.renderPrevious.array, lastPresented, 'a frozen frame must retire old motion');
+  assert.ok(cloth.material.positionNode);
+  cloth.dispose();
+});
+
 test('merged flag cloth is deterministic, finite, pinned, and bounded in strong wind', () => {
   assert.equal(FLAGSTICK_COLLISION_RADIUS, 0.0075);
   const aEnv = environment({ x: 11, y: 0.4, z: 4 });

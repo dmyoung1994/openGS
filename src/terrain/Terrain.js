@@ -1,6 +1,6 @@
 import {
   BufferGeometry, BufferAttribute, Mesh, MeshPhysicalNodeMaterial, Group,
-  Vector2, Vector3, Vector4, Color, DoubleSide, TextureLoader, RepeatWrapping, SRGBColorSpace,
+  Vector2, Vector3, Vector4, Color, DoubleSide, Texture, RepeatWrapping, SRGBColorSpace,
   StorageTexture, DataTexture, RedFormat, FloatType, NearestFilter, LinearFilter, ClampToEdgeWrapping,
   DataArrayTexture, RGBAFormat, UnsignedByteType, LinearMipmapLinearFilter,
 } from 'three';
@@ -11,10 +11,16 @@ import {
   uniform, instanceIndex, textureStore, uvec2, struct, textureLoad, ivec2, int, mrt,
 } from 'three/tsl';
 import { surface } from '../physics/groundInteraction.js';
-import { buildZoneMap, zoneAt as zoneAtTexel } from './ZoneMap.js';
+import { buildZoneMap, createZoneMapTextures, zoneAt as zoneAtTexel } from './ZoneMap.js';
+import { yieldToRendering } from '../util/yieldToRendering.js';
+import { acquireTurfMaps } from './TurfMapResidency.js';
+import { TURF_PACK_SOURCE_URLS } from './TurfSources.js';
+import { sampleHeightfield, sampleHeightfieldNormal } from './Heightfield.js';
 import {
   turfBase,
   turfUndercoatBase,
+  NATIVE_GRASS_PIGMENT,
+  MOW_STRIPE_ALBEDO_CONTRAST,
   MOW_STRIPE_PERIOD_M,
   MOW_STRIPE_CROSS_SLOPE,
 } from './turfColor.js';
@@ -23,16 +29,27 @@ import {
   releaseCoastSandTextures,
   sampleCoastSand,
 } from '../scene/CoastSandDetail.js';
+import {
+  bakeDenseCanopyMask, CANOPY_DISTANCE_MAX_METERS, canopyOwnsExclusiveSurface, clearTrunkFootprints,
+  createCanopyDistanceTexture, createCanopyTexture, GRASS_GROWABLE_BIT,
+  sampleCanopyForestFloorWeight,
+} from './CanopyField.js';
+import { NEAR_BALL_TURF_DETAIL } from './NearBallTurfDetail.js';
+import { signedDistanceToFeature } from '../course/featureGeometry.js';
+
+const GRASS_CANDIDATE_SURFACES = new Set([
+  'deepRough', 'rough', 'fairway', 'fringe', 'green', 'tee',
+]);
 
 // Turf surface maps: the two maintained turf materials are read separately, and the
 // existing long-grass bake is selected for rough. Each bake is sampled at the current
 // screen-space footprint, so short fairway/green grass stays a material problem rather
 // than becoming a forest of tiny clumps.
 //
-//   * FAIRWAY (blendkit_fairway_*) — the pinned BlenderKit/Blendkit "Procedural Grass"
-//     material from asset 5b9e35dc-d8e7-4e16-a038-b48d5b8a925f. The baked source maps
-//     preserve its authored base colour, tangent normal, roughness, and procedural
-//     height signal. See docs/blendkit-turf-provenance.md.
+//   * FAIRWAY (blendkit_fairway_*, historical binding name) — ambientCG Grass005,
+//     a pinned CC0 fine-bladed, clean short-lawn material. Its lossless color, GL normal,
+//     displacement, roughness, and AO maps remain channel-registered. See
+//     docs/ambientcg-grass005-fairway-provenance.md.
 //   * GREEN (blendkit_green_*) — the pinned "Golf Bentgrass" material from asset
 //     34a832ef-bb9d-4213-89e9-9143b137d99e. It is intentionally a different tile and
 //     cut-height response, not a hue tweak of the fairway.
@@ -51,48 +68,70 @@ import {
 // native tile) and the distance tier (the same seamless atlas at its footprint-selected
 // mip). They crossfade by `dw` over the last ~28 m, where individual blades stop
 // resolving; continuous world-space variation supplies the larger-scale character.
-const _texLoader = new TextureLoader();
-
-function loadTurfMaps() {
-  const load = (p, srgb) => {
-    let resolveReady, rejectReady;
-    const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
-    const t = _texLoader.load(p, () => resolveReady(), undefined, (error) => {
-      console.error(`[turf] required texture failed to load: ${p}`);
-      rejectReady(error || new Error(`Failed to load ${p}`));
-    });
-    t.name = `turf:${p.split('/').at(-1)}`;
-    t.wrapS = t.wrapT = RepeatWrapping;
-    t.anisotropy = 8;
-    if (srgb) t.colorSpace = SRGBColorSpace;
-    return { texture: t, ready };
+export function loadForestFloorMaps() {
+  const load = (filename, srgb = false) => {
+    const map = new Texture();
+    let disposed = false;
+    map.addEventListener('dispose', () => { if (disposed) return; disposed = true; map.image?.close(); });
+    // Decode directly to an unpremultiplied bitmap: HTML image uploads otherwise
+    // spend ~60 ms per pack converting pixels on this device. Preserve all RGBA
+    // channels; WebGPU still applies the texture's existing flip and colour space.
+    const ready = (async () => {
+      const response = await fetch(`/assets/textures/${filename}`);
+      if (!response.ok) throw new Error(`Required forest-floor texture failed: ${filename} (${response.status})`);
+      const bitmap = await createImageBitmap(await response.blob(), {
+        premultiplyAlpha: 'none', colorSpaceConversion: 'none',
+      });
+      if (disposed) { bitmap.close(); throw new Error(`Forest-floor texture disposed during load: ${filename}`); }
+      map.image = bitmap;
+      map.needsUpdate = true;
+    })();
+    map.name = `forest-floor:${filename}`;
+    map.wrapS = map.wrapT = RepeatWrapping;
+    map.anisotropy = 8;
+    if (srgb) map.colorSpace = SRGBColorSpace;
+    return { map, ready };
   };
-  // R,G = normal.xy | B = canopy height | A = canopy AO. flipY off on the detail maps
-  // so the normal's V axis maps straight onto world +Z (and stays registered with the
-  // albedo) — otherwise the baked relief lights from the wrong side.
+  // Two registered RGBA packs retain fresh longleaf-straw colour, relief and
+  // occlusion without adding another terrain binding or geometry layer.
+  const colorRoughness = load('fresh_pine_straw_color_roughness_v2.png', true);
+  const normalHeightAo = load('fresh_pine_straw_normal_height_ao_v2.png');
+  return {
+    colorRoughness: colorRoughness.map,
+    normalHeightAo: normalHeightAo.map,
+    ready: Promise.all([colorRoughness.ready, normalHeightAo.ready]),
+  };
+}
+
+// One immutable CPU pack, shared by every course rebuild. No GPU objects or course
+// references survive here; production Terrain owners lease their GPU arrays from
+// renderer-scoped TurfMapResidency, while standalone callers own their arrays.
+// ponytail: retain only the fixed six-map 96 MiB pack; add a byte-budgeted LRU only
+// when courses can select different turf packs. Full page reload refreshes assets.
+let turfPackedSource = null;
+
+export function loadTurfMaps() {
   const set = (name, tile, farMean, albedoMean, packedRoughness = false,
     resolution = 1024, pigmentMean = [TURF_LUM, TURF_LUM, TURF_LUM],
     albedoLodBias = 0.0, albedoContrast = 1.0) => {
-    const albLoad = load(`/assets/textures/${name}_alb.png`, true);
-    const nrhLoad = load(`/assets/textures/${name}_nrh.png`, false);
-    const alb = albLoad.texture, nrh = nrhLoad.texture;
-    alb.flipY = nrh.flipY = false;
-    return { alb, nrh, tile, farMean, albedoMean, packedRoughness, resolution,
-      pigmentMean, albedoLodBias, albedoContrast,
-      ready: Promise.all([albLoad.ready, nrhLoad.ready]) };
+    return { name, tile, farMean, albedoMean, packedRoughness, resolution,
+      pigmentMean, albedoLodBias, albedoContrast };
   };
   // Height, AO, roughness, and source-albedo means are measured from the packed maps.
   // Pigment targets recenter the highly saturated procedural sources onto the course's
   // yellow-green turf family; the bounded source deviation still supplies local colour.
-  const fairway = set('blendkit_fairway', 1.8,
-    [0.44124056, 1.0, 0.90948934], 0.08483945, true, 2048,
-    [0.08400000, 0.16600000, 0.03400000], 0.75, 0.32);
+  const fairway = set('blendkit_fairway', 1.2,
+    [0.25848001, 0.60995079, 0.70157140], 0.20198728, true, 2048,
+    // Grass005 has dense, fine short-cut blade structure in every PBR channel. Keep its
+// color at the screen-selected footprint so the near-ball view reads as turf,
+// while the footprint-driven unresolved blend still removes repeating motifs.
+    [0.08400000, 0.16600000, 0.03400000], 0.00, 0.78);
   const green = set('blendkit_green', 1.5,
     [0.61920959, 1.0, 0.99607843], 0.11012081, true, 2048,
     // Preserve the compact bentgrass character through ordinary green-review
     // distances. The old +0.75 mip bias and 24% source contrast averaged the
     // dedicated scan into a flat pigment before lighting could reveal its nap.
-    [0.07500000, 0.20000000, 0.04500000], 0.30, 0.40);
+    [0.07500000, 0.20000000, 0.04500000], 0.15, 0.60);
   const rough = set('roughdetail', 2.0, [0.50762, 0.66504, 0.54402], TURF_LUM, false, 2048);
   const makeArray = (name, srgb) => {
     const array = new DataArrayTexture(new Uint8Array(3 * 4), 1, 1, 3);
@@ -112,38 +151,30 @@ function loadTurfMaps() {
   const nrhArray = makeArray('turf:normal-relief-array', false);
   const sets = [fairway, green, rough];
   sets.forEach((entry, layer) => { entry.layer = layer; });
-  const uploadArray = (array, sources) => {
-    const width = sources[0].image.width;
-    const height = sources[0].image.height;
-    if (width !== 2048 || height !== 2048
-        || sources.some((source) => source.image.width !== width || source.image.height !== height)) {
-      throw new Error('Turf texture arrays require three authored 2048x2048 layers.');
-    }
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    const pixels = new Uint8Array(width * height * 4 * sources.length);
-    sources.forEach((source, layer) => {
-      context.clearRect(0, 0, width, height);
-      context.drawImage(source.image, 0, 0, width, height);
-      pixels.set(context.getImageData(0, 0, width, height).data, layer * width * height * 4);
+  if (!turfPackedSource) {
+    turfPackedSource = new Promise((resolve, reject) => {
+      const worker = new Worker(new URL('./TurfTextures.worker.js', import.meta.url), { type: 'module' });
+      const fail = (message) => { worker.terminate(); reject(new Error(message)); };
+      worker.onerror = (event) => { event.preventDefault(); fail(event.message || 'Turf texture worker failed.'); };
+      worker.onmessageerror = () => fail('Invalid turf texture worker response.');
+      worker.onmessage = ({ data }) => {
+        worker.terminate();
+        if (data.error) reject(new Error(data.error));
+        else resolve(data.packed);
+      };
+      worker.postMessage({ urls: TURF_PACK_SOURCE_URLS.map(url => new URL(url, location.href).href) });
+    }).catch((error) => {
+      // Failed requests are retryable; never cache a partial/placeholder pack.
+      turfPackedSource = null;
+      throw error;
     });
-    array.image = { data: pixels, width, height, depth: sources.length };
-    array.dispose();
-    array.needsUpdate = true;
-  };
-  const ready = Promise.all(sets.map((entry) => entry.ready)).then(() => {
-    uploadArray(albedoArray, sets.map((entry) => entry.alb));
-    uploadArray(nrhArray, sets.map((entry) => entry.nrh));
-    for (const entry of sets) {
-      entry.alb.dispose();
-      entry.nrh.dispose();
-      // The array owns a byte-for-byte copy after this point. Drop decoded source
-      // image references as well as their GPU handles so the browser can reclaim the
-      // six temporary 2K image surfaces instead of retaining both representations.
-      entry.alb.image = null;
-      entry.nrh.image = null;
+  }
+  const ready = turfPackedSource.then((packed) => {
+    for (const [index, array] of [albedoArray, nrhArray].entries()) {
+      // A distinct descriptor/Texture per owner, identical read-only pixel storage.
+      array.image = { ...packed[index] };
+      array.dispose();
+      array.needsUpdate = true;
     }
   });
   return { fairway, green, rough, albedoArray, nrhArray, ready };
@@ -178,6 +209,16 @@ const TURF_NORMAL_VARIANCE_FULL = 0.050;
 const TURF_NORMAL_VARIANCE_ROUGHNESS = 0.12;
 const TURF_NORMAL_VARIANCE_SPECULAR = 0.18;
 
+// Quintic interpolation gives the moving macro-detail footprint a C2-continuous
+// edge. The source texture phase never changes; only this zero-mean relief gain does.
+const smootherstepNode = (edge0, edge1, value) => {
+  const span = typeof edge0 === 'number' && typeof edge1 === 'number'
+    ? edge1 - edge0
+    : edge1.sub(edge0);
+  const x = value.sub(edge0).div(span).clamp(0.0, 1.0);
+  return x.mul(x).mul(x).mul(x.mul(x.mul(6.0).sub(15.0)).add(10.0));
+};
+
 // A heightfield that is simultaneously the physics collision surface and the
 // rendered ground. Heights are baked into a grid once at construction (CPU) so
 // heightAt/normalAt are O(1) bilinear lookups; all per-frame shading work lives
@@ -190,6 +231,43 @@ const TURF_NORMAL_VARIANCE_SPECULAR = 0.18;
 //   surfaceFn:   (x, z) => key into SURFACES
 //   variationSeed: stable course seed for world-anchored turf nap
 export class Terrain {
+  static async create(config) {
+    const worker = new Worker(new URL('./ZoneMap.worker.js', import.meta.url), { type: 'module' });
+    try {
+      const zoneReady = new Promise((resolve, reject) => {
+        worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.packed);
+        worker.onerror = event => reject(new Error(`Terrain zone worker failed: ${event.message}`));
+        worker.onmessageerror = () => reject(new Error('Terrain zone worker returned an unreadable payload.'));
+        worker.postMessage({ zones: config.zones, bounds: config.bounds });
+      });
+      // Observe failure immediately even while cooperative height rows are running.
+      // The awaited promise below still propagates the original failure.
+      void zoneReady.catch(() => {});
+      // This sampler includes live analytic callbacks and cannot be transferred.
+      // Bound its work to short row batches while the zone worker rasterizes.
+      const spacing = config.spacing ?? 2;
+      const nx = Math.floor((config.bounds.maxX - config.bounds.minX) / spacing) + 1;
+      const nz = Math.floor((config.bounds.maxZ - config.bounds.minZ) / spacing) + 1;
+      const heights = new Float32Array(nx * nz);
+      const growable = new Uint8Array(nx * nz);
+      let deadline = performance.now() + 4;
+      for (let j = 0; j < nz; j++) {
+        for (let i = 0; i < nx; i++) {
+          const x = config.bounds.minX + i * spacing, z = config.bounds.minZ + j * spacing;
+          heights[j * nx + i] = config.heightFn(x, z);
+          if (GRASS_CANDIDATE_SURFACES.has(config.surfaceFn(x, z))) growable[j * nx + i] = GRASS_GROWABLE_BIT;
+        }
+        if (performance.now() >= deadline) {
+          await yieldToRendering();
+          deadline = performance.now() + 4;
+        }
+      }
+      const zoneMapData = await zoneReady;
+      await yieldToRendering();
+      return new Terrain({ ...config, preparedHeights: heights, preparedGrowable: growable, zoneMapData });
+    } finally { worker.terminate(); }
+  }
+
   constructor(config) {
     // `spacing` is the FINE physics/collision grid (heightAt/normalAt sample it, so
     // ball roll and contours stay accurate). `renderSpacing` is the coarser step
@@ -200,6 +278,7 @@ export class Terrain {
       motionHistory = null, renderer, biomeField = null,
       analyticHeightFn = null, analyticPatchContains = null, finiteCanvas = false,
       finiteOutline = null, finiteCutout = null, variationSeed = 0,
+      groundCover = 'turf',
     } = config;
     if (!renderer?.isWebGPURenderer) {
       throw new Error('Terrain requires the strict WebGPU renderer for its GPU-authored variation field.');
@@ -216,8 +295,11 @@ export class Terrain {
     // instead of a rasterized splat's stair-stepped squares. See turfColorNode.
     this.zones = zones;
     this._biomeField = biomeField;
+    this.groundCover = groundCover;
+    this._forestFloorMaps = canopyOwnsExclusiveSurface(groundCover) ? loadForestFloorMaps() : null;
     this._coastSandAsset = biomeField?.hasTransitions ? acquireCoastSandTextures() : null;
     this.motionHistory = motionHistory;
+    this.activeCup = config.cupCutout ? uniform(new Vector3()) : null;
     this.finiteCanvas = finiteCanvas === true;
     this.finiteOutline = Array.isArray(finiteOutline) && finiteOutline.length >= 3
       ? finiteOutline.map(({ x, z }) => Object.freeze({ x, z }))
@@ -232,7 +314,25 @@ export class Terrain {
 
     this.nx = Math.floor((bounds.maxX - bounds.minX) / spacing) + 1;
     this.nz = Math.floor((bounds.maxZ - bounds.minZ) / spacing) + 1;
-    this.heights = new Float32Array(this.nx * this.nz);
+    this.heights = config.preparedHeights ?? new Float32Array(this.nx * this.nz);
+    this._growableData = config.preparedGrowable ?? new Uint8Array(this.nx * this.nz);
+    this._canopyData = new Uint8Array(this.nx * this.nz);
+    // The tight pine-litter cut is visual-only and needs more contour resolution
+    // than the compact terrain/grass-eligibility grid. It adds no geometry or draw.
+    this._canopyDistanceSpacing = this._forestFloorMaps ? Math.min(spacing, 0.3) : spacing;
+    this._canopyDistanceNx = Math.floor(
+      (bounds.maxX - bounds.minX) / this._canopyDistanceSpacing,
+    ) + 1;
+    this._canopyDistanceNz = Math.floor(
+      (bounds.maxZ - bounds.minZ) / this._canopyDistanceSpacing,
+    ) + 1;
+    this._canopyDistanceData = new Uint8Array(
+      this._canopyDistanceNx * this._canopyDistanceNz,
+    );
+    this._canopyTexture = createCanopyTexture(this._canopyData, this.nx, this.nz);
+    this._canopyDistanceTexture = createCanopyDistanceTexture(
+      this._canopyDistanceData, this._canopyDistanceNx, this._canopyDistanceNz,
+    );
 
     // Strength of the native-scale turf micro-relief fed to the surface normal.
     // Footprint filtering below retires it when individual blades no longer resolve;
@@ -263,21 +363,33 @@ export class Terrain {
     // shared sun at grazing angles; roughness remains high so this is not a wet
     // or plastic fairway.
     this.uSpecular = uniform(0.58);
+    this.uBackdropJoin = uniform(0);
     this.uSat = uniform(1.0);            // final turf grade
     this.uVal = uniform(1.0);
     this.uShadow = uniform(0.55);        // restrained canopy self-shadow strength
+    this.uNearTurfActivation = uniform(0.0);
+    this.uNearTurfCameraXZ = uniform(new Vector2());
+    this.uNearTurfForwardXZ = uniform(new Vector2(0, -1));
+    this.uForestFloorDepth = uniform(0.028);
+    this.uForestFloorNormal = uniform(0.72);
+    this.uForestFloorSourceColor = uniform(1.0);
+    this.uForestFloorMacro = uniform(0.20);
+    this.uForestFloorCanopyAffinity = uniform(0.0);
+    this.uCrownCoreGrassDensity = uniform(0.0);
+    this.uCrownFeatherMeters = uniform(0.45);
     // Sun direction, set from main.js so the canopy self-shadow marches toward the
     // same light the rig uses (see setSun).
     this.uSunDir = uniform(new Vector3(-0.82, 0.4, -0.12).normalize());
 
     // Baked signed-distance map of the turf zones. Built once here so the shader
     // never re-derives zone membership per pixel (see ZoneMap.js).
-    this._zoneMap = buildZoneMap(zones, bounds);
+    this._zoneMap = config.zoneMapData ? createZoneMapTextures(config.zoneMapData) : buildZoneMap(zones, bounds);
     this._initMacroVariation(renderer);
     this._initGreenNapVariation(renderer, variationSeed);
 
     this._initDivots();          // divot scar field (GPU compute-stamped mask, read by the turf shader)
-    this._bake();
+    if (!config.preparedHeights) this._bake();
+    this.setCanopyPlacements([]);
     // Rendering samples this exact immutable physics heightfield on the GPU. It is
     // deliberately nearest-only because `_heightNode()` performs the same explicit
     // bilinear reconstruction as `heightAt()`, including edge clamping.
@@ -287,6 +399,7 @@ export class Terrain {
     this._heightTex.generateMipmaps = false;
     this._heightTex.needsUpdate = true;
     this._turfMaps = null;
+    this._turfRenderer = renderer;
     this.mesh = this._buildMesh();
     // prepopulateDivots(renderer) is called from main once the WebGPU backend is
     // initialized (compute needs a live renderer).
@@ -461,6 +574,7 @@ export class Terrain {
         const x = minX + i * this.spacing;
         const z = minZ + j * this.spacing;
         this.heights[this._idx(i, j)] = this.heightFn(x, z);
+        if (this.isGrassCandidateSurface(this.surfaceAt(x, z))) this._growableData[this._idx(i, j)] = GRASS_GROWABLE_BIT;
       }
     }
   }
@@ -470,20 +584,7 @@ export class Terrain {
     if (this.analyticHeightFn && this.analyticPatchContains?.(x, z, this.spacing)) {
       return this.analyticHeightFn(x, z);
     }
-    const { minX, minZ, maxX, maxZ } = this.bounds;
-    const fx = (Math.min(Math.max(x, minX), maxX) - minX) / this.spacing;
-    const fz = (Math.min(Math.max(z, minZ), maxZ) - minZ) / this.spacing;
-    const i = Math.min(Math.floor(fx), this.nx - 2);
-    const j = Math.min(Math.floor(fz), this.nz - 2);
-    const tx = fx - i;
-    const tz = fz - j;
-    const h00 = this.heights[this._idx(i, j)];
-    const h10 = this.heights[this._idx(i + 1, j)];
-    const h01 = this.heights[this._idx(i, j + 1)];
-    const h11 = this.heights[this._idx(i + 1, j + 1)];
-    const a = h00 * (1 - tx) + h10 * tx;
-    const b = h01 * (1 - tx) + h11 * tx;
-    return a * (1 - tz) + b * tz;
+    return sampleHeightfield(this, x, z);
   }
 
   // Surface normal from central differences of the height field.
@@ -501,12 +602,7 @@ export class Terrain {
       out.set(hL - hR, 2 * analyticE, hD - hU).normalize();
       return out;
     }
-    const hL = this.heightAt(x - e, z);
-    const hR = this.heightAt(x + e, z);
-    const hD = this.heightAt(x, z - e);
-    const hU = this.heightAt(x, z + e);
-    out.set(hL - hR, 2 * e, hD - hU).normalize();
-    return out;
+    return sampleHeightfieldNormal(this, x, z, out);
   }
 
   surfaceAt(x, z) {
@@ -527,10 +623,176 @@ export class Terrain {
     return zoneAtTexel(map, i, j, this.zones);
   }
 
+  forestFloorWeightAt(x, z, surface = this.surfaceAt(x, z)) {
+    if (!this._forestFloorMaps) return 0;
+    if (this.zones.forestFloors?.length) {
+      const distance = this.zones.forestFloors.reduce(
+        (nearest, area) => Math.max(nearest, signedDistanceToFeature(area, x, z)), -Infinity,
+      );
+      if (distance <= 0 || !['rough', 'deepRough'].includes(surface)) return 0;
+      const t = Math.min(1, distance / this.uCrownFeatherMeters.value);
+      return t * t * (3 - 2 * t);
+    }
+    const crown = surface === 'rough' || surface === 'deepRough'
+      ? sampleCanopyForestFloorWeight(
+        this._canopyDistanceData, this._canopyDistanceNx, this._canopyDistanceNz, {
+          minX: this.bounds.minX,
+          minZ: this.bounds.minZ,
+          spacing: this._canopyDistanceSpacing,
+        }, x, z, this.uCrownFeatherMeters.value,
+      )
+      : 0;
+    const affinity = this.uForestFloorCanopyAffinity.value;
+    return (surface === 'deepRough' ? 1 - affinity : 0) + crown * affinity;
+  }
+
   // Shared immutable rendering copy of `heights`.  Grass and terrain vertices sample
   // this exact texture; CPU reads stay confined to collision/physics methods above.
   get heightTexture() {
     return this._heightTex;
+  }
+
+  get canopyTexture() {
+    return this._canopyTexture;
+  }
+
+  get canopyDistanceTexture() {
+    return this._canopyDistanceTexture;
+  }
+
+  isGrassCandidateSurface(name) {
+    return GRASS_CANDIDATE_SURFACES.has(name);
+  }
+
+  async prepareCanopyPlacements(placements = []) {
+    if (!placements.length) return this.setCanopyPlacements(placements);
+    const worker = new Worker(new URL('./CanopyField.worker.js', import.meta.url), { type: 'module' });
+    let timeout;
+    try {
+      const fields = await new Promise((resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Canopy field preparation timed out')), 60000);
+        worker.onerror = event => reject(new Error(`Canopy field worker failed: ${event.message}`));
+        worker.onmessageerror = () => reject(new Error('Canopy field worker returned an unreadable payload'));
+        worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.fields);
+        // Transfer copies: the live Terrain retains its texture storage until the
+        // entire pair is ready, and Grass continues borrowing those same textures.
+        const fields = [
+          { data: this._growableData.slice(), nx: this.nx, nz: this.nz, spacing: this.spacing },
+          { data: new Uint8Array(this._canopyDistanceData.length), nx: this._canopyDistanceNx,
+            nz: this._canopyDistanceNz, spacing: this._canopyDistanceSpacing },
+        ].map(({ spacing, ...field }) => ({ ...field,
+          grid: { minX: this.bounds.minX, minZ: this.bounds.minZ, spacing } }));
+        worker.postMessage({ fields, placements }, fields.map(field => field.data.buffer));
+      });
+      if (this._disposed) throw new Error('Terrain disposed during canopy field preparation');
+      this._canopyData.set(fields[0]);
+      this._canopyDistanceData.set(fields[1]);
+      this._canopyTexture.needsUpdate = true;
+      this._canopyDistanceTexture.needsUpdate = true;
+      return this._canopyTexture;
+    } finally { clearTimeout(timeout); worker.terminate(); }
+  }
+
+  setCanopyPlacements(placements = []) {
+    this._canopyData.fill(0);
+    bakeDenseCanopyMask(this._canopyData, this.nx, this.nz, {
+      minX: this.bounds.minX,
+      minZ: this.bounds.minZ,
+      spacing: this.spacing,
+    }, placements);
+    bakeDenseCanopyMask(
+      this._canopyDistanceData, this._canopyDistanceNx, this._canopyDistanceNz, {
+        minX: this.bounds.minX,
+        minZ: this.bounds.minZ,
+        spacing: this._canopyDistanceSpacing,
+      }, placements,
+    );
+    // Surface ownership is immutable for this Terrain. Do not repeat every
+    // polygon/route query when only the tree-canopy field changes.
+    for (let index = 0; index < this._canopyData.length; index++) this._canopyData[index] |= this._growableData[index];
+    // After ownership is restored, take the trunks back out again: a blade growing
+    // out of a root is worse than a bare patch under a tree, which is what the
+    // ground looks like there anyway.
+    clearTrunkFootprints(this._canopyData, this.nx, this.nz, {
+      minX: this.bounds.minX, minZ: this.bounds.minZ, spacing: this.spacing,
+    }, placements);
+    this._canopyTexture.needsUpdate = true;
+    this._canopyDistanceTexture.needsUpdate = true;
+    return this._canopyTexture;
+  }
+
+  surfaceMaterialSnapshot() {
+    return {
+      version: 1,
+      turf: {
+        parallax: this.uParallax.value,
+        detailNormal: this.uDetailNormal.value,
+        ao: this.uAO.value,
+        selfShadow: this.uShadow.value,
+        roughnessBase: this.uRoughBase.value,
+        roughnessRange: this.uRoughRange.value,
+        specular: this.uSpecular.value,
+        grazingRoughness: this.uGraze.value,
+        saturation: this.uSat.value,
+        value: this.uVal.value,
+      },
+      forestFloor: {
+        reliefDepthMeters: this.uForestFloorDepth.value,
+        normalStrength: this.uForestFloorNormal.value,
+        sourceColorStrength: this.uForestFloorSourceColor.value,
+        macroVariation: this.uForestFloorMacro.value,
+        canopyAffinity: this.uForestFloorCanopyAffinity.value,
+        crownCoreGrassDensity: this.uCrownCoreGrassDensity.value,
+        crownFeatherMeters: this.uCrownFeatherMeters.value,
+      },
+    };
+  }
+
+  snapshotSurfaceMaterials() {
+    return this.surfaceMaterialSnapshot();
+  }
+
+  applySurfaceMaterials(settings = {}) {
+    const turf = settings.turf ?? settings;
+    const floor = settings.forestFloor ?? {};
+    const assign = (node, value) => { if (Number.isFinite(value)) node.value = value; };
+    assign(this.uParallax, turf.parallax);
+    assign(this.uDetailNormal, turf.detailNormal);
+    assign(this.uAO, turf.ao);
+    assign(this.uShadow, turf.selfShadow);
+    assign(this.uRoughBase, turf.roughnessBase);
+    assign(this.uRoughRange, turf.roughnessRange);
+    assign(this.uSpecular, turf.specular);
+    assign(this.uGraze, turf.grazingRoughness);
+    assign(this.uSat, turf.saturation);
+    assign(this.uVal, turf.value);
+    assign(this.uForestFloorDepth, floor.reliefDepthMeters);
+    assign(this.uForestFloorNormal, floor.normalStrength);
+    assign(this.uForestFloorSourceColor, floor.sourceColorStrength);
+    assign(this.uForestFloorMacro, floor.macroVariation);
+    assign(this.uForestFloorCanopyAffinity, floor.canopyAffinity);
+    assign(this.uCrownCoreGrassDensity, floor.crownCoreGrassDensity);
+    assign(this.uCrownFeatherMeters, floor.crownFeatherMeters);
+    return this.surfaceMaterialSnapshot();
+  }
+
+  // Ephemeral presentation state, updated after the final camera pose each frame.
+  // It never enters surfaceMaterials and never rebuilds the terrain or its material.
+  setNearBallTurfDetail({ activation = 0, cameraXZ, forwardXZ } = {}) {
+    if (Number.isFinite(activation)) {
+      this.uNearTurfActivation.value = Math.min(1, Math.max(0, activation));
+    }
+    if (cameraXZ && Number.isFinite(cameraXZ.x) && Number.isFinite(cameraXZ.y)) {
+      this.uNearTurfCameraXZ.value.copy(cameraXZ);
+    }
+    if (forwardXZ && Number.isFinite(forwardXZ.x) && Number.isFinite(forwardXZ.y)) {
+      const length = Math.hypot(forwardXZ.x, forwardXZ.y);
+      if (length > 1e-6) this.uNearTurfForwardXZ.value.set(
+        forwardXZ.x / length,
+        forwardXZ.y / length,
+      );
+    }
+    return this.uNearTurfActivation.value;
   }
 
   // Grass consumes the same signed-distance field as the ground shader so blade
@@ -538,6 +800,10 @@ export class Terrain {
   // the nearest CPU surface sample. Terrain remains the sole texture owner.
   get zoneTexture() {
     return this._zoneMap?.texture;
+  }
+
+  get zoneAuxTexture() {
+    return this._zoneMap?.auxTexture;
   }
 
   // The irregular authored pond outline is also available as a compact, filtered
@@ -579,8 +845,12 @@ export class Terrain {
     this.finiteOutline = null;
     this.finiteCutout = null;
     this._heightTex?.dispose();
+    this._canopyTexture?.dispose();
+    this._canopyDistanceTexture?.dispose();
     this._zoneMap?.texture?.dispose();
+    this._zoneMap?.auxTexture?.dispose();
     this._zoneMap?.waterTexture?.dispose();
+    this._zoneMap?.arrayTexture?.dispose();
     this._biomeField?.dispose();
     this._biomeField = null;
     this._divotTex?.dispose();
@@ -588,8 +858,11 @@ export class Terrain {
     this._macroInit?.dispose();
     this._greenNapTexture?.dispose();
     this._greenNapInit?.dispose();
-    this._turfMaps?.albedoArray?.dispose();
-    this._turfMaps?.nrhArray?.dispose();
+    this._turfMaps?.release();
+    this._turfMaps = null;
+    this._turfRenderer = null;
+    this._forestFloorMaps?.colorRoughness?.dispose();
+    this._forestFloorMaps?.normalHeightAo?.dispose();
     if (this._coastSandAsset?.textures) releaseCoastSandTextures(this._coastSandAsset.textures);
     this._coastSandAsset = null;
   }
@@ -720,15 +993,14 @@ export class Terrain {
     // Every level is an exact multiple of the authoritative 0.6 m height grid and
     // remains registered to the common 4.8 m camera snap. This prevents small,
     // steep pot-bunker walls from changing coverage as ring ownership changes.
-    // The outer ring keeps its 4.8 m anchor. Its 384 m
-    // reach is intentional: the flight director can rise without following the
-    // ball all the way downrange, and a 288 m reach exposed sky between the
-    // playable edge and the backdrop shell.
+    // The outer ring keeps the same 160-cell budget as the former 384 m / 4.8 m
+    // tier, but its 768 m reach covers this full routed site from every play camera.
+    // This prevents an in-bounds hole between the real course and mountain shell.
     const rings = [
       { half: 36, step: 0.6, inner: 0 },
       { half: 72, step: 1.2, inner: 36 },
       { half: 144, step: 2.4, inner: 72 },
-      { half: 384, step: 4.8, inner: 144 },
+      { half: 768, step: 9.6, inner: 144 },
     ];
     const group = new Group();
     group.name = 'terrain-gpu-clipmap';
@@ -738,7 +1010,11 @@ export class Terrain {
       const spec = rings[level];
       const origin = uniform(new Vector2());
       const geo = this._ringGeometry(spec);
-      const mat = this._buildTurfMaterial(origin);
+      // Keep one real course cell beneath the mountain shell. Boundary-straddling
+      // clipmap cells otherwise send their outside vertices to the sentinel and
+      // expose a sky slit before the shell's exact edge begins.
+      const boundsOverlap = level === rings.length - 1 ? spec.step : 0;
+      const mat = this._buildTurfMaterial(origin, { boundsOverlap });
       const mesh = new Mesh(geo, mat);
       mesh.name = `terrain-clipmap-l${level}`;
       mesh.receiveShadow = true;
@@ -761,6 +1037,7 @@ export class Terrain {
       draws: rings.length,
       vertices,
       triangles,
+      groundCoverTriangles: 0,
       geometryBytes: bytes,
       previousFullGrid: {
         draws: 1,
@@ -789,8 +1066,11 @@ export class Terrain {
     const normals = new Float32Array(vertsX * vertsZ * 3);
     for (let z = 0; z < vertsZ; z++) for (let x = 0; x < vertsX; x++) {
       const index = z * vertsX + x;
-      positions[index * 3] = this.bounds.minX + width * x / cellsX;
-      positions[index * 3 + 2] = this.bounds.minZ + depth * z / cellsZ;
+      const worldX = this.bounds.minX + width * x / cellsX;
+      const worldZ = this.bounds.minZ + depth * z / cellsZ;
+      positions[index * 3] = worldX;
+      positions[index * 3 + 1] = this.heightAt(worldX, worldZ);
+      positions[index * 3 + 2] = worldZ;
       normals[index * 3 + 1] = 1;
     }
     const indices = new Uint32Array(cellsX * cellsZ * 6);
@@ -807,8 +1087,9 @@ export class Terrain {
     geometry.setAttribute('position', new BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new BufferAttribute(normals, 3));
     geometry.setIndex(new BufferAttribute(indices, 1));
+    geometry.computeVertexNormals();
     const origin = uniform(new Vector2());
-    const mesh = new Mesh(geometry, this._buildTurfMaterial(origin));
+    const mesh = new Mesh(geometry, this._buildTurfMaterial(origin, { useGeometrySurface: true }));
     mesh.name = 'terrain-creator-finite-grid';
     mesh.receiveShadow = true;
     mesh.castShadow = false;
@@ -822,6 +1103,7 @@ export class Terrain {
       draws: 1,
       vertices: vertsX * vertsZ,
       triangles: cellsX * cellsZ * 2,
+      groundCoverTriangles: 0,
       geometryBytes: positions.byteLength + normals.byteLength + indices.byteLength,
       finiteCanvas: true,
     };
@@ -860,10 +1142,12 @@ export class Terrain {
         const length = Math.hypot(dx, dz) || 1;
         positions[segment * 3] = center.x + dx / length * this.finiteCutout.radius;
         positions[segment * 3 + 2] = center.z + dz / length * this.finiteCutout.radius;
+        positions[segment * 3 + 1] = this.heightAt(positions[segment * 3], positions[segment * 3 + 2]);
         normals[segment * 3 + 1] = 1;
       }
     } else {
       positions[0] = center.x;
+      positions[1] = this.heightAt(center.x, center.z);
       positions[2] = center.z;
       normals[1] = 1;
     }
@@ -874,6 +1158,7 @@ export class Terrain {
         const vertex = (hasCutout ? ring * segments : 1 + (ring - 1) * segments) + segment;
         positions[vertex * 3] = center.x + (point.x - center.x) * amount;
         positions[vertex * 3 + 2] = center.z + (point.z - center.z) * amount;
+        positions[vertex * 3 + 1] = this.heightAt(positions[vertex * 3], positions[vertex * 3 + 2]);
         normals[vertex * 3 + 1] = 1;
       }
     }
@@ -902,8 +1187,9 @@ export class Terrain {
     geometry.setAttribute('position', new BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new BufferAttribute(normals, 3));
     geometry.setIndex(new BufferAttribute(indices, 1));
+    geometry.computeVertexNormals();
     const origin = uniform(new Vector2());
-    const mesh = new Mesh(geometry, this._buildTurfMaterial(origin));
+    const mesh = new Mesh(geometry, this._buildTurfMaterial(origin, { useGeometrySurface: true }));
     mesh.name = 'terrain-creator-organic-outline';
     mesh.receiveShadow = true;
     mesh.castShadow = false;
@@ -917,6 +1203,7 @@ export class Terrain {
       draws: 1,
       vertices: vertexCount,
       triangles: indices.length / 3,
+      groundCoverTriangles: 0,
       geometryBytes: positions.byteLength + normals.byteLength + indices.byteLength,
       finiteCanvas: true,
       finiteOutline: true,
@@ -1003,6 +1290,21 @@ export class Terrain {
     }
   }
 
+  // A single native grass substrate surrounds every alpine course edge. Borrow
+  // the resident rough maps so physical scale and filtering agree on both meshes.
+  backdropSurfaceNodes() {
+    const set = this._turfMaps.rough;
+    const uv = vec2(positionWorld.x, positionWorld.z).div(set.tile);
+    const albedo = texture(this._turfMaps.albedoArray).sample(uv).depth(int(set.layer));
+    const nrh = texture(this._turfMaps.nrhArray).sample(uv).depth(int(set.layer));
+    const c = turfUndercoatBase('deepRough', new Color());
+    let color = vec3(c.r, c.g, c.b).mul(luminance(albedo.rgb).div(set.albedoMean).clamp(0.65, 1.35)).mul(0.90);
+    color = mix(vec3(luminance(color)), color, this.uSat.mul(0.98))
+      .mul(vec3(1.03, 1, 0.95)).mul(this.uVal);
+    return { color, roughness: float(0.94),
+      ao: mix(float(1), nrh.a, this.uAO), specular: this.uSpecular.mul(0.90) };
+  }
+
   // GPU reconstruction of the authoritative physics heightfield. Clamp BEFORE
   // texel fetches, so central-difference normals at course edges have no OOB loads
   // and behave exactly like CPU `heightAt()`'s clamped samples.
@@ -1034,9 +1336,11 @@ export class Terrain {
   // Shared turf material: analytic per-zone tint (smooth-curve boundaries) relit
   // by a lawn detail texture. Sand keeps its own tan (the green-ward turfBase
   // transform is only for grass).
-  _buildTurfMaterial(origin = uniform(new Vector2()), { useGeometrySurface = false } = {}) {
+  _buildTurfMaterial(origin = uniform(new Vector2()), {
+    useGeometrySurface = false, boundsOverlap = 0,
+  } = {}) {
     if (!this._turfMaps) {
-      this._turfMaps = loadTurfMaps();
+      this._turfMaps = acquireTurfMaps(this._turfRenderer, loadTurfMaps);
       // Some terrain materials are compiled while image decode is still in flight.
       // Three records the texture's byte size when its first GPU handle is created;
       // without this one-time invalidation, a handle initially made from the 1×1
@@ -1047,6 +1351,7 @@ export class Terrain {
       this.assetsReady = Promise.all([
         this._turfMaps.ready,
         this._coastSandAsset?.ready || Promise.resolve(),
+        this._forestFloorMaps?.ready || Promise.resolve(),
       ]);
     }
     const maps = this._turfMaps;
@@ -1064,8 +1369,10 @@ export class Terrain {
     const terrainZ = positionGeometry.z.add(origin.y);
     const terrainHeight = useGeometrySurface ? positionGeometry.y : this._heightNode(terrainX, terrainZ);
     const terrainNormal = useGeometrySurface ? normalGeometry.normalize() : this._normalNode(terrainX, terrainZ);
-    const inBounds = terrainX.greaterThanEqual(this.bounds.minX).and(terrainX.lessThanEqual(this.bounds.maxX))
-      .and(terrainZ.greaterThanEqual(this.bounds.minZ)).and(terrainZ.lessThanEqual(this.bounds.maxZ));
+    const inBounds = terrainX.greaterThanEqual(this.bounds.minX - boundsOverlap)
+      .and(terrainX.lessThanEqual(this.bounds.maxX + boundsOverlap))
+      .and(terrainZ.greaterThanEqual(this.bounds.minZ - boundsOverlap))
+      .and(terrainZ.lessThanEqual(this.bounds.maxZ + boundsOverlap));
     // Sampling clamps safely at the texture boundary, but rendering that clamped edge
     // beyond the authored course would create a giant flat apron. Drop those vertices
     // far below the camera instead; no fragment or shadow can leak in from OOB space.
@@ -1094,6 +1401,36 @@ export class Terrain {
     // node is assigned with the registered mower-lay response below, after the shared
     // strip phase and view/light alignment have been built.
 
+    // The moving 15-yard focus footprint is low-frequency relative to the nearest
+    // 0.6 m terrain grid, so evaluate its C2 wedge in the vertex stage and interpolate
+    // one scalar. Keeping the quintic arithmetic out of every fragment makes inactive
+    // menu/editor views and active play views share a negligible presentation cost.
+    const nearVertexXZ = vec2(terrainX, terrainZ);
+    const nearVertexDelta = nearVertexXZ.sub(this.uNearTurfCameraXZ);
+    const nearVertexForward = nearVertexDelta.dot(this.uNearTurfForwardXZ);
+    const nearVertexLateral = nearVertexDelta.x.mul(this.uNearTurfForwardXZ.y)
+      .sub(nearVertexDelta.y.mul(this.uNearTurfForwardXZ.x)).abs();
+    const nearLeading = smootherstepNode(
+      NEAR_BALL_TURF_DETAIL.forwardStartMeters,
+      NEAR_BALL_TURF_DETAIL.forwardFullMeters,
+      nearVertexForward,
+    );
+    const nearTrailing = oneMinus(smootherstepNode(
+      NEAR_BALL_TURF_DETAIL.forwardFadeMeters,
+      NEAR_BALL_TURF_DETAIL.forwardEndMeters,
+      nearVertexForward,
+    ));
+    const nearForwardPositive = nearVertexForward.max(0.0);
+    const nearLateralFull = nearForwardPositive.mul(NEAR_BALL_TURF_DETAIL.lateralFullSlope)
+      .add(NEAR_BALL_TURF_DETAIL.lateralFullBaseMeters);
+    const nearLateralEnd = nearForwardPositive.mul(NEAR_BALL_TURF_DETAIL.lateralEndSlope)
+      .add(NEAR_BALL_TURF_DETAIL.lateralEndBaseMeters);
+    const nearLateralWeight = oneMinus(smootherstepNode(
+      nearLateralFull, nearLateralEnd, nearVertexLateral,
+    ));
+    const nearTurfFootprint = nearLeading.mul(nearTrailing).mul(nearLateralWeight)
+      .toVarying('vNearTurfFootprint');
+
     const worldXZ = vec2(positionWorld.x, positionWorld.z);
     const macroUv = vec2(
       worldXZ.x.sub(this.bounds.minX).div(this.bounds.maxX - this.bounds.minX),
@@ -1101,8 +1438,12 @@ export class Terrain {
     );
     const macroVariation = texture(this._macroTexture, macroUv);
     const greenNapVariation = texture(this._greenNapTexture, macroUv);
-    const zoneSample = texture(this._zoneMap.texture, macroUv).toVar('zoneSD');
-    const waterZoneSample = texture(this._zoneMap.waterTexture, macroUv).toVar('waterBankSample');
+    // All three fields retain RGBA16F/linear filtering, but share one sampler.
+    // Clone samples from one base node so Three also shares the binding.
+    const zoneArray = texture(this._zoneMap.arrayTexture);
+    const zoneSample = zoneArray.sample(macroUv).depth(int(0)).toVar('zoneSD');
+    const zoneAuxSample = zoneArray.sample(macroUv).depth(int(1)).toVar('zoneAuxSD');
+    const waterZoneSample = zoneArray.sample(macroUv).depth(int(2)).toVar('waterBankSample');
     let biomeLand = null;
     let biomeWater = null;
     let coastWeights = null;
@@ -1124,6 +1465,11 @@ export class Terrain {
       // changing which low-resolution wall triangles remain visible.
       const potOuter = waterZoneSample.a;
       mat.opacityNode = oneMinus(smoothstep(-0.12, 0.04, potOuter));
+      mat.alphaTestNode = 0.5;
+    }
+    if (this.activeCup) {
+      const outsideCup = worldXZ.sub(this.activeCup.xz).length().greaterThanEqual(this.activeCup.y).select(1, 0);
+      mat.opacityNode = (mat.opacityNode ?? float(1)).mul(outsideCup);
       mat.alphaTestNode = 0.5;
     }
     const flat = smoothstep(0.75, 0.97, terrainNormal.y);
@@ -1150,12 +1496,46 @@ export class Terrain {
     // blade GEOMETRY (short blades read as scattered slivers), so all of their height
     // has to come from here — this is what gives the ball something to sit down into
     // instead of resting on a painted plane.
-    const m = turfZoneMasks(zoneSample, waterZoneSample, this.zones);
+    const m = turfZoneMasks(zoneSample, zoneAuxSample, waterZoneSample, this.zones);
+    const canopyMask = texture(this._canopyDistanceTexture, macroUv).r;
+    const canopyInwardMeters = canopyMask.mul(CANOPY_DISTANCE_MAX_METERS);
+    const maintainedOrHazard = m.visualFairway.add(m.fringe).add(m.green)
+      .add(m.tee).add(m.sand).add(m.waterBank).clamp(0.0, 1.0);
+    // The packed habitat field is stable physical distance, while feathering is a
+    // live material uniform. Editing crownFeatherMeters therefore moves only this
+    // visible pine-floor boundary on the next frame; Terrain, Grass, and the shared
+    // R8 texture all retain identity. Exact packed zero remains outside-canopy turf.
+    const crownFloorWeight = smoothstep(
+      0.0, this.uCrownFeatherMeters, canopyInwardMeters,
+    ).mul(oneMinus(maintainedOrHazard));
+    const legacyNativeWeight = oneMinus(m.rough.add(maintainedOrHazard).clamp(0.0, 1.0));
+    // Affinity 1 makes the litter literal pine habitat, including rough beneath a
+    // crown; affinity 0 retains the former all-native-floor behavior for migration.
+    const nativeFloorWeight = this._forestFloorMaps
+      ? (this.zones.forestFloors?.length
+        ? smoothstep(0.0, this.uCrownFeatherMeters, zoneAuxSample.b)
+          .mul(oneMinus(maintainedOrHazard))
+        : mix(legacyNativeWeight, crownFloorWeight, this.uForestFloorCanopyAffinity))
+      : float(0.0);
+    // Keep every PBR channel on the scan's one physical two-metre projection.
+    // Distant repetition is removed below by footprint-filtering albedo contrast,
+    // never by misregistering colour from normal, height, roughness, and AO.
+    const forestFloorUv = worldXZ.div(2.0);
     const zone = turfCanopyDepth(m);
     const zoneDepth = zone.depth;
     // Which detail family this pixel belongs to (0 = rough/deepRough,
     // 1 = maintained fairway/green). See turfMownWeight.
     const mownW = turfMownWeight(m);
+
+    // Low, ball-adjacent inspection views reveal more of the authored maintained
+    // turf's registered normal/height signal over a 15-yard camera-forward wedge.
+    // This is intentionally not a radial camera-distance fade: a broad C2 trapezoid
+    // follows the visible ground, preserves the source phase/mean response, and never
+    // loads or swaps a texture while the camera moves.
+    const nearMaintainedMask = m.visualFairway.add(m.fringe).add(m.green).add(m.tee)
+      .clamp(0.0, 1.0).mul(smoothstep(0.18, 0.35, mownW));
+    const nearTurfDetailWeight = this.uNearTurfActivation.mul(nearTurfFootprint)
+      .mul(nearMaintainedMask);
 
     // ---- LAYERED parallax occlusion. The ray from the eye is marched DOWN through
     // the baked canopy height field in NL equal steps and stopped at the first step
@@ -1165,8 +1545,9 @@ export class Terrain {
     // high-frequency field neighbouring pixels jumped to unrelated texels and the turf
     // tore into liquid swirls. Marching is exactly the fix for a noisy height field.
     //
-    // Sampling uses an explicit LOD (derivatives taken once, outside the loop) because
-    // WGSL forbids implicit-derivative sampling under non-uniform control flow.
+    // The ray-march samples use an explicit LOD because WGSL forbids implicit
+    // derivatives under non-uniform control flow. Final PBR reads use the explicit
+    // screen gradients calculated outside that march so anisotropy remains available.
     // Crossing interpolation turns the two retained samples into a continuous secant
     // intersection rather than two visible depth shelves. At a true 4–11 mm mown
     // canopy, more samples do not add screen-resolvable silhouette information at
@@ -1180,12 +1561,9 @@ export class Terrain {
     // stretched heightfield streak.
     const pomViewWeight = smoothstep(TURF_POM_MIN_VIEW_UP, TURF_POM_FULL_VIEW_UP, V.y);
     const depthM = zoneDepth.mul(dw).mul(this.uParallax).mul(pomViewWeight);
-    // Per-pixel world footprint in METRES, taken once here. Every texture read below
-    // uses an explicit LOD derived from this rather than implicit derivatives, for two
-    // reasons: WGSL forbids implicit-derivative sampling under non-uniform control flow
-    // (and the whole detail tier now sits inside a branch), and the parallax/self-shadow
-    // marches were already required to do it. Each map's LOD is the footprint measured
-    // in its own tile and actual baked resolution.
+    // Per-pixel world footprint in METRES, taken once here. Parallax/self-shadow
+    // marches use a conservative scalar LOD; final material reads below retain both
+    // gradients and WebGPU's anisotropic filtering.
     const duvM = dFdx(worldXZ).length().max(dFdy(worldXZ).length());
     const lodFor = (scaleM, resolution, albedoBias = 0.0) => duvM.div(scaleM).mul(resolution).log2()
       .max(0.0).min(Math.log2(resolution) - albedoBias);
@@ -1201,6 +1579,54 @@ export class Terrain {
     // normal, canopy AO, roughness, and the material's base albedo keep their normal
     // mip-filtered path at every distance, so there is no luminance ring.
     const microRayWeight = (lod) => oneMinus(smoothstep(0.75, 1.75, lod));
+
+    // The native forest floor is a real-scale 2 m fresh longleaf-pine-straw material.
+    // March its displacement map at a bounded 28 mm physical depth so overlapping
+    // straw and twigs sit above the compacted soil instead of reading as a flat tan
+    // photograph. The ray retires by texture footprint and grazing angle, exactly
+    // where filtered normal/roughness becomes the more stable representation.
+    const forestFloorLod = lodFor(2.0, 2048);
+    const forestFloorMicro = microRayWeight(forestFloorLod);
+    const forestFloorRayWeight = nativeFloorWeight.mul(flat)
+      .mul(forestFloorMicro).mul(pomViewWeight);
+    const forestFloorDepthM = this.uForestFloorDepth.mul(forestFloorRayWeight);
+    const forestFloorTravel = vec2(V.x, V.z).div(V.y.abs().max(0.30))
+      .mul(forestFloorDepthM.div(2.0));
+    const forestFloorMaxTravelUv = float(3.0 / 2048.0);
+    const forestFloorTravelScale = forestFloorMaxTravelUv
+      .div(forestFloorTravel.length().max(1e-6)).min(1.0);
+    const forestFloorUvP = this._forestFloorMaps
+      ? forestFloorParallaxUV(
+        this._forestFloorMaps.normalHeightAo,
+        forestFloorUv,
+        forestFloorTravel.mul(forestFloorTravelScale).negate().div(3),
+        forestFloorLod,
+        forestFloorRayWeight,
+        3,
+      )
+      : forestFloorUv;
+    const forestFloorColorRoughness = this._forestFloorMaps
+      ? textureLevel(this._forestFloorMaps.colorRoughness, forestFloorUvP, forestFloorLod)
+      : vec4(0.0, 0.0, 0.0, 0.96);
+    const forestFloorNormalHeightAo = this._forestFloorMaps
+      ? textureLevel(this._forestFloorMaps.normalHeightAo, forestFloorUvP, forestFloorLod)
+      : vec4(0.5, 0.5, 0.0, 1.0);
+    // The source's measured linear mean preserves energy while its recognizable
+    // two-metre arrangement retires between LOD 3 and 7. The already-resident
+    // aperiodic macro field then owns distance-scale variation at no extra fetch.
+    const forestFloorMacroGrade = macroVariation.r.sub(0.5)
+      .mul(this.uForestFloorMacro).add(1.0);
+    const forestFloorSourceMean = vec3(0.162029, 0.056128, 0.024158);
+    const forestFloorSourceDetail = oneMinus(smoothstep(4.5, 10.5, forestFloorLod));
+    const forestFloorAlbedo = mix(
+      forestFloorSourceMean, forestFloorColorRoughness.rgb, forestFloorSourceDetail,
+    ).mul(forestFloorMacroGrade).mul(this.uForestFloorSourceColor);
+    const forestFloorNormalXY = forestFloorNormalHeightAo.rg.mul(2.0).sub(1.0);
+    const forestFloorNormal = vec3(
+      forestFloorNormalXY,
+      oneMinus(forestFloorNormalXY.x.mul(forestFloorNormalXY.x)
+        .add(forestFloorNormalXY.y.mul(forestFloorNormalXY.y))).max(0.0).sqrt(),
+    );
     // CAP the total march distance. Horizontal travel goes as V.xz/V.y, so at ball-eye
     // height the ray wants to cross far more texels than NL steps can sample, and the
     // march strides straight over whole blades — which shows up as smearing along the
@@ -1228,17 +1654,26 @@ export class Terrain {
       const lod = lodFor(T, set.resolution, set.albedoLodBias);
       const maxTravelUV = float(TURF_POM_MAX_TRAVEL_TEXELS / set.resolution);
       const micro = microRayWeight(lod);
-      // Once a pixel covers centimetres of turf, the finite atlas's low mips stop
-      // representing blades and start representing the unique arrangement of THIS
-      // two-metre tile. Repeating that arrangement is the distant rough "stamp".
-      // Resolve to the bake's measured mean by screen-space footprint, not camera
-      // distance: no radial handoff, and no texture motif survives past its physical
-      // resolving limit. Non-repeating world-space fields below carry macro variation.
-      const unresolved = smoothstep(4.5, 7.0, lod);
+      // The conservative scalar LOD above owns ray-march safety, but it must not
+      // select the final PBR samples: at a grazing golfer view the along-fairway
+      // footprint is much larger than the cross-fairway footprint, and choosing the
+      // worst axis blurs still-resolvable blade fibres in both directions. Preserve
+      // the two screen gradients for WebGPU's anisotropic filter. The finite-tile
+      // collapse uses the same bounded 8:1 footprint, so only detail unresolved by
+      // that filter converges to the measured mean.
+      const uv0 = worldXZ.mul(1 / T).add(phase);
+      const uvDx = dFdx(uv0);
+      const uvDy = dFdy(uv0);
+      const uvDxLength = uvDx.length();
+      const uvDyLength = uvDy.length();
+      const anisotropicFootprint = uvDxLength.max(uvDyLength).div(8.0)
+        .max(uvDxLength.min(uvDyLength));
+      const filteredLod = anisotropicFootprint.mul(set.resolution).log2()
+        .max(0.0).min(Math.log2(set.resolution));
+      const unresolved = smoothstep(5.5, 8.0, filteredLod);
       const rayActive = dw.mul(micro).mul(pomViewWeight);
       // A continuous phase warp makes the atlas's U/V wrap lines wander naturally
       // through world space instead of accumulating into straight visible seams.
-      const uv0 = worldXZ.mul(1 / T).add(phase);
       // Horizontal travel per unit of depth is V.xz / V.y, away from the eye. V.y is
       // clamped so a grazing view can't demand an unbounded march.
       // Fade the displacement itself as the source signal becomes minified.  Merely
@@ -1251,15 +1686,19 @@ export class Terrain {
         turfNrhArrayNode, int(set.layer), uv0, stepUV, lod, rayActive, NL,
       );
 
-      const dNrh = textureLevel(turfNrhArrayNode, uvP, lod).depth(int(set.layer));
+      const dNrh = texture(turfNrhArrayNode, uvP).depth(int(set.layer))
+        .grad(uvDx, uvDy);
       // Keep the full-resolution relief signal, but do not mistake every baked colour
       // fleck for a separate blade. Short, tightly cut turf reads as a coherent
       // pigment layer whose fine structure appears through normal/height response to
       // light. A positive albedo-only mip bias prefilters the source colour while the
       // 2K NRH map remains at native footprint resolution.
-      const dAlb = textureLevel(
-        turfAlbedoArrayNode, uvP, lod.add(set.albedoLodBias),
-      ).depth(int(set.layer));
+      // A positive albedo-only bias is represented by scaling both gradients;
+      // this preserves their anisotropic ratio instead of falling back to one
+      // explicit isotropic mip level.
+      const albedoGradientScale = float(2).pow(set.albedoLodBias);
+      const dAlb = texture(turfAlbedoArrayNode, uvP).depth(int(set.layer))
+        .grad(uvDx.mul(albedoGradientScale), uvDy.mul(albedoGradientScale));
       const pigmentMean = vec3(...set.pigmentMean);
       const normalizedAlbedo = dAlb.rgb.mul(TURF_LUM / set.albedoMean);
       const pigment = mix(pigmentMean, normalizedAlbedo, set.albedoContrast);
@@ -1286,7 +1725,8 @@ export class Terrain {
         // That is view-independent, so it cannot draw a ring. `flat` stays — a steep
         // face genuinely can't take a planar-projected map, and it is a property of the
         // SURFACE, not of where the camera is standing.
-        relief: nDetail.mul(this.uDetailNormal.mul(flat).mul(oneMinus(unresolved))),
+        relief: nDetail.mul(this.uDetailNormal.mul(flat).mul(oneMinus(unresolved)))
+          .mul(nearTurfDetailWeight.mul(NEAR_BALL_TURF_DETAIL.normalGain).add(1.0)),
         // The resolved NRH sample already carries canopy height + AO. Near pixels
         // should use the actual ray intersection; distant pixels have uvP == uv0.
         // Re-reading the same four-channel atlas at uv0 spent one fetch over every
@@ -1569,6 +2009,19 @@ export class Terrain {
     const sandBump = vec3(dFdx(sandSurface), 0.0, dFdy(sandSurface)).mul(0.32).mul(m.sand);
     const sandNormal = terrainNormal.add(sandBump).normalize();
     let resolvedGroundNormal = mix(maintainedNormal, sandNormal, m.sand).normalize();
+    if (this._forestFloorMaps) {
+      const forestTangentX = vec3(
+        1.0, terrainNormal.x.negate().div(terrainNormal.y.max(0.10)), 0.0,
+      ).normalize();
+      const forestTangentZ = forestTangentX.cross(terrainNormal).normalize();
+      const forestNormalWorld = terrainNormal.mul(forestFloorNormal.z)
+        .add(forestTangentX.mul(forestFloorNormal.x.mul(this.uForestFloorNormal)))
+        .add(forestTangentZ.mul(forestFloorNormal.y.mul(this.uForestFloorNormal)))
+        .normalize();
+      resolvedGroundNormal = mix(
+        resolvedGroundNormal, forestNormalWorld, nativeFloorWeight,
+      ).normalize();
+    }
     if (coastWeights && coastSand) {
       const beachNormal = terrainNormal.add(vec3(
         coastSand.slope.x, 0.0, coastSand.slope.y,
@@ -1600,6 +2053,9 @@ export class Terrain {
     // over the same wide band as the rest, so what's left is a gradient, not an edge.
     const grassAO = canopyAO.mul(mix(float(1.0), tShade, dw.mul(this.uShadow)));
     let resolvedAO = mix(grassAO, float(1.0), m.sand);
+    if (this._forestFloorMaps) {
+      resolvedAO = mix(resolvedAO, forestFloorNormalHeightAo.a, nativeFloorWeight);
+    }
     if (coastWeights) resolvedAO = mix(resolvedAO, float(1.0), coastWeights.beachWeight);
     mat.aoNode = resolvedAO;
 
@@ -1619,7 +2075,7 @@ export class Terrain {
     // CG sheet without ever becoming a visible pattern or texture boundary.
     const moisture = macroVariation.a;
     // Rough retains its canopy-height roughness model. Maintained cuts use the real
-    // Blendkit roughness packed into the already-read albedo alpha, remapped into a
+    // authored roughness packed into the already-read albedo alpha, remapped into a
     // matte turf range while preserving its measured local variation.
     const canopyRoughness = oneMinus(tFar.x).mul(this.uRoughRange.mul(1.6)).add(this.uRoughBase);
     const scannedRoughness = tAlb.a.mul(0.30).add(0.61);
@@ -1717,6 +2173,11 @@ export class Terrain {
       mix(bankRoughness, sandRoughness, m.sand),
       float(0.97), m.waterBank.mul(oneMinus(m.sand)),
     );
+    if (this._forestFloorMaps) {
+      resolvedRoughness = mix(
+        resolvedRoughness, forestFloorColorRoughness.a.clamp(0.72, 1.0), nativeFloorWeight,
+      );
+    }
     if (coastWeights && coastSand) {
       resolvedRoughness = mix(
         resolvedRoughness, coastSand.roughness, coastWeights.beachWeight,
@@ -1774,7 +2235,10 @@ export class Terrain {
       // Derive the undercoat from the same chlorophyll tint as the geometry, then
       // compensate for its stronger upward-facing sky fill. Texture, AO, normals,
       // and real lighting retain depth without exposing pale gaps between ribbons.
-      rough: roughUndercoat('rough'), deepRough: roughUndercoat('deepRough'),
+      rough: roughUndercoat('rough'),
+      deepRough: this.groundCover === 'native-grasslands'
+        ? mix(vec3(...NATIVE_GRASS_PIGMENT.living), vec3(...NATIVE_GRASS_PIGMENT.straw), 0.5)
+        : roughUndercoat('deepRough'),
       // The putting surface is the same believable plant family but not the same
       // material as fairway. Its dedicated gameplay pigment is slightly cleaner and
       // more yellow-green; the restrained exposure multiplier prevents a bright
@@ -1802,13 +2266,18 @@ export class Terrain {
     // the cut-height hierarchy legible. Grade the same authored source maps by their
     // analytic green mask so the 20 mm collar remains visibly deeper/darker than the
     // 4 mm putting surface without adding geometry, a decal, or a second material.
-    const presentedTurfColor = this.finiteOutline
+    let presentedTurfColor = this.finiteOutline
       ? mix(
         turfColor.mul(vec3(0.68, 0.78, 0.58)),
         turfColor.mul(vec3(1.16, 1.16, 1.00)),
         m.green,
       )
       : turfColor;
+    if (this._forestFloorMaps) {
+      presentedTurfColor = mix(
+        presentedTurfColor, forestFloorAlbedo, nativeFloorWeight,
+      );
+    }
     if (this._biomeField?.hasTransitions && coastWeights && coastSand) {
       const strand = biomeLand.g;
       const ecotoneGrass = presentedTurfColor.mul(vec3(0.86, 0.91, 0.72));
@@ -1820,6 +2289,20 @@ export class Terrain {
     } else {
       mat.colorNode = presentedTurfColor;
     }
+    // One optical endpoint on both sides of the mesh join. Only unmaintained
+    // ground participates; the course SDF and all gameplay surfaces stay intact.
+    // The uniform is enabled only when the alpine continuation is installed.
+    const insideEdge = worldXZ.x.sub(this.bounds.minX).min(float(this.bounds.maxX).sub(worldXZ.x))
+      .min(worldXZ.y.sub(this.bounds.minZ)).min(float(this.bounds.maxZ).sub(worldXZ.y));
+    const joinWeight = oneMinus(smoothstep(0, 24, insideEdge))
+      .mul(oneMinus(maintainedOrHazard)).mul(this.uBackdropJoin);
+    const edge = this.backdropSurfaceNodes();
+    mat.colorNode = mix(mat.colorNode, edge.color, joinWeight);
+    mat.roughnessNode = mix(mat.roughnessNode, edge.roughness, joinWeight);
+    mat.aoNode = mix(mat.aoNode, edge.ao, joinWeight);
+    mat.specularIntensityNode = mix(mat.specularIntensityNode, edge.specular, joinWeight);
+    mat.normalNode = transformNormalToView(mix(resolvedGroundNormal,
+      this._normalNode(worldXZ.x, worldXZ.y), joinWeight).normalize());
     // Do not lift shaded bunker walls or sand with emissive compensation. Their
     // readability comes from the carved terrain, real sun/sky fill, and the
     // restrained geometric canopy/screen-space contact terms above. An emissive
@@ -1862,6 +2345,35 @@ const turfParallaxUV = Fn(([hTex, layer, uv0, stepUV, lod, active, nl]) => {
         const denom = dStep.sub(ds.sub(dsPrev)).max(1e-5);
         const tt = dsPrev.sub(dPrev).div(denom).clamp(0.0, 1.0);
         uv.assign(mix(uvPrev, uv, tt));
+        Break();
+      });
+      uvPrev.assign(uv);
+      dsPrev.assign(ds);
+      dPrev.assign(d);
+      uv.addAssign(stepUV);
+      d.addAssign(dStep);
+    });
+  });
+  return uv;
+});
+
+// The forest-floor displacement is a regular 2D texture rather than a packed
+// turf-array layer. It uses the same crossing interpolation contract so the pine
+// straw has continuous physical relief instead of three visible depth shelves.
+const forestFloorParallaxUV = Fn(([heightTexture, uv0, stepUV, lod, active, nl]) => {
+  const uv = uv0.toVar();
+  If(active.greaterThan(0.02), () => {
+    const d = float(0).toVar();
+    const dStep = float(1).div(nl);
+    const uvPrev = uv0.toVar();
+    const dsPrev = float(0).toVar();
+    const dPrev = float(0).toVar();
+    Loop(nl, () => {
+      const ds = textureLevel(heightTexture, uv, lod).b.oneMinus().toVar();
+      If(d.greaterThanEqual(ds), () => {
+        const denom = dStep.sub(ds.sub(dsPrev)).max(1e-5);
+        const crossing = dsPrev.sub(dPrev).div(denom).clamp(0.0, 1.0);
+        uv.assign(mix(uvPrev, uv, crossing));
         Break();
       });
       uvPrev.assign(uv);
@@ -1921,7 +2433,7 @@ const turfSelfShadow = Fn(([hTex, layer, uvHit, h0, sunUVFull, lod, active, ns])
 // filtering — see ZoneMap.js for why an id/grey-level map could not have worked here.
 // The rough band and the fringe collar need no channels of their own: they're just the
 // corridor and green distances offset by their widths.
-function turfZoneMasks(sd, waterSample, zones) {
+function turfZoneMasks(sd, aux, waterSample, zones) {
   const AA = 0.16;                        // edge softness (m): smooth curve, still crisp
   // Zone and water samples are hoisted by the material so the pot-bunker opacity
   // path and the surface masks share the same two bindings and exact filtered values.
@@ -1950,16 +2462,19 @@ function turfZoneMasks(sd, waterSample, zones) {
   )).sub(0.5).mul(2.8);
   const edgeSD = sd.r.add(edgeWarp);
   // Green construction is not a biome ecotone. A reel/collar cut is a hard authored
-  // boundary, so both sides resolve over only eight centimetres and use the exact
-  // green SDF—no ecological warp and no metre-wide pigment blend.
-  const visualGreen = smoothstep(-0.04, 0.04, sd.g);
-  const visualFringe = smoothstep(-0.04, 0.04, sd.g.add(zones.fringeW));
+  // boundary, so resolve its pixel footprint using the authored green SDF,
+  // without ecological warp or a metre-wide pigment blend.
+  // Cover one pixel at distant/oblique views without widening the physical cut.
+  const greenAA = dFdx(sd.g).abs().add(dFdy(sd.g).abs()).mul(0.5).max(0.015);
+  const fringeAA = dFdx(aux.g).abs().add(dFdy(aux.g).abs()).mul(0.5).max(0.015);
+  const visualGreen = smoothstep(greenAA.negate(), greenAA, sd.g);
+  const visualFringe = smoothstep(fringeAA.negate(), fringeAA, aux.g);
   const maintainedTransition = smoothstep(-2.0, 2.0, edgeSD);
   // A wider but still bounded visual mix carries the same ecotone into albedo,
   // directional response, and bake ownership. It is not a gameplay mask.
   const visualFairway = smoothstep(-3.2, 3.2, edgeSD);
   return {
-    rough: soft(sd.r.add(zones.corridor.rough)),
+    rough: soft(aux.r),
     fairway: soft(sd.r),
     visualFairway,
     fringe: visualFringe,
@@ -2178,13 +2693,13 @@ function turfColorNode(tex, m, zones, macroVariation, terrainNormal = normalWorl
   // Former live source (now represented by the baked channel):
   // const mowFineAlbedoA = mx_noise_float(vec3(wx.mul(0.018), wz.mul(0.024), 157.0));
   const stripLay = zones.stripLay;
-  // Restrained ±0.3% pigment response supports the directional normal lay above.
+  // Restrained ±2% pigment response supports the directional normal lay above.
   // Most of the read still comes from real light, but the bands remain identifiable
   // under diffuse overcast illumination where directional sheen is naturally weak.
   // A real mower pass is primarily a change in leaf lay. Keep enough pigment
   // separation to read under diffuse sky, but below the contrast that made the
   // overview resemble alternating painted lanes.
-  const mowBand = stripLay.sub(0.5).mul(0.006);
+  const mowBand = stripLay.sub(0.5).mul(MOW_STRIPE_ALBEDO_CONTRAST);
   c = c.mul(float(1.0).add(mowBand.mul(fairwayMowMask).mul(zones.mowResolution)));
 
   // A restrained grade separates cut turf families at gameplay distance while

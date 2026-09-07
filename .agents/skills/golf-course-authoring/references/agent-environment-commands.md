@@ -1,10 +1,11 @@
 # Agent environment commands
 
-> **Not applicable to this engine.** claude-golfsim has no asset catalog and no
-> `place` / `environmentAssembly` / `dressCourseEdge` commands — its tree line is
-> procedural and frames the corridor automatically. Author greens, bunkers, and
-> water via `course.json` (see `references/engine.md`). The commands below document
-> a prior engine and are kept only for design intent.
+> **Design vocabulary from the prior engine.** claude-golfsim does have strict
+> authored and procedural asset catalogs, but it represents these ideas as project-v5
+> `site.environment` records rather than the command names below. Query assets and
+> apply semantic mutations through `scripts/course-mcp.mjs`; never author
+> `course.json` directly. Keep the composition guidance below and map it through
+> `references/engine.md`.
 
 Use semantic environment commands so authored ecology is reproducible, editable, and validated by the engine. Do not approximate a community with dozens of hand-authored `place` calls.
 
@@ -88,7 +89,7 @@ The engine searches the requested region for the real native-to-maintained bound
 
 ## Validation contract
 
-All three semantic placement commands are deterministic on unchanged course data. Catalog IDs must exist and be biome-compatible. The engine enforces course bounds, declared slope ranges, same-entry spacing, object budget, and footprint exclusion from water, bunkers, and greens. Trees are also excluded from fairways. Edge dressing protects tee and cup clearances.
+All three semantic placement commands are deterministic on unchanged course data. Catalog IDs must exist and be biome-compatible. The engine enforces course bounds, declared slope ranges, same-entry spacing, object budget, and resolved-footprint exclusion from water, bunkers, greens, and maintained fairway turf. A forest assembly's broad authoring bounds may overlap fairway clearance envelopes when the resolved trees occupy intentional separator rough between holes; validate the actual trees instead of rejecting the whole rectangle. Edge dressing protects tee and cup clearances.
 
 A rejected command is a design signal: choose a dry center, move the region to a real maintained/native contact, reduce radius or count, or select compatible catalog IDs. Do not evade validation with raw primitives or unlicensed assets.
 

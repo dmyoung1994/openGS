@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Validate the checked-in maintained-turf derivative contract.
 
-This is intentionally a read-only gate. It does not download Blendkit material,
-invoke Blender, rewrite images, or infer a license. The source/version/provenance
-record stays in docs/blendkit-turf-provenance.md; this script verifies that the
-runtime derivatives still have the channel layout and hashes that Terrain.js was
-authored against.
+This is intentionally a read-only gate. It does not download source material,
+rewrite images, or infer a license. The source/version/provenance records stay in
+docs; this script verifies that the runtime derivatives still have the channel
+layout and hashes that Terrain.js was authored against.
 """
 
 from __future__ import annotations
@@ -18,19 +17,25 @@ from pathlib import Path
 
 
 RUNTIME_MAPS = {
-    "blendkit_fairway_alb.png": "ecfa186e0296084e044f4143465e36c6836d81c22f9475901d5c1c347f7ec4c2",
-    "blendkit_fairway_nrh.png": "6a5a70cb1c15e2cc3477928f42897cbdcb64e7c1c1d0d2c2f152a4dd6fca4db5",
+    "blendkit_fairway_alb.png": "129d315bbc22e6ff05a6fb5a3c54474ec9845b86afbdf615a4e8a21f996cdc76",
+    "blendkit_fairway_nrh.png": "300200a8f864dd383ba05dc8688e97196081419d06005362dd45b7a334932970",
     "blendkit_green_alb.png": "502dcafa3446fe49774093effd914e507905dabf6ea6088ea2c71928873af73b",
     "blendkit_green_nrh.png": "820a6fc5c3be0a271ac95975e42f4cf079627d2aa88017192044cd485fa96668",
 }
 
-PROVENANCE_MARKERS = (
-    "5b9e35dc-d8e7-4e16-a038-b48d5b8a925f",
-    "34a832ef-bb9d-4213-89e9-9143b137d99e",
-    "Royalty Free",
-    "blendkit_fairway_alb.png",
-    "blendkit_green_nrh.png",
-)
+PROVENANCE_RECORDS = {
+    "blendkit-turf-provenance.md": (
+        "34a832ef-bb9d-4213-89e9-9143b137d99e",
+        "Royalty Free",
+        "blendkit_green_nrh.png",
+    ),
+    "ambientcg-grass005-fairway-provenance.md": (
+        "Grass005",
+        "Creative Commons CC0 1.0 Universal",
+        "1.20 m × 1.20 m",
+        "blendkit_fairway_alb.png",
+    ),
+}
 
 
 def png_header(path: Path) -> tuple[int, int, int, int]:
@@ -55,7 +60,6 @@ def sha256(path: Path) -> str:
 def validate(root: Path) -> dict[str, object]:
     errors: list[str] = []
     texture_root = root / "public/assets/textures"
-    provenance_path = root / "docs/blendkit-turf-provenance.md"
 
     maps: dict[str, object] = {}
     for name, expected_hash in RUNTIME_MAPS.items():
@@ -81,13 +85,15 @@ def validate(root: Path) -> dict[str, object]:
         if actual_hash != expected_hash:
             errors.append(f"{name}: SHA-256 changed; re-bake only through the pinned deterministic pipeline")
 
-    if not provenance_path.is_file():
-        errors.append(f"missing provenance record: {provenance_path}")
-    else:
+    for name, markers in PROVENANCE_RECORDS.items():
+        provenance_path = root / "docs" / name
+        if not provenance_path.is_file():
+            errors.append(f"missing provenance record: {provenance_path}")
+            continue
         provenance = provenance_path.read_text(encoding="utf-8")
-        for marker in PROVENANCE_MARKERS:
+        for marker in markers:
             if marker not in provenance:
-                errors.append(f"provenance record is missing marker: {marker}")
+                errors.append(f"{name} is missing marker: {marker}")
 
     return {"ok": not errors, "maps": maps, "errors": errors}
 

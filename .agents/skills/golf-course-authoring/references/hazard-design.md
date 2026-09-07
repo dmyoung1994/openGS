@@ -10,6 +10,8 @@ Define before generating geometry:
 role: strategic | heroic | directional | recovery | penal | framing
 target_players: casual, skilled, tour
 shot_context: tee shot, layup, approach, recovery
+stable_id: authored hazard ID
+route_progress_band: intended shot interval along the routed centerline
 preferred_line: rewarded origin and target
 risk_line: carry, dispersion, benefit when successful
 bailout: minimum width, resulting lie, next-shot cost
@@ -20,9 +22,31 @@ penalty_rule: red-area, yellow-area, stroke-and-distance, replay
 
 If the hazard has no answer to “what better decision does this create?”, move, reshape, or remove it.
 
+## Hazard-intent gate
+
+Before accepting geometry, project every hazard onto the owning hole's routed
+centerline and verify its stable ID, owning hole, shot context, route-progress band,
+lateral offset, carry-to-front, carry-to-clear, bailout, and earned benefit. A
+hazard is not justified merely because it is near a conventional yardage or makes a
+camera composition look busier.
+
+- Reject a tee-foreground or tee-adjacent hazard unless it affects a declared shot
+  from that tee or is an explicit recovery/construction feature with appropriate
+  play behavior. Decorative sand beside a tee is not a golf hazard.
+- If a hazard with a valid long carry appears beside the tee or under a review
+  camera, first check scene ownership, local-to-site transforms, active-hole state,
+  and camera placement. Do not move sound strategy to conceal a review bug.
+- Place decision cameras before the relevant dispersion band and aim through the
+  hazard toward its reward. Never stand the review camera on the bunker shoulder or
+  inside the landing zone and call that proof of placement.
+- Require a golfer-height tee view and a preceding-decision view that make the same
+  strategic story legible. An overview alone cannot pass the gate.
+
 ## Placement
 
 - Map realistic carry and dispersion bands from every tee before placing the hazard.
+- Keep the immediate teeing-ground, stance, follow-through, access, and camera
+  foreground free of unrelated play hazards.
 - Scale the same strategic question across casual, skilled, and tour tees instead of merely shortening the hole.
 - Prefer diagonal hazards, staggered edges, offset targets, corner carries, and hazards that change the next-shot angle.
 - Reward accepted risk with a shorter shot, better view, better angle, flatter lie, or easier pin access.
@@ -49,6 +73,8 @@ If the hazard has no answer to “what better decision does this create?”, mov
 ## Validation
 
 - Report carry-to-front, carry-to-clear, lateral bailout width, and target benefit from every tee.
+- Report stable hazard ID, owning hole, route progress, lateral offset, and intended
+  shot origin so local/site transform mistakes cannot masquerade as design.
 - Trace conservative, neutral, and hero lines with the authoritative physics solver.
 - Confirm the entire conservative corridor remains dry and collision-valid.
 - Confirm hazard outlines, visual surfaces, height field, physics mask, and penalty boundary agree.
@@ -58,6 +84,9 @@ If the hazard has no answer to “what better decision does this create?”, mov
 
 - Water painted across the fairway without a strategic line or geological reason.
 - A hazard located at an arbitrary round distance rather than a player decision band.
+- Decorative or transformed sand beside a tee that does not change the opening shot.
+- A valid landing hazard photographed from on top of its edge, making it read as
+  tee-side clutter and obscuring its actual carry.
 - A heroic carry whose reward is no different from the safe route.
 - A safe route that is technically dry but too narrow for its target player.
 - Water rendered at one elevation while physics collides with the basin floor.

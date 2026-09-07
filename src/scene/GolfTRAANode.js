@@ -366,8 +366,13 @@ class TRAANode extends TempNode {
 
 		//
 
-		this._jitterAppliedThisFrame = this.cameraJitterEnabled;
-		if ( this.cameraJitterEnabled === false ) return;
+		// Once a stationary view has integrated the complete sequence, keep the
+		// authored projection stable. Continuing to move the whole horizon by a
+		// subpixel adds no coverage and is visible as distant-ridge vibration at
+		// low cadence. Camera motion resets _historyAge and resumes sampling.
+		this._jitterAppliedThisFrame = this.cameraJitterEnabled
+			&& this._historyAge.value < _haltonOffsets.length;
+		if ( this._jitterAppliedThisFrame === false ) return;
 
 		const viewOffset = {
 
@@ -513,7 +518,7 @@ class TRAANode extends TempNode {
 		this._historyTextureNode.value = this._historyRenderTarget.texture;
 		this._textureNode.value = this._historyRenderTarget.texture;
 		this._historyValid.value = 1;
-		this._historyAge.value = Math.min( 32, this._historyAge.value + 1 );
+		this._historyAge.value = Math.min( _haltonOffsets.length, this._historyAge.value + 1 );
 
 		// Copy current depth to previous depth buffer
 
@@ -976,9 +981,8 @@ class TRAANode extends TempNode {
 			// reintroduces one-frame luma deltas. Retain the same running-average
 			// weighting used for static thin geometry, but only while the camera and
 			// reprojected sky are stationary; moving views still use strict history.
-			const staticSkyCoverage = centerIsSky.and( effectivelyStatic );
 			const mayIntegrateEdgeCoverage = isDepthEdge
-				.and( reactiveThinGeometry.or( effectivelyStatic ) );
+				.and( reactiveThinGeometry );
 			const isDisocclusion = crossedSkyBoundary
 				.or( depthMismatch.and( mayIntegrateEdgeCoverage.not() ) );
 			const hasValidHistory = isValidUV
@@ -1013,7 +1017,11 @@ class TRAANode extends TempNode {
 
 			const currentWeight = float( this.staticCurrentWeight ).toVar();
 			const staticBlend = smoothstep( 0.001, 0.01, motionFactor ).oneMinus();
-			const thinStaticBlend = isDepthEdge.or( staticSkyCoverage ).select( staticBlend, float( 0 ) );
+			// Only explicitly tagged foliage may retain fractional edge coverage.
+			// Opaque cloth/poles and rejected histories must never have their fresh
+			// sample weight overwritten by a completed (zero-weight) Halton average.
+			const thinStaticBlend = isDepthEdge.and( reactiveThinGeometry ).and( hasValidHistory )
+				.select( staticBlend, float( 0 ) );
 
 			if ( this.useSubpixelCorrection ) {
 
@@ -1026,7 +1034,7 @@ class TRAANode extends TempNode {
 			// Accumulate one exact running average over the complete Halton cycle, then
 			// retain it while this depth edge is genuinely static. Camera motion resets
 			// age on the CPU; deformation velocity selects the normal moving path here.
-			const staticThinWeight = this._historyAge.lessThan( 31.5 )
+			const staticThinWeight = this._historyAge.lessThan( _haltonOffsets.length - 0.5 )
 				.select( float( 1 ).div( this._historyAge.add( 1 ) ), float( 0 ) );
 			currentWeight.assign( mix( currentWeight, staticThinWeight, thinStaticBlend ) );
 
@@ -1044,7 +1052,10 @@ class TRAANode extends TempNode {
 			const movingVarianceGamma = mix( 0.5, 1.0, motionFactor.oneMinus().pow2() );
 			const varianceGamma = mix( movingVarianceGamma, 4.0, staticBlend );
 			const needsVarianceClip = hasValidHistory.and(
-				effectivelyStatic.not().or( isDepthEdge.and( thinStaticBlend.lessThan( 0.5 ) ) )
+				// Empty sky has zero velocity even after a bird leaves it. It must
+				// clip stale silhouette colour instead of freezing that history forever.
+				centerIsSky.and( isDepthEdge.not() ).or( effectivelyStatic.not() )
+					.or( isDepthEdge.and( thinStaticBlend.lessThan( 0.5 ) ) )
 			);
 			const clippedHistoryColor = historyColor.toVar();
 			If( needsVarianceClip, () => {

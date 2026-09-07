@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "imagegen-live-oak",
+  "sourceSha256": "dcf2eaec951545686c825e0e37f1eeaf2e4aceac3a2597dffe5bbc6f37414b42",
+  "promptHash": "8ed5fd28e811596cb56c5ee056ab149d055a00e428fe074d14ca0ad88653b5d5",
+  "width": 512,
+  "height": 512,
+  "alphaCoverage": 0.28561,
+  "files": {
+    "source": "public/assets/procedural-trees/imagegen-live-oak/leaf-source.png",
+    "png": "public/assets/procedural-trees/imagegen-live-oak/leaf.png",
+    "ktx2": "public/assets/procedural-trees/imagegen-live-oak/leaf.ktx2"
+  }
+}

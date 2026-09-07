@@ -75,8 +75,8 @@ test('visual-quality benchmark is a strict production WebGPU capture contract', 
   assert.match(source, /treeBeauty\.residencyEstimate\(window\.golf\.sm\.camera\)/);
   assert.match(source, /gpuTiming,\s*treeDiagnostics,/);
   assert.match(source, /quality\.setMode\(requestedMode, \{ persist: false, resetScale: true \}\)/);
-  assert.match(source, /--course must be default or premium-range/);
-  assert.match(source, /route\.searchParams\.set\('course', course\)/);
+  assert.match(source, /new URL\('\/range\.html', base\)/);
+  assert.doesNotMatch(source, /--course|premium-range/);
   assert.match(source, /readRenderResolutionDiagnostics/);
   assert.match(source, /readViewportDiagnostics/);
   assert.match(source, /gpuProfiler/);

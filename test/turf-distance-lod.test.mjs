@@ -48,7 +48,10 @@ test('rough bake has no coarse tonal stamp for the distance mip chain', async ()
 test('distance turf resolves the native atlas instead of enlarging a repeated copy', async () => {
   const source = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
   assert.doesNotMatch(source, /T\s*\*\s*4\.0/, 'an enlarged detail-map copy reintroduces a visible distance period');
-  assert.match(source, /const unresolved = smoothstep\(4\.5, 7\.0, lod\)/);
+  assert.match(source, /const anisotropicFootprint = uvDxLength\.max\(uvDyLength\)\.div\(8\.0\)/);
+  assert.match(source, /const unresolved = smoothstep\(5\.5, 8\.0, filteredLod\)/);
+  assert.match(source, /\.grad\(uvDx, uvDy\)/,
+    'final turf PBR reads must retain cross-fairway detail at grazing view angles');
   assert.match(source, /mix\(pigment, pigmentMean, unresolved\)/,
     'unresolved material must converge on its own physical pigment instead of a repeated atlas motif');
 });

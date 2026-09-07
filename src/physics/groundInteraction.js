@@ -13,8 +13,9 @@ import { BALL } from './constants.js';
 //                   fast the ball transitions from a skid to true rolling, and
 //                   how strongly backspin is converted to a backward kick.
 //   rollResistance  constant rolling deceleration as a fraction of g (higher =
-//                   stops sooner). ~0.055 on a green matches a ~10 stimp putt;
-//                   it dominates the slow, final trickle-out.
+//                   stops sooner). Green speed also depends on rollDrag and
+//                   firmness; this coefficient alone is not a Stimp reading.
+//                   It dominates the slow, final trickle-out.
 //   rollDrag        speed-squared "grass/skid drag" that only bites at pace, so
 //                   a fast entry (driver release, hot approach) is scrubbed hard
 //                   while a slow putt is untouched. Big on rough/sand.

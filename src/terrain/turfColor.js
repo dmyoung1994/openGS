@@ -29,6 +29,14 @@ import { surface } from '../physics/groundInteraction.js';
 // as a different, near-black material rather than as long grass.
 const ALBEDO_OF = { deepRough: 'rough' };
 
+// Explicit photo-study plant family, in linear RGB. Native meadow stems are not
+// longer-cut turf: green leaf tissue and dry seed stalks share this muted palette
+// across actual blades, distant terrain and the inland backdrop.
+export const NATIVE_GRASS_PIGMENT = Object.freeze({
+  living: Object.freeze([0.115, 0.14, 0.082]),
+  straw: Object.freeze([0.29, 0.28, 0.215]),
+});
+
 // ---- Photometric lightness correction. ---------------------------------------
 // The gameplay colours encode surface IDENTITY — picked so a fairway reads as a
 // different thing from rough on a minimap — so their LIGHTNESS spread is stylistic and
@@ -42,7 +50,20 @@ const LIFT = { rough: 1.43 };
 
 // Shared source pigment for geometric rough blades and the calibrated terrain
 // undercoat derived below.
-export const TURF_BLADE_SATURATION = 1.28;
+//
+// Raised from 1.28 when the sky PMREM moved to its physically correct unity
+// diffuse intensity (SKY_IRRADIANCE_INTENSITY in SceneManager). The former 0.34
+// multiplier had been starving turf of blue skylight, and the blade pigment was
+// graded against that deficit; supplying the real sky fill lifted rendered blue
+// from 15 to 29 sRGB and dropped daylight turf saturation 0.805 -> 0.663. Real
+// chlorophyll reflects very little blue, so the correction belongs in the pigment
+// rather than back in the light transport: more chroma here restores the measured
+// photographed fairway ratio under the corrected irradiance.
+export const TURF_BLADE_SATURATION = 1.62;
+// Compensate the luminance that the added chroma contributes, so this grade
+// changes the turf's colour and not its exposure. 1.62 raises the blade's linear
+// luminance from 0.1263 to 0.1407; this returns it to the calibrated value.
+export const TURF_BLADE_LIGHTNESS = 0.90;
 // The upward-facing substrate receives more sky fill than the crossed blade canopy.
 // Matching their raw albedo therefore still leaves pale yellow-green gaps between
 // the lit, self-shadowed blades. This restrained undercoat grade compensates for the
@@ -57,6 +78,7 @@ export const TURF_UNDERCOAT_LIGHTNESS = 0.74;
 export const MOW_STRIPE_PASS_WIDTH_M = 2.54;
 export const MOW_STRIPE_PERIOD_M = MOW_STRIPE_PASS_WIDTH_M * 2;
 export const MOW_STRIPE_CROSS_SLOPE = 0.06;
+export const MOW_STRIPE_ALBEDO_CONTRAST = 0.04;
 
 // CPU-side counterpart used by focused contracts/tools. There is deliberately no
 // noise, curvature, phase drift, or camera term on top of this linear coordinate.
@@ -68,6 +90,12 @@ export function mowingStripPhase(x, z) {
   const period = MOW_STRIPE_PERIOD_M;
   const wrapped = mowingStripCoordinate(x, z) % period;
   return wrapped < 0 ? wrapped + period : wrapped;
+}
+
+export function mowingStripLay(x, z) {
+  const wave = Math.cos(mowingStripPhase(x, z) * Math.PI * 2 / MOW_STRIPE_PERIOD_M) * 0.5 + 0.5;
+  const t = Math.max(0, Math.min(1, (wave - 0.28) / 0.44));
+  return t * t * (3 - 2 * t);
 }
 
 const _hsl = { h: 0, s: 0, l: 0 };
@@ -92,7 +120,12 @@ export function turfBase(name, out = new Color()) {
 export function turfBladeBase(name, out = new Color()) {
   turfBase(name, out);
   out.getHSL(_hsl, SRGBColorSpace);
-  out.setHSL(_hsl.h, Math.min(_hsl.s * TURF_BLADE_SATURATION, 1), _hsl.l, SRGBColorSpace);
+  out.setHSL(
+    _hsl.h,
+    Math.min(_hsl.s * TURF_BLADE_SATURATION, 1),
+    _hsl.l * TURF_BLADE_LIGHTNESS,
+    SRGBColorSpace,
+  );
   return out;
 }
 

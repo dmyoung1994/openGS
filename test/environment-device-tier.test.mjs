@@ -21,6 +21,8 @@ test('high tier accepts a capable Apple-Metal-class WebGPU limit set without pri
   const tier = selectEnvironmentDeviceTier({ limits: limits(), hardwareConcurrency: 6, deviceMemoryGiB: 8 });
   assert.equal(tier, ENVIRONMENT_DEVICE_TIERS.high);
   assert.equal(tier.id, 'high');
+  assert.deepEqual(tier.trees, { lodNear: 70, lodFar: 140 },
+    'device tier exposes the base budget before catalog-role residency');
 });
 
 test('policy steps down by workload only as hardware limits decline', () => {
@@ -40,6 +42,7 @@ test('tier snapshots are serializable workload data, not renderer alternatives',
     id: 'balanced', pixelRatioCap: 1.5,
     gtao: { resolutionScale: 0.5, samples: 6 },
     shadowMapSize: 1536, grassRadius: 42,
+    shadow: { extent: 45 },
     trees: { lodNear: 52, lodFar: 110 },
   });
   assert.throws(() => environmentTierSnapshot(null), /tier is required/);
@@ -54,7 +57,7 @@ test('auto visual quality starts from capability tier without changing renderer 
   }), 'ultra', 'Chrome-capped desktop memory must still permit an Ultra start');
   assert.equal(selectInitialVisualQualityMode({
     limits: limits(), hardwareConcurrency: 6, deviceMemoryGiB: 8,
-  }), 'quality');
+  }), 'balanced', 'mobile-class Auto starts within the measured dense-forest budget');
   assert.equal(selectInitialVisualQualityMode({
     limits: limits(), hardwareConcurrency: 8, deviceMemoryGiB: 8,
   }), 'quality', 'a high-tier phone/tablet hint must not be promoted to Ultra');

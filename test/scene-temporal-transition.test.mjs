@@ -5,6 +5,25 @@ import { Matrix4, PerspectiveCamera, Quaternion, Vector3 } from 'three';
 import { SceneManager } from '../src/scene/SceneManager.js';
 import TRAANode from '../src/scene/GolfTRAANode.js';
 
+test('sun shafts remain restrained and vanish without sunlight', () => {
+  const manager = Object.create(SceneManager.prototype);
+  manager._sunShafts = { density: { value: 0 } };
+  manager._environmentBindings = {
+    sunIlluminanceScale: { value: 1 },
+    sunDirection: { value: new Vector3(0, 1, 0) },
+    atmosphere: { value: new Vector3(2, 0, 0) },
+  };
+  manager._updateSunShaftDensity();
+  const noon = manager._sunShafts.density.value;
+  manager._environmentBindings.sunDirection.value.y = 0.1;
+  manager._updateSunShaftDensity();
+  assert.ok(manager._sunShafts.density.value > noon);
+  assert.ok(manager._sunShafts.density.value < 0.12);
+  manager._environmentBindings.sunIlluminanceScale.value = 0;
+  manager._updateSunShaftDensity();
+  assert.equal(manager._sunShafts.density.value, 0);
+});
+
 test('delayed return after a still result orbit invalidates TRAA on its first move', () => {
   const camera = new PerspectiveCamera();
   camera.updateMatrixWorld();
@@ -57,16 +76,25 @@ test('post stack blooms only the final resolved scene and cloud composite', asyn
 
 test('analytic environment fill remains subordinate to the shared celestial key', async () => {
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
-  assert.match(source, /const indirectStrength = Math\.max\(/);
-  assert.match(source, /scene\.environmentIntensity = 0\.34 \* indirectStrength/,
-    'PMREM fill must not flatten the dominant celestial value structure');
+  assert.doesNotMatch(source, /const indirectStrength = Math\.max\(/);
+  // The invariant this guards is that the sky PMREM is scaled by a FIXED unit
+  // conversion, never by the celestial envelope a second time. The literal value
+  // moved from 0.34 to unity once qa-sky-irradiance proved the atlas already
+  // carries true scene radiance, so pin the named constant rather than a number
+  // that only ever encoded the old calibration.
+  assert.match(source, /scene\.environmentIntensity = SKY_IRRADIANCE_INTENSITY;/,
+    'sky irradiance must come from the shared fixed constant, not an inline literal');
+  assert.match(source, /const SKY_IRRADIANCE_INTENSITY = 1\.0;/,
+    'the PMREM reproduces the analytic sky radiance, so its diffuse multiplier is unity');
+  assert.doesNotMatch(source, /environmentIntensity\s*=[^;\n]*(sunIlluminanceScale|daylightSkyEnvelope|keyIntensity|solarStrength)/,
+    'PMREM already contains the celestial envelope; scaling it by direct sunlight double-attenuates it');
   assert.match(source, /environment\.atmosphereExposure\.value \* 1\.20/,
     'Neutral calibration must retain midtone value while preserving daylight chromaticity');
 });
 
-test('post graph replacement disposes prior full-resolution targets and waits for weather', async () => {
+test('post graph replacement retains scene MRT and disposes obsolete effect targets', async () => {
   const source = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
-  assert.match(source, /this\._scenePass\?\.dispose\(\)/);
+  assert.match(source, /const scenePass = this\._scenePass \?\? pass\(/);
   assert.match(source, /this\._traa\?\.dispose\(\)/);
   assert.match(source, /this\._cloudTemporal\?\.dispose\(\)/);
   assert.doesNotMatch(source, /_skyPass|skyScene/,
@@ -77,10 +105,14 @@ test('post graph replacement disposes prior full-resolution targets and waits fo
 
 test('TRAA keeps stationary sky history stable across deterministic jitter', async () => {
   const source = await readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8');
-  assert.match(source, /const staticSkyCoverage = centerIsSky\.and\( effectivelyStatic \)/);
-  assert.match(source, /isDepthEdge\.or\( staticSkyCoverage \)/);
+  assert.match(source, /const thinStaticBlend = isDepthEdge\.and\( reactiveThinGeometry \)\.and\( hasValidHistory \)/,
+    'invalid or untagged cloth history must never override fresh disocclusion samples');
+  assert.match(source, /centerIsSky\.and\( isDepthEdge\.not\(\) \)\.or\( effectivelyStatic\.not\(\) \)/,
+    'empty sky must clip stale moving-object colour even though its own velocity is zero');
   assert.match(source, /cameraJitterEnabled = true/);
-  assert.match(source, /if \( this\.cameraJitterEnabled === false \) return/);
+  assert.match(source, /this\._historyAge\.value < _haltonOffsets\.length/,
+    'a completed static sample cycle must stop shifting the distant horizon');
+  assert.match(source, /if \( this\._jitterAppliedThisFrame === false \) return/);
   assert.match(source, /if \( this\._jitterAppliedThisFrame \)/);
 });
 
@@ -133,14 +165,15 @@ test('TRAA constructor keeps the two color targets depth-free and defers depth-n
   }
 });
 
-test('TRAA and bloom remain linear while display-referred FXAA owns final edge cleanup', async () => {
+test('TRAA and bloom remain linear without a second whole-screen antialiasing blur', async () => {
   const scene = await readFile(new URL('../src/scene/SceneManager.js', import.meta.url), 'utf8');
   const traa = await readFile(new URL('../src/scene/GolfTRAANode.js', import.meta.url), 'utf8');
   assert.match(scene, /this\.postProcessing = new RenderPipeline\(this\.renderer\)/);
   assert.match(scene, /const displayRgb = renderOutput\(/);
-  assert.match(scene, /this\._fxaaPass = fxaa\(displayRgb\)/);
+  assert.doesNotMatch(scene, /FXAANode/);
+  assert.doesNotMatch(scene, /fxaa\(displayRgb\)/);
   assert.match(scene, /this\.postProcessing\.outputColorTransform = false/);
-  assert.match(scene, /this\.postProcessing\.outputNode = this\._fxaaPass/);
+  assert.match(scene, /this\.postProcessing\.outputNode = displayRgb/);
   assert.match(scene, /this\.postProcessing\.render\(\)/);
   assert.match(traa, /renderer\.setRenderTarget\( this\._resolveRenderTarget \)/);
   assert.match(traa, /this\._historyTextureNode\.value = this\._historyRenderTarget\.texture/);

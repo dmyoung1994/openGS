@@ -4,6 +4,7 @@ import { assertEnvironment, deriveLaunchState, stepRK4 } from './ballistics.js';
 import { resolveBounce, surface } from './groundInteraction.js';
 import { M_TO_YARD } from '../util/units.js';
 import { intersectSegmentWaterPlane, resolveWaterEntry } from './waterInteraction.js';
+import { cupCaptureSpeed, intersectCupEntry } from './cupInteraction.js';
 
 // A stateful ball the game loop advances every frame. It owns the full life of
 // a shot: flight -> bounce(s) -> roll -> rest, querying the terrain for the
@@ -15,8 +16,10 @@ import { intersectSegmentWaterPlane, resolveWaterEntry } from './waterInteractio
 //   surfaceAt(x, z) -> string      key into SURFACES
 //
 // Emitted lifecycle events (via ball.on(name, cb)): 'launch', 'apex',
-// 'carry' (first ground contact), 'bounce', 'waterImpact', 'hazard', 'rest'.
+// 'carry' (first ground contact), 'bounce', 'groundContact' (at most once per
+// presented update while rolling), 'waterImpact', 'hazard', 'rest'.
 const FIXED_DT = 0.002; // s, physics substep
+const ROLLING_GRAVITY = 5 / 7; // Solid sphere: 1 / (1 + I / mr²), matching contact inertia.
 
 // Scratch vectors reused by the rolling solver (avoids per-substep allocation).
 const _r0 = new Vector3();
@@ -40,6 +43,10 @@ export class Ball {
     this.spin = { axis: new Vector3(1, 0, 0), omega: 0 };
     this.state = 'rest'; // 'airborne' | 'rolling' | 'rest'
     this.radius = BALL.radius;
+    this.cup = null;
+    this.holed = false;
+    this._cupEntryPosition = new Vector3();
+    this._shotAim = new Vector3(0, 0, -1);
 
     this.time = 0;
     this.start = new Vector3();
@@ -59,6 +66,11 @@ export class Ball {
     this._airStepStartPosition = new Vector3();
     this._airStepStartVelocity = new Vector3();
     this._airStepStartAngularVelocity = new Vector3();
+    // Fixed-step physics may run dozens of substeps per presented frame. Retain
+    // only the latest rolling contact so presentation consumers receive bounded
+    // telemetry without changing or slowing the contact solver.
+    this._groundContactSample = { surface: 'fairway', speed: 0, slipSpeed: 0, spinSpeed: 0 };
+    this._hasGroundContactSample = false;
   }
 
   setEnvironment(env) {
@@ -89,12 +101,25 @@ export class Ball {
     this.angularVelocity.set(0, 0, 0);
     this._syncSpinReport();
     this.state = 'rest';
+    this.holed = false;
+    this._hasGroundContactSample = false;
+  }
+
+  setCup(cup) {
+    if (cup && (![cup.x, cup.y, cup.z, cup.radius, cup.depth].every(Number.isFinite)
+      || cup.radius <= this.radius || cup.depth <= this.radius * 2)) {
+      throw new RangeError('Cup dimensions and position must be finite and fit the ball.');
+    }
+    this.cup = cup ? Object.freeze({ ...cup }) : null;
   }
 
   launch(params) {
+    if (this.holed) throw new Error('This ball is holed. Start the next hole before launching again.');
     const teeY = this.terrain.heightAt(this.position.x, this.position.z);
     const start = new Vector3(this.position.x, teeY + (params.teeHeight || this.radius), this.position.z);
     const s = deriveLaunchState({ ...params, position: start });
+    const aimBearing = (params.aimAzimuth ?? 0) * Math.PI / 180;
+    this._shotAim.set(Math.sin(aimBearing), 0, -Math.cos(aimBearing));
     this.position.copy(s.position);
     this.velocity.copy(s.velocity);
     this.angularVelocity.copy(s.angularVelocity);
@@ -113,12 +138,22 @@ export class Ball {
     this._carryReported = false;
     this._grounded = false;
     this.trail = [this.position.clone()];
-    this._emit('launch', { position: start.clone(), velocity: this.velocity.clone() });
+    this._hasGroundContactSample = false;
+    this._emit('launch', {
+      position: start.clone(),
+      velocity: this.velocity.clone(),
+      ballSpeed: params.ballSpeed,
+      clubSpeed: params.clubSpeed,
+      launchAngle: params.launchAngle,
+      spinRate: params.spinRate,
+      club: params.club,
+    });
   }
 
   // Advance the simulation by a frame's worth of wall-clock time.
   update(dt) {
     if (this.state === 'rest') return;
+    this._hasGroundContactSample = false;
     this._accum += Math.min(dt, 0.05); // clamp huge frame gaps
     let moved = false;
     while (this._accum >= FIXED_DT) {
@@ -133,11 +168,42 @@ export class Ball {
         this.trail.push(this.position.clone());
       }
     }
+    if (this.state === 'rolling' && this._hasGroundContactSample) {
+      this._emit('groundContact', {
+        surface: this._groundContactSample.surface,
+        speed: this._groundContactSample.speed,
+        slipSpeed: this._groundContactSample.slipSpeed,
+        spinSpeed: this._groundContactSample.spinSpeed,
+        position: this.position.clone(),
+      });
+    }
   }
 
   _substep(dt) {
     if (this.state === 'airborne') this._stepAir(dt);
     else if (this.state === 'rolling') this._stepRoll(dt);
+    else if (this.state === 'holing') this._stepHole(dt);
+  }
+
+  _stepHole(dt) {
+    this.time += dt;
+    this.velocity.y -= GRAVITY * dt;
+    this.position.y += this.velocity.y * dt;
+    const bottom = this.cup.y - this.cup.depth + this.radius;
+    const progress = Math.min(1, (this.cup.y + this.radius - this.position.y) / this.cup.depth);
+    // ponytail: capture-envelope settlement, not detailed liner/flagstick impacts.
+    // Replace this short descent with contact dynamics when rim evidence is added.
+    this.position.x = this._cupEntryPosition.x + (this.cup.x - this._cupEntryPosition.x) * progress;
+    this.position.z = this._cupEntryPosition.z + (this.cup.z - this._cupEntryPosition.z) * progress;
+    if (this.position.y > bottom) return;
+    this.position.set(this.cup.x, bottom, this.cup.z);
+    this.velocity.set(0, 0, 0);
+    this.angularVelocity.set(0, 0, 0);
+    this._syncSpinReport();
+    this.holed = true;
+    this.state = 'rest';
+    this._emit('holed', { position: this.position.clone() });
+    this._finish();
   }
 
   _stepAir(dt) {
@@ -194,6 +260,7 @@ export class Ball {
           criticalSpeed: result.criticalSpeed,
           spinRatio: result.spinRatio,
         };
+        this._reportCarry();
         this._emit('waterImpact', impact);
 
         if (result.kind === 'skip') {
@@ -210,12 +277,8 @@ export class Ball {
         this.angularVelocity.set(0, 0, 0);
         this._syncSpinReport();
         this.state = 'rest';
-        if (!this._carryReported) {
-          this._carryReported = true;
-          this.carryYards = this._groundDist() * M_TO_YARD;
-        }
-        this._finish();
         this._emit('hazard', impact);
+        this._finish();
         return;
       }
     }
@@ -238,8 +301,7 @@ export class Ball {
     }
   }
 
-  _land() {
-    this._grounded = true;
+  _reportCarry() {
     if (!this._carryReported) {
       this._carryReported = true;
       this.carryYards = this._groundDist() * M_TO_YARD;
@@ -254,21 +316,40 @@ export class Ball {
         landingSpinRpm: this.landingSpinRpm,
       });
     }
+  }
+
+  _land() {
+    this._grounded = true;
+    this._reportCarry();
     const name = this.terrain.surfaceAt(this.position.x, this.position.z);
     const surf = surface(name, this.env.groundFirmness);
     const normal = this.terrain.normalAt(this.position.x, this.position.z);
 
     if (surf.hazard === 'water') {
       this.velocity.set(0, 0, 0);
+      this.angularVelocity.set(0, 0, 0);
+      this._syncSpinReport();
       this.state = 'rest';
-      this._finish();
       this._emit('hazard', { type: 'water', position: this.position.clone() });
+      this._finish();
       return;
     }
 
+    const incidentVelocity = this.velocity.clone();
+    const impactSpeed = incidentVelocity.length();
+    const normalSpeed = Math.max(0, -incidentVelocity.dot(normal));
+    const incidentSpin = this.angularVelocity.length();
     const { rolling } = resolveBounce(this.velocity, normal, { angularVelocity: this.angularVelocity }, surf);
     this._syncSpinReport();
-    this._emit('bounce', { surface: name, position: this.position.clone(), speed: this.velocity.length() });
+    this._emit('bounce', {
+      surface: name,
+      position: this.position.clone(),
+      speed: this.velocity.length(),
+      impactSpeed,
+      normalSpeed,
+      outgoingSpeed: this.velocity.length(),
+      incidentSpin,
+    });
     if (rolling) {
       // Project velocity onto the tangent plane and start rolling.
       const vn = this.velocity.dot(normal);
@@ -281,6 +362,11 @@ export class Ball {
     const n = this.terrain.normalAt(this.position.x, this.position.z);
     const name = this.terrain.surfaceAt(this.position.x, this.position.z);
     const surf = surface(name, this.env.groundFirmness);
+    if (surf.hazard === 'water') {
+      this._hasGroundContactSample = false;
+      this._land();
+      return;
+    }
     const radius = this.radius;
 
     // Gravity split into slope-tangent (drives downhill) and normal parts.
@@ -296,8 +382,8 @@ export class Ball {
     // r = -n * radius. A ball that just checked still carries BACKSPIN, whose
     // contact point slips forward, so it is not really rolling yet - it skids,
     // and kinetic friction keeps scrubbing (and can even reverse) it until the
-    // spin bleeds down to the rolling condition v = omega x r. A pure putt has
-    // no spin, so it rolls freely from the start. This single mechanism is what
+    // spin bleeds down to the rolling condition v + omega x r = 0. A zero-spin putt
+    // initially skids and acquires topspin before it rolls. This mechanism is what
     // makes approach shots CHECK and high-spin wedges ZIP BACK on a green while
     // a driver (little spin left) just releases.
     const omegaVec = _r2.copy(this.angularVelocity);
@@ -323,6 +409,7 @@ export class Ball {
       // Angular: torque bleeds the spin toward the rolling state.
       const dOmega = _r7.copy(n).cross(slipHat).multiplyScalar((5 * jFric) / (2 * radius));
       omegaVec.add(dOmega);
+      this.velocity.addScaledVector(gTangent, dt);
     } else {
       // --- Rolling: constant rolling resistance + speed-squared grass drag,
       // and lock the spin to the rolling state so no spurious slip reappears.
@@ -330,18 +417,37 @@ export class Ball {
       if (speed > 1e-4) {
         const fricDecel = surf.rollResistance * GRAVITY * cosT;
         const dragDecel = (surf.rollDrag || 0) * speed * speed * cosT;
-        this.velocity.addScaledVector(this.velocity, -(fricDecel + dragDecel) * dt / speed);
+        this.velocity.multiplyScalar(Math.max(0, 1 - (fricDecel + dragDecel) * dt / speed));
       }
+      // Static contact friction supplies the torque needed to roll downhill.
+      // Apply that acceleration before synchronizing spin, avoiding artificial slip.
+      this.velocity.addScaledVector(gTangent, dt * ROLLING_GRAVITY);
       // omega_roll = (n x v)/radius  (topspin consistent with pure rolling).
       omegaVec.copy(n).cross(this.velocity).multiplyScalar(1 / radius);
     }
 
-    // Slope drive applies in both regimes.
-    this.velocity.addScaledVector(gTangent, dt);
-
+    const previousPosition = this._airStepStartPosition.copy(this.position);
     this.position.addScaledVector(this.velocity, dt);
+    if (this.cup && name === 'green') {
+      const entry = intersectCupEntry(previousPosition, this.position, this.cup);
+      const speed = this.velocity.length();
+      if (entry && speed > 0 && speed < cupCaptureSpeed(entry.offset, this.cup.radius, this.velocity.y / speed)) {
+        this.position.lerpVectors(previousPosition, this.position, entry.t);
+        this._cupEntryPosition.copy(this.position);
+        this.velocity.set(0, 0, 0);
+        this.state = 'holing';
+        this._hasGroundContactSample = false;
+        return;
+      }
+    }
     this.angularVelocity.copy(omegaVec);
     this._syncSpinReport();
+
+    this._groundContactSample.surface = name;
+    this._groundContactSample.speed = this.velocity.length();
+    this._groundContactSample.slipSpeed = slipMag;
+    this._groundContactSample.spinSpeed = this.spin.omega;
+    this._hasGroundContactSample = true;
 
     // Re-seat on the surface and keep velocity tangent to it.
     this.position.y = this.terrain.heightAt(this.position.x, this.position.z) + this.radius;
@@ -350,7 +456,7 @@ export class Ball {
     // Stop only once it is genuinely crawling AND essentially rolling (not
     // mid-check or mid-zip), and the slope can't keep it going.
     const slopeTan = Math.hypot(n.x, n.z) / Math.max(cosT, 1e-4);
-    if (this.velocity.length() < surf.stopSpeed && slipMag < 0.4 && slopeTan < surf.rollResistance) {
+    if (this.velocity.length() < surf.stopSpeed && slipMag < 0.4 && slopeTan * ROLLING_GRAVITY < surf.rollResistance) {
       this.velocity.set(0, 0, 0);
       this.angularVelocity.set(0, 0, 0);
       this._syncSpinReport();
@@ -362,6 +468,7 @@ export class Ball {
   _finish() {
     this.totalYards = this._groundDist() * M_TO_YARD;
     this._emit('rest', {
+      holed: this.holed,
       carryYards: this.carryYards,
       totalYards: this.totalYards,
       apexMeters: this.apexHeight - this.start.y,
@@ -369,7 +476,8 @@ export class Ball {
       landingSpeedMph: this.landingSpeedMph,
       landingSpinRpm: this.landingSpinRpm,
       groundFirmness: this.env.groundFirmness,
-      offlineYards: (this.position.x - this.start.x) * M_TO_YARD,
+      offlineYards: ((this.position.x - this.start.x) * -this._shotAim.z
+        + (this.position.z - this.start.z) * this._shotAim.x) * M_TO_YARD,
       position: this.position.clone(),
       surface: this.terrain.surfaceAt(this.position.x, this.position.z),
     });

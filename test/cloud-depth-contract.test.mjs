@@ -30,7 +30,7 @@ test('depth-aware cloud source contracts sample MRT depth and compose transport 
     readFile(new URL('../src/scene/WeatherSky.js', import.meta.url), 'utf8'),
   ]);
 
-  assert.match(scene, /const scenePass = pass\(this\.scene, this\.camera/);
+  assert.match(scene, /const scenePass = this\._scenePass \?\? pass\(this\.scene, this\.camera/);
   assert.match(scene, /const depth = scenePass\.getTextureNode\('depth'\)/);
   assert.match(scene, /new CloudTemporalNode\([\s\S]*depth,/,
     'cloud pass must consume the authoritative Scene MRT depth texture');

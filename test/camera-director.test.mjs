@@ -186,3 +186,15 @@ test('production capture harness exercises the real shot flight and return', asy
   assert.match(source, /state\.phase === 'address'/,
     'return capture must span the real result/return/address transition');
 });
+
+test('address ball clears the composer in a short viewport', () => {
+  const camera = new PerspectiveCamera(40, 800 / 457, 0.1, 3000);
+  const director = new CameraDirector(camera);
+  const ball = new Vector3(0, 0.021, 2);
+  director.addressViewport = { height: 457, bottom: 110 };
+  director.setAddress(ball, new Vector3(0, 0, -1));
+  camera.updateMatrixWorld();
+  const projected = ball.clone().project(camera);
+  const y = (1 - projected.y) * 457 / 2;
+  assert.ok(y < 457 - 110 - 20, `Ball at ${y} overlaps the composer`);
+});

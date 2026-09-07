@@ -4,6 +4,14 @@ Establish protected play before environmental dressing.
 
 ## Protected clearances
 
+Clearance applies to resolved objects, not to an authoring region's entire
+bounding rectangle. A forest region may overlap a broad fairway envelope when it
+represents deliberate separator rough between holes. Mature trees are welcome in
+that separator; reject only resolved trunks/crowns that physically intrude on a
+maintained surface, hazard, required landing area, or recovery lane. Do not turn
+conservative region bounds into a blanket ban on strategic woodland between
+fairways.
+
 - Tee complexes: no trunks or rocks within 12 m; no tall shrubs within 8 m.
 - Primary tee sightline: keep a widening corridor clear from 12 m beyond the
   tee through the first landing area.
@@ -17,6 +25,10 @@ Establish protected play before environmental dressing.
   bunker edge visible to read the hazard from golfer height.
 - Recovery: preserve at least one ground or aerial recovery lane from every
   intended miss zone.
+- Hole separators: mature canopy is allowed and often desirable in the rough
+  between adjacent fairways. Validate actual resolved footprints and intended
+  recovery options; do not require the whole separator region to clear both
+  fairways' conservative envelopes.
 
 ## Community layering
 
@@ -60,7 +72,7 @@ objects; premium single-hole dressing should normally stay below 700.
 ## Final audit
 
 - Every object has exactly one declared source: a valid catalog `assetId`, or a
-  registered synthetic-tree archetype plus stable ID and deterministic parameters.
+  validated procedural definition referenced by a stable deterministic placement.
 - Seeds are stable and regions are reproducible.
 - Same-ID spacing and slope ranges pass catalog rules.
 - No grid, repeated yaw sequence, uniform scale, floating base, or intersection.

@@ -14,6 +14,16 @@ export const ENVIRONMENT_OBJECT_BUDGET = 3000;
 // renderer fetch begins. Keep this list in lockstep with catalog.json; the
 // catalog's own loader remains the authoritative integrity check for binaries.
 export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
+  'polyhaven-pine-sapling-small': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 0.54 }),
+    placement: Object.freeze({ minSpacing: 1.8, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
+  'polyhaven-fir-sapling-medium': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 3.8 }),
+    placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
   'polyhaven-tree-small-02': Object.freeze({
     biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
     bounds: Object.freeze({ radius: 2.3 }),
@@ -24,6 +34,16 @@ export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
     bounds: Object.freeze({ radius: 3.3 }),
     placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
   }),
+  'polyhaven-pine-tree-01': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 4.9 }),
+    placement: Object.freeze({ minSpacing: 8, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
+  'polyhaven-fir-tree-01': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 3.2 }),
+    placement: Object.freeze({ minSpacing: 8, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
   'polyhaven-island-tree-02': Object.freeze({
     biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
     bounds: Object.freeze({ radius: 3.7 }),
@@ -31,7 +51,7 @@ export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
   }),
   'polyhaven-island-tree-01': Object.freeze({
     biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
-    bounds: Object.freeze({ radius: 2.5 }),
+    bounds: Object.freeze({ radius: 3.6 }),
     placement: Object.freeze({ minSpacing: 7, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
   }),
   'blendkit-palm-tree-medium-dense': Object.freeze({
@@ -63,6 +83,16 @@ export const BUILTIN_ENVIRONMENT_ASSETS = Object.freeze({
     biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
     bounds: Object.freeze({ radius: 1.55 }),
     placement: Object.freeze({ minSpacing: 4, clearance: Object.freeze({ tee: 12, green: 12, bunker: 5, water: 3, fairway: 7 }) }),
+  }),
+  'grasslands-clubhouse': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime', 'temperate-alpine']),
+    bounds: Object.freeze({ radius: 20.5 }),
+    placement: Object.freeze({ minSpacing: 42, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
+  }),
+  'polyhaven-jacaranda-tree': Object.freeze({
+    biomes: Object.freeze(['temperate-maritime']),
+    bounds: Object.freeze({ radius: 15.8 }),
+    placement: Object.freeze({ minSpacing: 23, clearance: Object.freeze({ tee: 12, green: 18, bunker: 8, water: 6, fairway: 10 }) }),
   }),
 });
 export const BUILTIN_ENVIRONMENT_ASSET_IDS = Object.freeze(Object.keys(BUILTIN_ENVIRONMENT_ASSETS));
@@ -275,7 +305,9 @@ function validateAsset(raw, path) {
   const lineage = strictObject(asset.derivativeLineage, `${path}.derivativeLineage`);
   rejectUnknown(lineage, new Set(['sourceAssetId', 'sourceUrl', 'sourceHash', 'pipelineVersion']), `${path}.derivativeLineage`);
   identifier(lineage.sourceAssetId, `${path}.derivativeLineage.sourceAssetId`);
-  httpsUrl(lineage.sourceUrl, `${path}.derivativeLineage.sourceUrl`);
+  if (!/^\/assets\/environment\/[a-z0-9-]+\/[a-z0-9-]+\.blend$/.test(lineage.sourceUrl)) {
+    httpsUrl(lineage.sourceUrl, `${path}.derivativeLineage.sourceUrl`);
+  }
   hash(lineage.sourceHash, `${path}.derivativeLineage.sourceHash`);
   nonEmptyString(lineage.pipelineVersion, `${path}.derivativeLineage.pipelineVersion`);
 
@@ -355,12 +387,17 @@ function validateAlphaMaps(raw, path) {
 
 function validateLod(raw, path) {
   const lod = strictObject(raw, path);
-  rejectUnknown(lod, new Set(['level', 'url', 'sha256', 'maxDistance', 'geometry']), path);
+  rejectUnknown(lod, new Set([
+    'level', 'url', 'sha256', 'maxDistance', 'geometry', 'visualMaxProjectedPixels',
+  ]), path);
   if (!Number.isInteger(lod.level) || lod.level < 0) fail(`${path}.level must be an integer >= 0`);
   if (typeof lod.url !== 'string' || !lod.url.startsWith('/assets/')) fail(`${path}.url must be a public /assets/ path`);
   hash(lod.sha256, `${path}.sha256`);
   positive(lod.maxDistance, `${path}.maxDistance`);
   if (lod.geometry !== 'glb') fail(`${path}.geometry must be glb`);
+  if (lod.visualMaxProjectedPixels !== undefined) {
+    positive(lod.visualMaxProjectedPixels, `${path}.visualMaxProjectedPixels`, true);
+  }
   return Object.freeze({ ...lod });
 }
 

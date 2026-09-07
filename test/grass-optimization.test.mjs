@@ -52,7 +52,7 @@ test('grass ribbon view transform is vertex-hoisted without changing fragment no
 test('grass Phong path retains shared daylight and canonical crossed-ribbon UVs', async () => {
   const grass = await source();
   assert.match(grass, /class SharedEnvironmentGrassPhongMaterial extends MeshPhongNodeMaterial/);
-  assert.match(grass, /builder\.environmentNode \? new BasicEnvironmentNode\( builder\.environmentNode \) : null/,
+  assert.match(grass, /environment \? new DiffuseEnvironmentNode\( environment \) : null/,
     'Phong fallback must consume the renderer shared environment');
   assert.match(grass, /shininess: 4\.0/);
   assert.match(grass, /mat\.specularNode = vec3\( this\.uSpecular\.mul\( 0\.04 \) \)/);

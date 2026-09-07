@@ -1,12 +1,8 @@
 #!/usr/bin/env node
 // Course-engine MCP server (stdio) for the Claude GolfSim course builder.
 //
-// Exposes the SAME course as the in-app builder — it reads/writes the repo-root
-// course.json (the single source of truth). A terminal claude/codex agent can drive
-// the running sim through these tools: any set_course write lands on disk, the Vite
-// course-agent plugin's watcher sees it and live-reloads the browser. So authoring
-// works two ways — the in-app prompt box (/api/build) or a terminal agent over MCP —
-// against one spec, with NO terrain editing (features only; the engine bakes terrain).
+// Exposes the same project-v5 authoring kernel as the in-app builder. The editable
+// source is course.project.json; course.json is compiled output only.
 //
 // Register it with your agent, e.g.:
 //   claude mcp add course-engine -- node scripts/course-mcp.mjs
@@ -15,29 +11,31 @@
 // Dependency-free: implements the MCP stdio transport (newline-delimited JSON-RPC
 // 2.0) directly. Protocol chatter goes on stdout; all logging goes on stderr so it
 // never corrupts the stream.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeCourse, CONTOURS } from '../src/course/course.js';
+import { compileActiveCourse, normalizeCourseProject, projectRevision } from '../src/course/CourseProject.js';
 import {
   BIOME_TRANSITION_PROFILE_IDS, classifyBiomeAt,
 } from '../src/course/BiomeRegistry.js';
 import { signedDistanceToFeature } from '../src/course/featureGeometry.js';
+import {
+  applyAuthoringMutations, buildAuthoringContext, queryTreeAssets,
+} from './lib/course-authoring-kernel.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
-const COURSE_PATH = process.argv[2] ? resolve(process.argv[2]) : resolve(ROOT, 'course.json');
+const PROJECT_PATH = process.argv[2] ? resolve(process.argv[2]) : resolve(ROOT, 'course.project.json');
+const AUTHORING_ROOT = dirname(PROJECT_PATH);
 const log = (...a) => process.stderr.write(`[course-mcp] ${a.join(' ')}\n`);
 
 // ---------------------------------------------------------------- course I/O ---
 
 async function readCourse() {
-  const txt = await readFile(COURSE_PATH, 'utf8');
-  return { raw: txt, course: JSON.parse(txt) };
-}
-
-async function writeCourse(course) {
-  await writeFile(COURSE_PATH, JSON.stringify(course, null, 2) + '\n');
+  const raw = await readFile(PROJECT_PATH, 'utf8');
+  const project = normalizeCourseProject(JSON.parse(raw));
+  return { raw, project, course: compileActiveCourse(project).runtime };
 }
 
 // Analytic surface classifier — mirrors Range._surface so an agent can ask "what is
@@ -93,22 +91,25 @@ function courseWarnings(c) {
   return w;
 }
 
-const SCHEMA_DOC = `course.json — FEATURE spec (the engine bakes all terrain from these; there is no heightfield to edit).
+const SCHEMA_DOC = `course.project.json schema v5 — the only editable course source. course.json is deterministic compiled output.
 
 Coordinate system: metres. x = lateral (right is +x). z = down-range: the tee sits near z≈2 and the course runs toward NEGATIVE z. A 150-yard green is at z ≈ -137 (yards * -0.9144). y (elevation) is computed automatically.
 
-Fields:
-- meta.schema: exactly 3. Older courses require explicit migration.
+Mutation contract: call get_context, inspect stable IDs, then apply_mutations with the exact baseRevision. Each mutation is {op,entityType,entityId,parentId?,value?}. Supported entity types are project, site, atmosphere, surface-materials, hole, route, tee, green, bunker, pond, landform, forest-floor-area, environment-object, procedural-tree-definition, and procedural-tree.
+
+Compiled runtime fields:
 - biome: primary registered biome. biomeTransitions[]: semantic visual/ecological transitions that never change playable surface physics.
 - biomeTransitions[]: {id,from,to,boundary,profile,seed,widthScale,priority}. boundary is {kind:"course-edge",sides:[min-x|max-x|min-z|max-z]} or a validated inland {kind:"polygon-region",points:[{x,z},...]}. profile ∈ [${BIOME_TRANSITION_PROFILE_IDS.join(', ')}].
 - bounds {minX,maxX,minZ,maxZ}
 - tee {x,z,boxHalfX,z0,z1}
 - corridor {c0,k,rough}: fairway half-width(m) = c0 + (-z)*k; then a rough band of width \`rough\`; beyond that deep rough.
 - fringeW: green collar width (m).
-- greens[]: {yards (z auto-derived as -yards*0.9144 if z omitted), x, r (~6-12 m), contour}. contour ∈ [${CONTOURS.join(', ')}]. One legible contour per green; vary them across the set.
+- greens[]: {yards (z auto-derived as -yards*0.9144 if z omitted), x, r (~6-12 m), contour}. contour ∈ [${CONTOURS.join(', ')}]. The contour label is intent only. Optional shape uses 6–48 smooth spline controls with concave bays and unequal lobes. Optional grade:{slopeX,slopeZ,blend} establishes the underlying plane at the site centre elevation (signed slopes in m/m, total at most 6%, outer blend 2..40 m). Optional contours[] owns physical relief: up to 12 {kind,points,width,height,falloff} semantic landforms, with height -3..3 m, width 1..80 m and falloff 1..60 m. Points transform with the green. Use ridge, shelf, plateau, swale and drainage-channel for varied pin regions and connected recovery ground.
 - bunkers[]: {x, z, r (m), depth (m below grade), pot (bool)}. Cut INTO grade, no raised rim. pot = small (r≲4), deep (depth≳1.5), steep revetted links pit.
 - ponds[]: {x, z, r, depth}.
-- environment: catalog-backed placements, scatter, assemblies, and edge dressing.
+- site.forestFloorAreas[]: {id,shape:[{x,z},...]}. Four to 32 sparse world-space controls compile into a smooth pine-straw-bed SDF; author broad woodland beds, never crown circles or scatter rectangles.
+- site.surfaceMaterials: replace through the singleton surface-materials entity ID to tune validated turf and forest-floor relief, macro variation, grass exclusion, and edge feathering without replacing the whole site.
+- environment: catalog-backed placements/scatter/assemblies/edge dressing plus reusable proceduralTreeDefinitions and proceduralTrees placements. Procedural trees are explicit sources and never catalog fallbacks.
 
 Not authorable: raw terrain height or materials.`;
 
@@ -117,20 +118,26 @@ Not authorable: raw terrain height or materials.`;
 const TOOLS = [
   {
     name: 'describe_schema',
-    description: 'Return the course.json feature schema, coordinate system, and contour vocabulary. Read this before authoring.',
+    description: 'Return the project-v5 authoring contract, coordinate system, and compiled contour vocabulary.',
     inputSchema: { type: 'object', properties: {} },
     run: async () => text(SCHEMA_DOC),
   },
   {
+    name: 'get_context',
+    description: 'Return the compact, revision-tagged project-v5 AuthoringContext used by the in-app agent.',
+    inputSchema: { type: 'object', properties: {} },
+    run: async () => text(JSON.stringify(await buildAuthoringContext(AUTHORING_ROOT), null, 2)),
+  },
+  {
     name: 'get_course',
-    description: 'Return the current course.json (parsed) plus a summary of its features.',
+    description: 'Return the authoritative project-v5 source, its revision, and compiled runtime.',
     inputSchema: { type: 'object', properties: {} },
     run: async () => {
-      const { course } = await readCourse();
+      const { project, course } = await readCourse();
       const n = normalizeCourse(course);
       return text(JSON.stringify({
         summary: `${n.meta.name || 'Course'} — ${n.greens.length} greens, ${n.bunkers.length} bunkers, ${n.ponds.length} water, ${n.biomeTransitions.length} biome transitions`,
-        course,
+        revision: projectRevision(project), project, runtime: course,
       }, null, 2));
     },
   },
@@ -154,24 +161,35 @@ const TOOLS = [
   },
   {
     name: 'validate_course',
-    description: 'Validate a course object (or the current course.json if omitted) against the schema and design sanity checks. Returns normalized features + warnings; does NOT write.',
-    inputSchema: { type: 'object', properties: { course: { type: 'object' } } },
-    run: async ({ course }) => {
-      const raw = course || (await readCourse()).course;
-      const n = normalizeCourse(raw);
-      return text(JSON.stringify({ ok: true, warnings: courseWarnings(n), normalized: n }, null, 2));
+    description: 'Validate a project-v5 object (or the current source), compile it, and return runtime warnings without writing.',
+    inputSchema: { type: 'object', properties: { project: { type: 'object' } } },
+    run: async ({ project }) => {
+      const source = project ? normalizeCourseProject(project) : (await readCourse()).project;
+      const runtime = compileActiveCourse(source).runtime;
+      const n = normalizeCourse(runtime);
+      return text(JSON.stringify({ ok: true, revision: projectRevision(source), warnings: courseWarnings(n), runtime }, null, 2));
     },
   },
   {
-    name: 'set_course',
-    description: 'Replace course.json with a full new course object (features only). Validates first; writes to disk, which live-reloads the running sim. Returns warnings. This is the mutation tool — read get_course, edit, then set_course.',
-    inputSchema: { type: 'object', properties: { course: { type: 'object' } }, required: ['course'] },
-    run: async ({ course }) => {
-      if (!course || typeof course !== 'object') return text(JSON.stringify({ ok: false, error: 'course must be an object' }), true);
-      const n = normalizeCourse(course);
-      if (!n.greens.length && !n.bunkers.length && !n.ponds.length) return text(JSON.stringify({ ok: false, error: 'refusing to write an empty course (no features parsed)' }), true);
-      await writeCourse(course);
-      return text(JSON.stringify({ ok: true, warnings: courseWarnings(n), wrote: COURSE_PATH }, null, 2));
+    name: 'query_tree_assets',
+    description: 'Query authored catalog trees and approved reusable procedural trees without loading full catalogs.',
+    inputSchema: { type: 'object', properties: { biome: { type: 'string' }, source: { type: 'string', enum: ['catalog', 'procedural'] } } },
+    run: async (args) => text(JSON.stringify(await queryTreeAssets(AUTHORING_ROOT, args), null, 2)),
+  },
+  {
+    name: 'apply_mutations',
+    description: 'Apply validated semantic mutations to project v5, record one undoable history checkpoint, and compile course.json.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseRevision: { type: 'string' }, intent: { type: 'string' },
+        mutations: { type: 'array', minItems: 1, items: { type: 'object' } },
+      },
+      required: ['baseRevision', 'mutations'],
+    },
+    run: async ({ baseRevision, mutations, intent }) => {
+      const result = await applyAuthoringMutations(AUTHORING_ROOT, { baseRevision, mutations, intent });
+      return text(JSON.stringify({ ok: true, revision: result.revision, runtimeSchema: result.runtime.meta.schema }, null, 2));
     },
   },
 ];
@@ -232,4 +250,4 @@ process.stdin.on('data', (chunk) => {
 // Drain any in-flight tool calls before exiting (a piped stdin ends immediately;
 // a real MCP client keeps it open until disconnect — either way, finish replies first).
 process.stdin.on('end', () => { ended = true; maybeExit(); });
-log(`ready — course at ${COURSE_PATH}`);
+log(`ready — project source at ${PROJECT_PATH}`);

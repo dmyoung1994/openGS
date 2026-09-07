@@ -4,20 +4,26 @@ import test from 'node:test';
 
 const ROOT = new URL('../', import.meta.url);
 
-test('terrain clipmap keeps every level registered to the 0.6m authority and 4.8m snap', async () => {
+test('terrain clipmap keeps every level registered and covers the routed site', async () => {
   const source = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
   assert.match(source, /\{ half: 36, step: 0\.6, inner: 0 \}/);
   assert.match(source, /\{ half: 72, step: 1\.2, inner: 36 \}/);
   assert.match(source, /\{ half: 144, step: 2\.4, inner: 72 \}/);
-  assert.match(source, /\{ half: 384, step: 4\.8, inner: 144 \}/,
-    'outer ring must cover the full flight view while preserving the camera snap step');
+  assert.match(source, /\{ half: 768, step: 9\.6, inner: 144 \}/,
+    'same-budget outer ring must cover the full site so no filler band is visible');
   assert.match(source, /exact multiple of the authoritative 0\.6 m height grid/);
+  assert.match(source, /const boundsOverlap = level === rings\.length - 1 \? spec\.step : 0/,
+    'the real outer terrain must overlap the mountain join by one cell');
+  assert.match(source, /this\.bounds\.minX - boundsOverlap/);
 });
 
 test('isolated turf viewer uses the production WebGPU terrain material path', async () => {
   const source = await readFile(new URL('src/viewer/assets.js', ROOT), 'utf8');
-  assert.match(source, /const terrain = new Terrain\(\{[\s\S]*?renderer,\s*\n\s*\}\);/,
+  const terrain = await readFile(new URL('src/terrain/Terrain.js', ROOT), 'utf8');
+  assert.match(source, /const terrain = new Terrain\(\{[\s\S]*?finiteCanvas: true,[\s\S]*?renderer,\s*\n\s*\}\);/,
     'viewer turf patches must pass the live renderer to Terrain');
+  assert.match(terrain, /this\.heightAt\(worldX, worldZ\)[\s\S]*?_buildTurfMaterial\(origin, \{ useGeometrySurface: true \}\)/,
+    'an exposed finite boundary must use its exact CPU geometry instead of clipmap height reconstruction');
 });
 
 test('terrain low-frequency breakup reuses the baked macro channels', async () => {

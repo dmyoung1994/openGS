@@ -1,17 +1,19 @@
 import {
   Scene, PerspectiveCamera, FogExp2, Color, Vector3,
-  NeutralToneMapping, PCFSoftShadowMap,
+  NeutralToneMapping, NoToneMapping, ColorManagement, PCFShadowMap,
   Matrix4, Quaternion, Vector2,
 } from 'three';
 import { PMREMGenerator, RenderPipeline, Renderer, StandardNodeLibrary } from 'three/webgpu';
 import {
   pass, mrt, output, velocity, uniform, uv, Fn, If, float, vec2, renderOutput,
 } from 'three/tsl';
-import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { GpuPassProfiler } from '../diagnostics/GpuPassProfiler.js';
 import { CloudTemporalNode } from './CloudTemporalNode.js';
 import { golfBloom } from './GolfBloomNode.js';
 import { resettableTraa } from './ResettableTRAANode.js';
+import { godrays } from 'three/addons/tsl/display/GodraysNode.js';
+import { bilateralBlur } from 'three/addons/tsl/display/BilateralBlurNode.js';
+import { depthAwareBlend } from 'three/addons/tsl/display/depthAwareBlend.js';
 import { StrictWebGPUBackend } from './StrictWebGPUBackend.js';
 import { WeatherSky, WEATHER_SKY_WORKLOADS, cloudsAreEnabled } from './WeatherSky.js';
 import { disposeWebGPUSceneBackground } from './WebGPUResourceDisposal.js';
@@ -63,6 +65,17 @@ export const DAYLIGHT_PMREM_RADIANCE_THRESHOLD = 0.04;
 export const DAYLIGHT_PMREM_MAX_INTERVAL_MS = 15_000;
 
 const DAYLIGHT_PMREM_ATMOSPHERE_SCALES = Object.freeze([4, 4, 0.01, 1]);
+
+// Diffuse irradiance multiplier for the captured sky PMREM. `qa-sky-irradiance.mjs`
+// verified the PMREM reproduces the analytic sky's own radiance to within
+// prefiltering error (0.065397 analytic vs 0.065424 sampled at zenith), so the
+// atlas is already in the same units the sky is drawn in and the physically
+// correct diffuse multiplier is unity. The former fixed 0.34 was a renderer
+// reference calibration; it is nearly invisible under a high sun, where the
+// terrain's own analytic term supplies ~92% of turf luminance, but at a 2 degree
+// sun the PMREM is the majority of the ground's remaining light and the 2.94x
+// deficit is what drove the near-black dusk ground.
+const SKY_IRRADIANCE_INTENSITY = 1.0;
 
 function daylightPmremVector(value) {
   return {
@@ -302,7 +315,8 @@ export class SceneManager {
     this.renderer.toneMapping = NeutralToneMapping;
     this.renderer.toneMappingExposure = 1.20;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    // Native PCF honors each cascade's feather radius; PCFSoft uses a fixed kernel.
+    this.renderer.shadowMap.type = PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new Scene();
@@ -384,23 +398,21 @@ export class SceneManager {
   // final node automatically, so highlight glare is composed in linear light.
   _setupPost() {
     if (!this.environmentTier) throw new Error('SceneManager post pipeline requires a resolved environment device tier.');
-    // Weather configuration can arrive immediately after WebGPU initialization,
-    // and a later authored weather change may rebuild the atmosphere graph. Release
-    // the old graph before replacing its handles so its full-resolution MRT and
-    // temporal targets do not remain resident or overlap the next frame.
+    // Replace weather-dependent effects, retaining the shared scene pass and its
+    // MRT attachments. Weather tiers do not change scene output or velocity.
     this._cloudTemporal?.dispose();
-    this._scenePass?.dispose();
     this._traa?.dispose();
     this._bloomPass?.dispose();
-    this._fxaaPass?.textureNode?.dispose?.();
+    this._sunShaftBlur?.dispose();
+    this._sunShafts?.dispose();
     this.postProcessing?.dispose();
 
     // TRAA (temporal AA) resolves the sub-pixel shimmer of thin grass blades that
     // MSAA can't. It needs MSAA OFF and an MRT scene pass exposing color +
     // velocity (motion vectors) plus depth so it can reproject the history.
-    const scenePass = pass(this.scene, this.camera, { samples: 0 });
+    const scenePass = this._scenePass ?? pass(this.scene, this.camera, { samples: 0 });
     scenePass.name = 'Scene MRT';
-    scenePass.setMRT(mrt({ output, velocity }));
+    if (!this._scenePass) scenePass.setMRT(mrt({ output, velocity }));
     // PassNode exposes resolutionScale internally in r185. Keep this assignment
     // local to the Scene MRT: the final RenderPipeline remains the output-size
     // presentation surface, while color/velocity/depth share one source size.
@@ -453,7 +465,29 @@ export class SceneManager {
     // normals, terrain alignment, and physical burial. The former screen-space AO
     // required a second scene render for an 8% dark decal and cost almost as much as
     // the beauty pass on this hardware; it also contradicted the no-fake-AO bar.
-    const resolvedScene = aa.rgb;
+    let resolvedScene = aa.rgb;
+    const sun = this.scene.userData.environmentLighting?.sun;
+    const cameraShadows = sun && this.scene.userData.environmentLighting
+      .enableCameraShadows(this.camera, this.renderer);
+    const atmosphere = this._environmentBindings;
+    this._sunShafts = null;
+    this._sunShaftBlur = null;
+    if (sun && atmosphere) {
+      this._sunShafts = godrays(depth, this.camera, cameraShadows.lights.at(-1));
+      const economicalShafts = ['conservative', 'balanced'].includes(this.weatherSky?.workload.id);
+      const shaftScale = economicalShafts ? 0.25 : 0.5;
+      this._sunShafts.raymarchSteps.value = economicalShafts ? 24 : 48;
+      this._sunShafts.resolutionScale = shaftScale;
+      this._sunShafts.distanceAttenuation = float(0);
+      this._sunShafts.maxDensity.value = 0.08;
+      this._updateSunShaftDensity();
+      this._sunShaftBlur = bilateralBlur(this._sunShafts.getTextureNode(), null, 2, 0.025);
+      this._sunShaftBlur.resolutionScale = shaftScale;
+      resolvedScene = depthAwareBlend(aa.getTextureNode(), this._sunShaftBlur.getTextureNode(), depth, this.camera, {
+        blendColor: atmosphere.sunColor.mul(atmosphere.sunIlluminanceScale.min(1)).mul(1.5),
+        edgeRadius: 2, edgeStrength: 1,
+      }).rgb;
+    }
     const cloudTransport = cloudLayer ? Fn(() => {
       const sampleUv = uv();
       const lowSize = cloudLayer.size();
@@ -508,23 +542,21 @@ export class SceneManager {
     const bloomRgb = this._bloomPass.getTextureNode().rgb;
     const gradedRgb = rgb.add(cloudTransport ? bloomRgb.mul(cloudTransport.a) : bloomRgb);
 
-    // FXAA requires display-referred input. Own the Neutral + sRGB transform
-    // explicitly, then run one final current-frame edge cleanup after temporal AA.
-    // This catches newly exposed palm/flag/turf pixels that correctly rejected
-    // history during a fast camera move and therefore cannot yet be temporally
-    // averaged. Bloom remains upstream in linear HDR and cannot amplify this pass.
+    // Own the Neutral + sRGB transform explicitly. TRAA is already the scene's
+    // antialiasing contract; applying FXAA afterward blurred every authored
+    // surface and silhouette, including pixels that were already temporally
+    // stable. Newly exposed pixels remain current-frame sharp until TRAA settles.
     const displayRgb = renderOutput(
       gradedRgb,
       this.renderer.toneMapping,
       this.renderer.outputColorSpace,
     );
-    this._fxaaPass = fxaa(displayRgb);
 
     // RenderPipeline is the current Three.js API. The former PostProcessing alias
     // emits a warning on every startup despite using the same implementation.
     this.postProcessing = new RenderPipeline(this.renderer);
     this.postProcessing.outputColorTransform = false;
-    this.postProcessing.outputNode = this._fxaaPass;
+    this.postProcessing.outputNode = displayRgb;
     this._weatherSkyGraphRevision = (this._weatherSkyGraphRevision ?? 0) + 1;
   }
 
@@ -657,9 +689,21 @@ export class SceneManager {
     return this;
   }
 
+  _updateSunShaftDensity() {
+    const environment = this._environmentBindings;
+    if (!this._sunShafts || !environment) return;
+    const sunlight = Math.min(1, Math.max(0, environment.sunIlluminanceScale.value));
+    const lowSun = 1 - Math.min(1, Math.max(0, environment.sunDirection.value.y));
+    const haze = Math.min(10, Math.max(0, environment.atmosphere.value.x));
+    // Cascades cover kilometres, not the former 120 m footprint. Keep extinction
+    // low enough that clear weather does not become a blanket of white fog.
+    this._sunShafts.density.value = sunlight * (0.001 + lowSun * lowSun * 0.003 + haze * 0.0002);
+  }
+
   _applyEnvironmentDaylight() {
     const environment = this._environmentBindings;
     if (!environment || this._sceneDaylightRevision === environment.daylightRevision) return;
+    this._updateSunShaftDensity();
     this._sceneDaylightRevision = environment.daylightRevision;
     // Keep authored exposure responsive, but bound pathological presets before
     // Neutral: a 10–20x input otherwise drives the shoulder over the whole frame and
@@ -688,16 +732,10 @@ export class SceneManager {
     // remains seated in the same shared chromatic sky.
     this.scene.fog.density = (0.000075 + environment.atmosphere.value.x * 0.000005)
       * (0.82 + horizonWeight * 0.34);
-    // PMREM is the sky bounce, not a second sun. Keep its diffuse/specular return
-    // below the authored key so the lower, lateral sun can model terrain while
-    // the shared sky still supplies coloured open-sky detail in forest shadows.
-    // This is the same shared HDR/analytic source captured below; only its renderer-relative
-    // return is calibrated here, and it follows the authored illuminance scale.
-    const indirectStrength = Math.max(
-      Math.sqrt(Math.max(0, environment.sunIlluminanceScale.value)),
-      Math.sqrt(Math.max(0, environment.moonIlluminanceScale?.value ?? 0)) * 0.22,
-    );
-    this.scene.environmentIntensity = 0.34 * indirectStrength;
+    // PMREM pixels already contain the sky's solar, lunar and twilight envelope,
+    // so this stays a fixed unit conversion: scaling it by direct sunlight again
+    // crushes sunset bounce and erases twilight despite a visibly lit sky.
+    this.scene.environmentIntensity = SKY_IRRADIANCE_INTENSITY;
     const now = this._daylightPmremNow();
     const current = readDaylightPmremState(environment);
     const decision = resolveDaylightPmremUpdate({
@@ -744,18 +782,19 @@ export class SceneManager {
     // Capture the same analytic atmosphere used by the visible background, with
     // direct celestial discs excluded so IBL cannot create unshadowed duplicate keys.
     captureScene.backgroundNode = this.weatherSky.iblBackgroundNode;
-    const next = this._pmremGenerator.fromScene(captureScene, 0.035, 0.1, 10, { size: 64 });
+    // Preserve the environment texture identity across refreshes. Native PMREM
+    // supports rewriting its target; replacing it invalidates material bindings.
+    const next = this._pmremGenerator.fromScene(captureScene, 0.035, 0.1, 10,
+      { size: 64, renderTarget: this._daylightPmremTarget });
     // PMREM's capture Scene is intentionally ephemeral, but WebGPURenderer stores
     // its generated sky sphere outside the scene graph. End that hidden geometry's
     // GPU lifetime immediately after the synchronous cube capture.
     disposeWebGPUSceneBackground(this.renderer, captureScene);
     this.scene.environmentRotation.set(0, 0, 0);
     next.texture.name = 'analytic-celestial-pmrem';
-    const previous = this._daylightPmremTarget;
     this._daylightPmremTarget = next;
     this._daylightPmremRevision = environment.daylightRevision;
     this.scene.environment = next.texture;
-    previous?.dispose();
     this._recordDaylightPmremCapture(environment, now, reason);
     return true;
   }
@@ -897,7 +936,32 @@ export class SceneManager {
     return before?.[0] !== after?.[0] || before?.[1] !== after?.[1];
   }
 
+  async prepareScenePass() {
+    const renderer = this.renderer;
+    this._syncScenePassResolution();
+    const target = renderer.getRenderTarget(), mrt = renderer.getMRT();
+    const toneMapping = renderer.toneMapping, outputColorSpace = renderer.outputColorSpace;
+    this._preparingScenePass = true;
+    try {
+      renderer.toneMapping = NoToneMapping;
+      renderer.outputColorSpace = ColorManagement.workingColorSpace;
+      renderer.setRenderTarget(this._scenePass.renderTarget);
+      renderer.setMRT(this._scenePass.getMRT());
+      await renderer.compileAsync(this.scene, this.camera);
+    } finally {
+      renderer.toneMapping = toneMapping;
+      renderer.outputColorSpace = outputColorSpace;
+      try { renderer.setRenderTarget(target); } finally {
+        try { renderer.setMRT(mrt); } finally {
+          this._preparingScenePass = false;
+          this._applyViewport(this._readViewport());
+        }
+      }
+    }
+  }
+
   _applyViewport(viewport, { invalidate = true } = {}) {
+    if (this._preparingScenePass) return false;
     const previous = this._viewportState;
     if (previous && previous.width === viewport.width && previous.height === viewport.height
       && previous.pixelRatio === viewport.pixelRatio) return false;
@@ -949,11 +1013,16 @@ export class SceneManager {
       },
       temporal: this._traa?.readDiagnostics?.() ?? null,
       cloud: this._cloudTemporal?.readDiagnostics?.() ?? null,
-      temporalUpscale: {
+      temporalUpscale: state.internalRenderScale < 1 ? {
         enabled: false,
         mode: 'dynamic-resolution-spatial-upsample',
         reason: 'Three r185 TRAA history remains source-resolution; output-resolution temporal reconstruction is not enabled.',
         presentation: 'RenderPipeline samples the resolved internal texture at output resolution.',
+      } : {
+        enabled: false,
+        mode: 'native-resolution-temporal-resolve',
+        reason: 'Source, TRAA history, and presentation use the same native resolution.',
+        presentation: 'RenderPipeline presents the native resolved texture without spatial enlargement.',
       },
     };
   }
@@ -1014,7 +1083,7 @@ export class SceneManager {
         temporalHistory: targetSize(this._traa?._historyRenderTarget),
         temporalResolve: targetSize(this._traa?._resolveRenderTarget),
         bloom: targetSize(this._bloomPass?._target),
-        displayAntialias: targetSize(this._fxaaPass?.textureNode?.renderTarget),
+        displayAntialias: null,
       },
       renderResolution: this.readRenderResolutionDiagnostics(),
       daylightPmrem: this.readDaylightPmremDiagnostics(),
@@ -1083,6 +1152,7 @@ export class SceneManager {
     const simulationDt = this.freezeSimulation ? 0 : dt;
     if (!this.freezeSimulation) this._elapsed += dt;
     for (const fn of this._updates) fn(simulationDt, this._elapsed);
+    this.weatherSky?.updateCloudShadow(this.scene.userData.environmentLighting);
     // Advance one shared temporal phase per presented frame. Cloud ray jitter is
     // reprojected by the existing TRAA background input; freezing it at zero would
     // turn the volume into a static undersampled slice and defeat reconstruction.
@@ -1097,6 +1167,7 @@ export class SceneManager {
       this._traa.cameraJitterEnabled = true;
     }
     this.postProcessing.render();
+    this.cpuFrameMs = Math.max(0, performance.now() - now);
   }
 
   // These controls let the benchmark capture exact, adjacent completed frames.

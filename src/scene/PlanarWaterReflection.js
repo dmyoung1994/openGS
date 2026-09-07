@@ -18,6 +18,7 @@ import {
   WebGPUCoordinateSystem,
 } from 'three';
 import { WATER_REFLECTION_PROFILES } from './WaterSurface.js';
+import { yieldToRendering } from '../util/yieldToRendering.js';
 
 const PLANAR_MODES = new Set(['ultra', 'quality']);
 const KNOWN_MODES = new Set(['ultra', 'quality', 'mobile', 'analytic', 'balanced', 'battery']);
@@ -755,6 +756,41 @@ export class PlanarWaterReflection {
     } catch (error) {
       state.lastSkipReason = `surface-input-error:${error?.message || error}`;
       this._lastError = errorRecord('surface-input-failed', state.lastSkipReason);
+    }
+  }
+
+  async prepare() {
+    if (this._disposed || this._disabled) return;
+    const contract = this._readQualityContract();
+    this._setMode(contract.mode, contract.requestedMode);
+    if (!PLANAR_MODES.has(this._mode)) return;
+    const unavailable = this._strictAvailability();
+    if (unavailable) throw new Error(unavailable.message);
+    this.scene.updateMatrixWorld(true);
+    this._updateCameraCut();
+    const size = this._targetSize(this._mode, contract.renderScale);
+    for (const state of this._surfaceStates.values()) {
+      if (this._disposed) throw new Error('Reflection disposed during preparation.');
+      if (!this._isVisible(state)) continue;
+      if (!this._ensureTargets(state, size)) throw new Error(this._lastError?.message || 'Reflection target allocation failed.');
+      this._prepareMirrorCamera(surfaceLevel(state.surface));
+      const previousTarget = this.renderer.getRenderTarget();
+      const visibility = this._hideReflectionExcludedMeshes();
+      let variants;
+      try {
+        variants = this._swapVisibleReflectionMaterials();
+        this.renderer.setRenderTarget(state.targets[state.writeIndex]);
+        // Preserve the actual reflection camera, cloned MRT-free materials and
+        // target across native async node construction. No history is rendered.
+        await this.renderer.compileAsync(this.scene, this._mirrorCamera);
+      } finally {
+        try {
+          this.renderer.setRenderTarget(previousTarget);
+        } finally {
+          try { variants?.restore(); } finally { this._restoreVisibility(visibility); }
+        }
+      }
+      await yieldToRendering();
     }
   }
 

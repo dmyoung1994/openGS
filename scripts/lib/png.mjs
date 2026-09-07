@@ -38,8 +38,8 @@ export function decodePNG(bytes) {
     offset += 12 + length;
   }
   if (idat.length === 0) throw new Error('PNG has no IDAT data');
-  const raw = inflateSync(Buffer.concat(idat));
   const stride = width * channels;
+  const raw = inflateSync(Buffer.concat(idat), { maxOutputLength: (stride + 1) * height });
   if (raw.length !== (stride + 1) * height) throw new Error('Unexpected PNG scanline length');
   const pixels = Buffer.alloc(height * stride);
   let rawOffset = 0;

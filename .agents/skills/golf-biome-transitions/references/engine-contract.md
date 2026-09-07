@@ -1,8 +1,11 @@
 # Engine contract
 
-## Schema v3
+## Project v5 and compiled runtime
 
-`course.json` requires `meta.schema: 3`, a primary `biome`, and `biomeTransitions` (use `[]` to preserve current behavior).
+Author `course.project.json` with `meta.schema: 5`; its `site` owns the primary
+`biome` and `biomeTransitions` (use `[]` to preserve current behavior). The
+compiler emits the corresponding fields in `course.json` runtime schema v4 for a
+routed project, or legacy schema v3 for an unrouted practice project.
 
 ```json
 {
@@ -41,7 +44,10 @@ Terrain, grass, backdrop, environment placement, minimap, and diagnostics consum
 - `get_course`: current course plus transition count.
 - `classify_point {x,z}`: gameplay surface and biome classification.
 - `classify_biome {x,z}`: transition owner, habitat, distance, and normalized weights.
-- `validate_course {course?}`: complete normalization without writing.
-- `set_course {course}`: validates the complete course before the single write.
+- `validate_course {project?}`: complete project normalization without writing.
+- `apply_mutations {baseRevision, mutations}`: validates semantic source
+  mutations, creates one undo checkpoint, writes `course.project.json`, and
+  compiles `course.json`.
 
-The in-app creator runs the same full normalizer after an agent edit and restores the exact prior course bytes on invalid schema or transitions.
+The in-app creator and MCP server share the same authoring kernel. Invalid schema
+or transition changes fail before either source or runtime is committed.

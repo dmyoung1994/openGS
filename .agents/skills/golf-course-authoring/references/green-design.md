@@ -121,10 +121,14 @@ circle and decorating it with elevation spots.
    pinch, or offset lobe only where it changes entry, recovery, or a pin's
    effective width. A spline alone does not make an almost-round polygon
    architecturally specific.
-4. Build the primary contour with one macro primitive. In the course builder,
-   use `ridgeContours` for a spine/shoulder and `profile: "plateau"` contour
-   zones for quiet shelves. Use Gaussian zones only for broad shoulders and
-   transitions, not as the entire contour concept.
+4. Set `grade:{slopeX,slopeZ,blend}` when the inherited site bumps prevent quiet
+   pin areas; start with a modest drainage slope and a broad tie-in. Build the
+   primary contour with explicit `green.contours` records. Use
+   `{kind:"ridge",points:[...],width,height,falloff}` for a broad spine and
+   `kind:"plateau"` or `"shelf"` for quieter regions. Combine at most a few
+   purposeful forms with `"swale"` or `"drainage-channel"` exits. The legacy
+   `contour` name alone creates no height. Do not invent `ridgeContours`,
+   Gaussian zones or profile fields; see engine.md for the validated contract.
 5. Carry the landform through the collar and surrounds with a broad tie-in.
    Assign distinct short, long, left, and right outcomes before adding hazards.
 6. Verify that the primary contour is visually and physically legible. As a
@@ -167,3 +171,46 @@ Across a multi-hole course, vary orientation, size, contour family, entry condit
 - [USGA: Architectural Speed Limit](https://www.usga.org/content/usga/home-page/course-care/forethegolfer/2017/the-architectural-speed-limit-for-putting-greens.html) — coupling green speed to contour and usable hole locations.
 - [USGA: Hole Location, Location, Location](https://www.usga.org/content/usga/home-page/course-care/forethegolfer/2018/hole-location--location--location.html) — practical edge clearance, false-front awareness, and speed/slope considerations.
 - [USGA: Putting Green Construction Resources](https://www.usga.org/course-care/specialty-articles/usga-putting-green-construction.html) — smooth subgrade, drainage along maximum fall, and avoidance of water-holding depressions.
+
+## Intricate greens and live reading
+
+Use asymmetric two-wing, angled hourglass, offset boomerang, or long diagonal
+forms when they create different entries and pin problems. Give concave bays a
+reason, keep receiving lobes large enough for the intended shot, and preserve
+wide playable connections between them. Complexity is varied golf, not a
+serrated perimeter. Author 6–48 sparse controls, inspect the normalized curve
+at low oblique and overhead views, and keep alternate pins away from necks.
+
+The Green grid toggles one-metre lines with travelling pulses. Each axis moves
+with its downhill slope component; level axes remain still. Colour progresses
+continuously from teal at level through gold at 3% to coral at 6% and above.
+This is a slope display, not a predicted putt or calibrated ball speed. Verify
+quiet pin neighborhoods and breaking/straight low-speed putts with the actual
+height sampler. Keep geometry edits separate from display-only grid changes.
+
+## Protection palette
+
+Choose one primary defense and at most one supporting defense before drawing a
+green. Vary the combination across holes; do not default to flanking bunkers.
+
+- **Contour defense:** unequal wings separated by a broad spine; a safe approach
+  leaves a longer cross-contour putt. Keep an open running entry and recovery ground.
+- **Angle defense:** a diagonal or boomerang surface with sand on one side; position
+  on the preceding shot earns the long axis or a feeding shoulder. The opposite
+  side remains a genuine bailout with a different recovery problem.
+- **Depth defense:** a long waisted green, deep rear shelf and offset front hazard;
+  carry and distance control choose the tier. The waist must remain playable and
+  each receiving region must accommodate dispersion and alternate pins.
+- **Ground defense:** a false front, fallaway edge or collection hollow with dry
+  recovery. Shape this through grade/contours and surrounding landforms; a colour
+  boundary alone does not create a false front. Keep rejection slopes away from pins.
+- **Carry defense:** an explicitly requested island or water-side target with fair
+  carries, a visible hazard and real relief rules. Check current engine support
+  before promising detached geometry. Do not add water merely for visual variety.
+
+Design front, back, left and right misses individually. Tie every concavity,
+protruding nose and hazard to an approach angle, pin region or recovery decision.
+Avoid serrated outlines and mandatory penalty walls. Validate the normalized
+curve, hazard separation, a maintained entry, quiet pin neighborhoods, and both
+conservative and challenging lines from the preceding shot. Record the selected
+defense and earned advantage in the course brief.

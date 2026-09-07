@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { Noise } from '../src/util/noise.js';
 
-const source = await readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../src/scene/PlayableCourseScene.js', import.meta.url), 'utf8');
 const landformStart = source.indexOf('export function courseLandformHeight');
 const landformEnd = source.indexOf('function featureBounds', landformStart);
 assert.ok(landformStart >= 0 && landformEnd > landformStart, 'Range must expose its structural landform for physics tests');

@@ -41,9 +41,9 @@ test('terrain uses filtered multi-frequency detail and bounded close-up relief',
     'normal variance must broaden matte roughness before lighting');
   assert.match(source, /const specularAA\s*=\s*oneMinus\(normalVarianceWeight\.mul\(TURF_NORMAL_VARIANCE_SPECULAR\)\)/,
     'normal variance must reduce the unresolved highlight peak');
-  assert.match(source, /blendkit_fairway[\s\S]*?0\.75, 0\.32/,
-    'fairway albedo must keep a readable source footprint without returning raw speckle');
-  assert.match(source, /blendkit_green[\s\S]*?0\.30, 0\.40/,
+  assert.match(source, /blendkit_fairway[\s\S]*?0\.00, 0\.78/,
+    'fairway albedo must preserve the resolved Grass005 fine-blade structure without returning raw speckle');
+  assert.match(source, /blendkit_green[\s\S]*?0\.15, 0\.60/,
     'green albedo must preserve its dedicated compact bentgrass source at review distance');
   assert.match(source, /const canopyHeightGradient\s*=\s*vec3\(dFdx\(tFar\.x\), 0\.0, dFdy\(tFar\.x\)\)/,
     'maintained turf must derive broad grazing relief from the authored packed height channel');

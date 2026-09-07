@@ -51,7 +51,7 @@ const temporalChangedPixelBudgetPct = Number(arg('temporal-changed-pct', 0.2));
 const performanceTier = String(arg('performance-tier', 'high-desktop-webgpu'));
 const expectedDeviceTier = String(arg('expected-device-tier', 'high'));
 const presentationQualityMode = 'quality';
-const presentationRenderScale = 0.90;
+const presentationRenderScale = 1.0;
 const allowPerformanceMiss = argv.includes('--allow-performance-miss');
 const requestedScenario = arg('scenario', null);
 const saveTemporalCaptures = argv.includes('--save-temporal-captures');
@@ -627,8 +627,12 @@ async function collectScenario(scenario) {
     if (labels.has('Golf Bloom [ Fused 2D ]')) {
       pushError(`${scenario.id} production stack unexpectedly restored the removed duplicate glare pass`);
     }
-    for (const label of requiredGrassComputePasses) {
-      if (!labels.has(label)) pushError(`${scenario.id} GPU timing missing required grass compute pass: ${label}`);
+    // A stationary view retains the exact compacted population and updates its
+    // current/previous wind packet. Moving/changed views still run every stage.
+    if (!labels.has('Grass retained wind motion')) {
+      for (const label of requiredGrassComputePasses) {
+        if (!labels.has(label)) pushError(`${scenario.id} GPU timing missing required grass compute pass: ${label}`);
+      }
     }
     for (const label of requiredTreeBeautyComputePasses) {
       if (!labels.has(label)) pushError(`${scenario.id} GPU timing missing required tree-beauty compute pass: ${label}`);

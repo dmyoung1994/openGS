@@ -6,7 +6,7 @@ import {
 } from '../src/course/featureGeometry.js';
 
 const [rangeSource, waterSource, terrainSource] = await Promise.all([
-  readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/scene/PlayableCourseScene.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/scene/WaterSurface.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/terrain/Terrain.js', import.meta.url), 'utf8'),
 ]);

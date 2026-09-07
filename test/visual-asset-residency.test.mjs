@@ -21,8 +21,8 @@ test('visual manifest is versioned, conservative, and resolves authored LOD vari
   const manifest = validateVisualAssetManifest(manifestRaw);
   assert.equal(manifest.version, 1);
   assert.deepEqual(Object.keys(manifest.variants), VISUAL_ASSET_VARIANTS);
-  assert.equal(manifest.files.length, 38);
-  assert.equal(manifest.assets.length, 35);
+  assert.equal(manifest.files.length, 48);
+  assert.equal(manifest.assets.length, 39);
   assert.ok(manifest.files.every((file) => /^\/assets\//.test(file.url)));
   assert.ok(manifest.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
   assert.ok(manifest.files.every((file) => file.memoryBytes >= file.bytes));
@@ -45,6 +45,17 @@ test('visual manifest is versioned, conservative, and resolves authored LOD vari
   assert.equal(qualityTree.variant.lod.level, 0);
   assert.equal(heroTree.variant.lod.family, 'polyhaven-tree-small-02-hero');
   assert.equal(heroTree.file.url, '/assets/trees/tree_small_02_hero_lod0.glb');
+  const islandTree = quality.entries.find((entry) => entry.assetId === 'tree-island-02-geometry');
+  assert.equal(islandTree.variant.lod.level, 1);
+  assert.equal(islandTree.file.url, '/assets/trees/island_tree_02_lod1.glb');
+  for (const assetId of [
+    'forest-floor-03-color-roughness', 'forest-floor-03-normal-height-ao',
+  ]) {
+    const forestFloor = quality.entries.find((entry) => entry.assetId === assetId);
+    assert.ok(forestFloor);
+    assert.equal(forestFloor.file.dimensions.width, 2048);
+    assert.equal(forestFloor.file.dimensions.height, 2048);
+  }
   for (const assetId of ['coast-sand-albedo', 'coast-sand-normal']) {
     const coastMap = critical.entries.find((entry) => entry.assetId === assetId);
     assert.equal(coastMap.required, true);
@@ -67,6 +78,16 @@ test('visual manifest is versioned, conservative, and resolves authored LOD vari
   assert.equal(flagstickWood.file.url, '/assets/materials/flagstick/premium_walnut_albedo_1k.png');
   assert.equal(flagstickWood.file.sha256, '98029f83b7a0559e6eee1c37542ca5e85cb94f23a144d64c308c41502998fab7');
   assert.deepEqual(flagstickWood.file.dimensions, { width: 1024, height: 1024 });
+});
+
+test('pine-floor bytes are verified only when the active page composition requires them', async () => {
+  const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+  assert.match(source, /course\?\.groundCover !== 'pine-needle-litter'\) return Object\.freeze\(\[\]\)/,
+    'range and creator-canvas turf routes must not cold-load Pineglass litter');
+  assert.match(source, /PINE_FLOOR_VISUAL_ASSET_IDS\.map[\s\S]*?visualAssetResidency\.verifyFile/,
+    'a pine course must hash both packed bindings before Terrain can present them');
+  assert.match(source, /const initialCourse = courseForCurrentScene\(authoredInitialCourse\);\s*await verifyCourseVisualAssets\(initialCourse\)/,
+    'page-scene composition must be resolved before conditional material verification');
 });
 
 test('manifest validation fails closed for unknown keys and malformed hashes', () => {
@@ -203,6 +224,36 @@ test('a changed response rejects and remains failed instead of falling back', as
   const failed = residency.snapshot().fileStates.find((state) => state.fileId === 'near');
   assert.equal(failed.state, 'failed');
   assert.equal(residency.snapshot('critical').requiredReady, false);
+});
+
+test('verification reuses HTTP caching without trusting bytes from an older manifest', async () => {
+  const manifest = await fixtureManifest();
+  const oldBytes = new Uint8Array([1, 2, 3, 4]);
+  const updatedBytes = new Uint8Array([4, 3, 2, 1]);
+  const file = manifest.fileById.get('near');
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, arrayBuffer: async () => oldBytes.buffer };
+  };
+  const original = VisualAssetResidency.fromManifest(manifest, { fetchImpl });
+  await original.verifyFile('near');
+  assert.equal(calls[0].options.cache, 'default', 'preloaded bytes must not be unconditionally re-downloaded');
+  assert.equal(calls[0].url, file.url);
+
+  // Same ID/URL/size, different expected content: never carry a verification
+  // result across manifest versions, even if the browser still has old bytes.
+  const updatedFile = Object.freeze({ ...file, sha256: await sha256Bytes(updatedBytes) });
+  const updatedManifest = {
+    ...manifest,
+    files: manifest.files.map((entry) => entry.id === file.id ? updatedFile : entry),
+    fileById: new Map(manifest.fileById).set(file.id, updatedFile),
+  };
+  const updated = VisualAssetResidency.fromManifest(updatedManifest, { fetchImpl });
+  await assert.rejects(updated.verifyFile('near'), { code: 'VISUAL_ASSET_HASH_MISMATCH' });
+  assert.equal(updated.snapshot().files.verified, 0);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].options.cache, 'default');
 });
 
 test('native-style fetch is invoked without the residency object as receiver', async () => {

@@ -104,6 +104,35 @@ function fixture(mode = 'quality', rendererOptions = {}, { environment = null } 
   };
 }
 
+test('preparation compiles exact reflection state and restores it on success and failure', async () => {
+  for (const reject of [false, true]) {
+    const f = fixture();
+    const original = f.reflectedMesh.material;
+    const oldTarget = { name: 'screen-owner' };
+    f.renderer.target = oldTarget;
+    let compiledMaterial;
+    f.renderer.compileAsync = async (scene, camera) => {
+      assert.equal(scene, f.scene);
+      assert.equal(camera, f.pass._mirrorCamera);
+      assert.notEqual(f.renderer.target, oldTarget);
+      assert.equal(f.mesh.visible, false);
+      compiledMaterial = f.reflectedMesh.material;
+      assert.notEqual(compiledMaterial, original);
+      assert.equal(compiledMaterial.mrtNode, null);
+      await Promise.resolve();
+      if (reject) throw new Error('compile rejected');
+    };
+    if (reject) await assert.rejects(f.pass.prepare(), /compile rejected/);
+    else await f.pass.prepare();
+    assert.equal(f.renderer.target, oldTarget);
+    assert.equal(f.reflectedMesh.material, original);
+    assert.equal(f.mesh.visible, true);
+    assert.equal(f.renderer.renderCount, 0);
+    assert.equal(f.pass._reflectionMaterialVariant(original), compiledMaterial);
+    f.pass.dispose();
+  }
+});
+
 test('mobile and analytic contracts allocate no reflection targets', () => {
   const mobile = fixture('mobile');
   assert.equal(mobile.pass.update(), 0);
@@ -154,12 +183,14 @@ test('quality pass uses quarter resolution, hides water, and honors cadence', ()
   assert.equal(surface.input.depthAvailable, true);
   assert.equal(surface.input.currentValid, true);
   assert.equal(surface.input.depthTexture.isDepthTexture, true);
-  assert.equal(pass.update(), 0, 'quarter-resolution Quality updates every two frames');
+  assert.equal(pass.update(), 0, 'quarter-resolution Quality reuses history between captures');
+  assert.equal(renderer.renderCount, 1);
+  assert.equal(pass.update(), 0, 'Quality keeps the same history for a third presented frame');
   assert.equal(renderer.renderCount, 1);
   assert.equal(pass.update(), 1);
   assert.equal(renderer.renderCount, 2);
   assert.equal(renderer.lastReflectionMaterial, firstReflectionMaterial, 'cached variant is reused on the next capture');
-  assert.equal(pass.surfaceDiagnostics(surface).skippedCount, 1);
+  assert.equal(pass.surfaceDiagnostics(surface).skippedCount, 2);
   assert.equal(surface.mesh.visible, true, 'water visibility is restored after capture');
   pass.dispose();
 });

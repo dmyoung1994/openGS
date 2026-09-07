@@ -37,4 +37,10 @@ export class CourseHistoryStore {
     }
     return snapshot;
   }
+
+  async saveHistory(ledger) {
+    const snapshot = ledger.snapshot();
+    await atomicJsonCheckpoint(this.historyPath, snapshot.state);
+    return snapshot;
+  }
 }

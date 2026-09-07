@@ -1,8 +1,9 @@
 import {
-  DataTexture, RGBAFormat, HalfFloatType, LinearFilter,
+  DataTexture, DataArrayTexture, RGBAFormat, HalfFloatType, LinearFilter,
   ClampToEdgeWrapping, DataUtils,
 } from 'three';
 import { Noise } from '../util/noise.js';
+import { compileRouteCorridor, routeCorridorSignedDistance } from '../course/RouteGeometry.js';
 
 // Baked SIGNED DISTANCE FIELD of the course's turf zones.
 //
@@ -23,12 +24,9 @@ import { Noise } from '../util/noise.js';
 // texture fetch makes that O(1) no matter how big the course gets, which matters far
 // more for the course-builder direction than shaving a few noise evaluations.
 //
-// CHANNELS (metres, POSITIVE INSIDE the zone):
-//   R  corridor  — distance inside the fairway edge. The rough band falls out for
-//                  free as (R + corridor.rough), so it needs no channel of its own.
-//   G  greens    — distance inside the nearest green. Fringe = (G + fringeW).
-//   B  sand      — distance inside the nearest bunker.
-//   A  tee       — distance inside the tee box.
+// PRIMARY CHANNELS (metres, POSITIVE INSIDE): R fairway, G green, B sand, A tee.
+// AUXILIARY CHANNELS: R per-route rough, G per-green fringe. The auxiliary field is
+// required because a shared site can vary rough and collar widths per hole.
 //
 // Stored as RGBA16F: half floats are linearly filterable in WebGPU without requesting
 // any optional feature, and 8-bit can't work here — the rough band sits 26 m from the
@@ -46,10 +44,18 @@ function boxSD(px, pz, hx, z0, z1) {
 }
 
 export function buildZoneMap(zones, bounds) {
+  return createZoneMapTextures(bakeZoneMap(zones, bounds));
+}
+
+// CPU-only rasterization; workers transfer these exact authored samples back.
+export function bakeZoneMap(zones, bounds) {
   const { minX, maxX, minZ, maxZ } = bounds;
   const w = Math.max(2, Math.round((maxX - minX) * TEXELS_PER_M));
   const h = Math.max(2, Math.round((maxZ - minZ) * TEXELS_PER_M));
-  const data = new Uint16Array(w * h * 4);
+  const layerLength = w * h * 4;
+  const layerData = new Uint16Array(layerLength * 3);
+  const data = layerData.subarray(0, layerLength);
+  const auxData = layerData.subarray(layerLength, layerLength * 2);
   const greens = zones.greens || [];
   const sands = zones.sands || [];
   const waters = zones.waters || [];
@@ -61,7 +67,10 @@ export function buildZoneMap(zones, bounds) {
   const greenEntries = greens.map((feature) => compileFeature(feature));
   const sandEntries = sands.map((feature) => compileFeature(feature));
   const waterEntries = waters.map((feature) => compileFeature(feature));
-  const tee = zones.tee;
+  const forestFloorEntries = (zones.forestFloors ?? []).map((feature) => compileFeature(feature));
+  const teeEntries = (zones.tees ?? []).map((feature) => compileFeature(feature));
+  const legacyTee = zones.tee ?? null;
+  const routeEntries = (zones.routes ?? []).map((route) => compileRouteCorridor(route));
   // Water remains outside the four turf shader channels, but this companion SDF
   // keeps minimap and diagnostics on the same authored outline as the pond mesh.
   // Keep the CPU copy for minimap/diagnostic classification, but expose the same
@@ -72,7 +81,7 @@ export function buildZoneMap(zones, bounds) {
   const water = new Float32Array(w * h);
   const potOuter = new Float32Array(w * h);
   const potOuterData = new Uint16Array(w * h);
-  const waterData = new Uint16Array(w * h * 4);
+  const waterData = layerData.subarray(layerLength * 2);
   const bankNoise = new Noise(0x6b616e6b);
 
   for (let j = 0; j < h; j++) {
@@ -86,16 +95,31 @@ export function buildZoneMap(zones, bounds) {
       const dwx = wx;
       const dwz = wz;
 
-      // Corridor: half-width grows down-range, exactly as the analytic path had it.
-      const half = zones.corridor.c0 + (-dwz) * zones.corridor.k;
-      const corridor = half - Math.abs(dwx);
+      // Shared-site routes are finite swept centerlines. Legacy schema-v3 courses
+      // retain their exact origin-aligned analytic corridor.
+      let corridor = -Infinity;
+      let rough = -Infinity;
+      if (routeEntries.length) {
+        for (const route of routeEntries) {
+          const distance = routeCorridorSignedDistance(route, dwx, dwz);
+          corridor = Math.max(corridor, distance);
+          rough = Math.max(rough, distance + route.rough);
+        }
+      } else {
+        const half = zones.corridor.c0 + (-dwz) * zones.corridor.k;
+        corridor = half - Math.abs(dwx);
+        rough = corridor + zones.corridor.rough;
+      }
 
       // Nearest green / bunker: max of (r - distance) picks the one we're deepest in,
       // and outside everything it degrades to the distance to the closest edge.
       let green = -Infinity;
+      let fringe = -Infinity;
       for (const entry of greenEntries) {
         if (canImproveNearest(green, entry.bounds, dwx, dwz)) {
-          green = Math.max(green, compiledSignedDistance(entry, dwx, dwz));
+          const distance = compiledSignedDistance(entry, dwx, dwz);
+          green = Math.max(green, distance);
+          fringe = Math.max(fringe, distance + (entry.feature.fringeWidth ?? zones.fringeW));
         }
       }
       let sand = -Infinity;
@@ -116,11 +140,22 @@ export function buildZoneMap(zones, bounds) {
         }
       }
       if (green === -Infinity) green = -1e3;
+      if (fringe === -Infinity) fringe = -1e3;
       if (sand === -Infinity) sand = -1e3;
       if (potOuterSD === -Infinity) potOuterSD = -1e3;
       if (waterSD === -Infinity) waterSD = -1e3;
+      let forestFloorSD = -Infinity;
+      for (const entry of forestFloorEntries) {
+        if (canImproveNearest(forestFloorSD, entry.bounds, dwx, dwz)) {
+          forestFloorSD = Math.max(forestFloorSD, compiledSignedDistance(entry, dwx, dwz));
+        }
+      }
+      if (forestFloorSD === -Infinity) forestFloorSD = -1e3;
 
-      const teeSD = tee ? boxSD(dwx, dwz, tee.x, tee.z0, tee.z1) : -1e3;
+      let teeSD = -Infinity;
+      for (const entry of teeEntries) teeSD = Math.max(teeSD, compiledSignedDistance(entry, dwx, dwz));
+      if (legacyTee) teeSD = Math.max(teeSD, boxSD(dwx, dwz, legacyTee.x, legacyTee.z0, legacyTee.z1));
+      if (teeSD === -Infinity) teeSD = -1e3;
 
       // Clamped to a band that comfortably covers every boundary offset in use
       // (the widest is the 26 m rough band) while keeping half-float precision high.
@@ -129,6 +164,10 @@ export function buildZoneMap(zones, bounds) {
       data[k + 1] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, green)));
       data[k + 2] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, sand)));
       data[k + 3] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, teeSD)));
+      auxData[k] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, rough)));
+      auxData[k + 1] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, fringe)));
+      auxData[k + 2] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, forestFloorSD)));
+      auxData[k + 3] = DataUtils.toHalfFloat(0);
       water[j * w + i] = waterSD;
       potOuter[j * w + i] = potOuterSD;
       potOuterData[j * w + i] = DataUtils.toHalfFloat(Math.max(-60, Math.min(60, potOuterSD)));
@@ -149,6 +188,20 @@ export function buildZoneMap(zones, bounds) {
     }
   }
 
+  return { width: w, height: h, layerData, data, auxData, water, waterData, potOuter, potOuterData,
+    bounds, texelsPerM: TEXELS_PER_M };
+}
+
+export function createZoneMapTextures(packed) {
+  const { data, auxData, waterData, width: w, height: h } = packed;
+  const arrayTexture = new DataArrayTexture(packed.layerData, w, h, 3);
+  arrayTexture.name = 'terrain-zone-sdf-array';
+  arrayTexture.format = RGBAFormat;
+  arrayTexture.type = HalfFloatType;
+  arrayTexture.minFilter = arrayTexture.magFilter = LinearFilter;
+  arrayTexture.wrapS = arrayTexture.wrapT = ClampToEdgeWrapping;
+  arrayTexture.generateMipmaps = false;
+  arrayTexture.needsUpdate = true;
   const tex = new DataTexture(data, w, h, RGBAFormat, HalfFloatType);
   tex.name = 'terrain-zone-sdf';
   tex.minFilter = tex.magFilter = LinearFilter;   // linear is the whole point — see above
@@ -163,18 +216,23 @@ export function buildZoneMap(zones, bounds) {
   waterTexture.generateMipmaps = false;
   waterTexture.needsUpdate = true;
 
+  const auxTexture = new DataTexture(auxData, w, h, RGBAFormat, HalfFloatType);
+  auxTexture.name = 'terrain-zone-aux-sdf';
+  auxTexture.minFilter = auxTexture.magFilter = LinearFilter;
+  auxTexture.wrapS = auxTexture.wrapT = ClampToEdgeWrapping;
+  auxTexture.generateMipmaps = false;
+  auxTexture.needsUpdate = true;
+
   return {
-    texture: tex, waterTexture, width: w, height: h,
-    data, water, waterData, potOuter, potOuterData,
-    bounds, texelsPerM: TEXELS_PER_M,
+    ...packed, arrayTexture, texture: tex, auxTexture, waterTexture,
   };
 }
 
 function featureBounds(feature) {
-  let minX = feature.x - feature.r;
-  let maxX = feature.x + feature.r;
-  let minZ = feature.z - feature.r;
-  let maxZ = feature.z + feature.r;
+  let minX = Number.isFinite(feature.r) ? feature.x - feature.r : Infinity;
+  let maxX = Number.isFinite(feature.r) ? feature.x + feature.r : -Infinity;
+  let minZ = Number.isFinite(feature.r) ? feature.z - feature.r : Infinity;
+  let maxZ = Number.isFinite(feature.r) ? feature.z + feature.r : -Infinity;
   for (const point of feature.shape || []) {
     minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
     minZ = Math.min(minZ, point.z); maxZ = Math.max(maxZ, point.z);
@@ -234,11 +292,13 @@ export function zoneAt(map, i, j, zones) {
   const g = DataUtils.fromHalfFloat(map.data[k + 1]);
   const s = DataUtils.fromHalfFloat(map.data[k + 2]);
   const t = DataUtils.fromHalfFloat(map.data[k + 3]);
+  const rough = map.auxData ? DataUtils.fromHalfFloat(map.auxData[k]) : f + zones.corridor.rough;
+  const fringe = map.auxData ? DataUtils.fromHalfFloat(map.auxData[k + 1]) : g + zones.fringeW;
   if (t > 0) return 'tee';
   if (s > 0) return 'sand';
   if (g > 0) return 'green';
-  if (g + zones.fringeW > 0) return 'fringe';
+  if (fringe > 0) return 'fringe';
   if (f > 0) return 'fairway';
-  if (f + zones.corridor.rough > 0) return 'rough';
+  if (rough > 0) return 'rough';
   return 'deepRough';
 }

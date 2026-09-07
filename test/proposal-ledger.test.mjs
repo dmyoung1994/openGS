@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { normalizeCourseProject, projectRevision } from '../src/course/CourseProject.js';
-import { ProposalLedger } from '../src/course/ProposalLedger.js';
+import { emptyState, ProposalLedger } from '../src/course/ProposalLedger.js';
 
 const project = normalizeCourseProject(JSON.parse(await readFile(new URL('../course.project.json', import.meta.url), 'utf8')));
 
@@ -38,4 +38,30 @@ test('card revisions branch without changing sibling cards', () => {
   ledger.branchItem('agent-proposal-1', 'move-green', { id: 'move-green-natural', rationale: 'Quieter contour edge.', mutation: { ...item.mutation, value: replacement } });
   assert.equal(ledger.state.proposals[0].items[0].branches.length, 1);
   assert.equal(ledger.state.proposals[0].items[1].branches.length, 0);
+});
+
+test('a direct live project turn becomes one reversible checkpoint instead of desynchronizing history', () => {
+  const ledger = new ProposalLedger({ project, state: emptyState() });
+  const beforeRevision = projectRevision(ledger.project);
+  const liveProject = structuredClone(project);
+  liveProject.meta.name = 'Live-built three-hole course';
+  liveProject.meta.notes = 'Authored through the persistent WebGPU editor.';
+
+  const recorded = ledger.recordExternalProjectChange({
+    id: 'course-live-history-test',
+    summary: 'Live build: create the routed course',
+    title: 'Live course build checkpoint',
+    rationale: 'One reversible direct workspace turn.',
+    threadId: 'thread-live-history-test',
+    project: liveProject,
+  });
+
+  assert.ok(recorded);
+  assert.notEqual(projectRevision(ledger.project), beforeRevision);
+  assert.equal(ledger.state.proposals.at(-1).items[0].status, 'applied');
+  assert.equal(ledger.state.history.at(-1).externalProjectCheckpoint, true);
+  ledger.undo();
+  assert.equal(projectRevision(ledger.project), beforeRevision);
+  ledger.redo();
+  assert.equal(ledger.project.meta.name, 'Live-built three-hole course');
 });

@@ -5,6 +5,32 @@ import test from 'node:test';
 const ROOT = new URL('../', import.meta.url);
 const panel = await readFile(new URL('src/ui/MetricsPanel.js', ROOT), 'utf8');
 const main = await readFile(new URL('src/main.js', ROOT), 'utf8');
+const shot = await readFile(new URL('scripts/shot.mjs', ROOT), 'utf8');
+
+test('canonical shot harness activates the authored Creator scene before posing and can profile live frames', () => {
+  assert.match(shot, /const authoredCourse = game && has\('authored-course'\)/);
+  assert.match(shot, /--authored-course is only valid on \/creator\.html/);
+  assert.match(shot, /showAuthoredCreatorCourse/);
+  assert.match(shot, /treeSourceCount/);
+  assert.match(shot, /const liveGpuCapture = game && has\('gpu-live'\)/);
+  assert.match(shot, /liveProductionFrames: true/);
+  assert.match(shot, /evaluator\.waitForFrames\(frameCount \+ 2\)/);
+  assert.match(shot, /const benchmarkPresentationMode/);
+  assert.match(shot, /benchmark-presentation-lock/);
+  assert.match(shot, /settled >= 8/);
+  assert.match(shot, /assignment\.slice\(flag\.length \+ 1\)/,
+    'camera and benchmark flags must accept --name=value as well as --name value');
+  assert.match(shot, /terrain\.heightAt\(position\[0\], position\[2\]\) \+ cameraLift/);
+  assert.match(shot, /const targetHoleId/);
+  assert.match(shot, /window\.golf\.selectHole\(holeId\)/);
+  assert.match(shot, /activeHoleId/);
+  assert.match(shot, /evaluatorCamera: window\.golf\?\.evaluatorCamera\?\.getState/);
+  assert.match(shot, /evaluatorCamera\.movePose/);
+  assert.match(shot, /page\.metrics\(\)/);
+  assert.match(shot, /taskDurationMsPerFrame/);
+  assert.match(shot, /activeGpu: summarize/);
+  assert.match(shot, /Performance sentinel changed during capture/);
+});
 
 test('shot presentation has explicit address, flight, and results states', () => {
   assert.match(panel, /data-shot-view="address"/);
@@ -16,13 +42,15 @@ test('shot presentation has explicit address, flight, and results states', () =>
   assert.match(main, /panel\.showAddress\(\)/);
 });
 
-test('results hold for ten seconds and a new hit always launches from the tee', () => {
+test('results hold for ten seconds; Play retains the lie while Practice resets to the tee', () => {
   assert.match(main, /const RESULT_HOLD_MS = 10_000/);
   assert.match(main, /setTimeout\(\(\) => \{[\s\S]*?\}, RESULT_HOLD_MS\)/);
   const hit = main.slice(main.indexOf('function hit('), main.indexOf('// The course builder'));
   assert.match(hit, /clearTimeout\(_resetTimer\)/);
   assert.match(hit, /director\.phase === 'result' \|\| director\.phase === 'return'/);
-  assert.match(hit, /toAddress\(\);[\s\S]*?ball\.launch\(params\)/);
+  assert.match(hit, /toAddress\(\);[\s\S]*?ball\.launch\(worldParams\)/);
+  assert.match(main, /if \(fromTee \|\| range\?\.sceneKind !== 'play'\) ball\.placeAt\(tee\.x, tee\.z\)/);
+  assert.match(main, /range\?\.sceneKind === 'play' \? ball\.position/);
 });
 
 test('live telemetry freezes impact ball speed and swaps height for total after landing', () => {
@@ -60,6 +88,9 @@ test('launch inputs live behind a separate accessible Lab control', () => {
 test('glass styling remains sparse, adaptive, responsive, and motion-safe', () => {
   assert.match(panel, /backdrop-filter: blur\(12px\) saturate\(1\.24\) brightness\(\.90\)/);
   assert.match(panel, /--shot-glass-top: rgba\(255,255,255,\.105\)/);
+  assert.match(panel, /grid-template-columns: minmax\(330px,3fr\) minmax\(0,8fr\)/);
+  assert.match(panel, /\.gs-result-rule \{ display: none; \}/);
+  assert.doesNotMatch(panel, /min-height: 238px/);
   assert.match(panel, /@media \(max-width: 620px\)/);
   assert.match(panel, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(panel, /@media \(prefers-reduced-transparency: reduce\), \(forced-colors: active\)/);

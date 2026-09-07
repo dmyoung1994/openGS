@@ -138,7 +138,8 @@ test('dynamic-resolution interfaces and r185 source-scale hook remain explicit',
   assert.match(sceneSource, /get renderingPaused\(\) \{ return this\._renderingPaused; \}/,
     'presentation pacing must distinguish paused diagnostic stepping from frozen simulation');
   assert.match(sceneSource, /scenePass\._resolutionScale/);
-  assert.match(sceneSource, /temporalUpscale: \{/);
+  assert.match(sceneSource, /temporalUpscale: state\.internalRenderScale < 1 \? \{/);
+  assert.match(sceneSource, /mode: 'native-resolution-temporal-resolve'/);
   assert.match(traaSource, /needsInternalDepthCopy/);
   assert.match(traaSource, /renderer\.copyTextureToTexture\(this\.depthNode\.value/);
 });

@@ -1,14 +1,21 @@
-import { normalizeCourse } from './course.js';
+import { DEFAULT_SURFACE_MATERIALS, normalizeGreenContours, normalizeGreenGrade, normalizeCourse, normalizeSurfaceMaterials } from './course.js';
+import {
+  polylineDistance, polylineLength, polylinesCross, transformLocalPoint, transformTee,
+} from './RouteGeometry.js';
+import {
+  legacyTreeDefinition, normalizeTreeDefinition, normalizeTreePlacement,
+} from '../trees/TreeDefinition.js';
+import { polygonArea, polygonSelfIntersects } from './featureGeometry.js';
 
-export const COURSE_PROJECT_SCHEMA_VERSION = 4;
+export const COURSE_PROJECT_SCHEMA_VERSION = 5;
 export const COURSE_PROJECT_MODES = Object.freeze(['realistic', 'spectacle', 'hybrid']);
 export const COURSE_PROJECT_KINDS = Object.freeze(['hole', 'practice']);
 export const LAND_FORM_KINDS = Object.freeze([
   'ridge', 'bowl', 'shelf', 'saddle', 'shoulder', 'drainage-channel', 'plateau', 'swale',
 ]);
-export const SYNTHETIC_TREE_ARCHETYPES = Object.freeze(['broadleaf-oak', 'live-oak', 'maple', 'monterey-cypress', 'douglas-fir', 'loblolly-pine']);
 
 const ID_RE = /^[a-z][a-z0-9-]{2,63}$/;
+const ROUTED_LOCAL_BOUNDS = Object.freeze({ minX: -500, maxX: 500, minZ: -800, maxZ: 120 });
 const ENTITY_ARRAYS = Object.freeze({
   hole: ['holes'],
   tee: ['holes', 'tees'],
@@ -16,7 +23,9 @@ const ENTITY_ARRAYS = Object.freeze({
   bunker: ['holes', 'bunkers'],
   pond: ['holes', 'ponds'],
   landform: ['holes', 'landforms'],
-  'synthetic-tree': ['site', 'environment', 'syntheticTrees'],
+  'forest-floor-area': ['site', 'forestFloorAreas'],
+  'procedural-tree-definition': ['site', 'environment', 'proceduralTreeDefinitions'],
+  'procedural-tree': ['site', 'environment', 'proceduralTrees'],
 });
 
 export class CourseProjectSchemaError extends Error {
@@ -27,13 +36,13 @@ export class CourseProjectSchemaError extends Error {
 }
 
 export function migrateCourseV3(rawCourse, { projectId = 'local-course-project' } = {}) {
-  const runtime = normalizeCourse(rawCourse);
+  const migratedCourse = { ...structuredClone(rawCourse), environment: migrateLegacyTreeEnvironment(structuredClone(rawCourse.environment)) };
+  const runtime = normalizeCourse(migratedCourse);
   const name = runtime.meta.name;
   const holeId = runtime.greens.length > 1 ? 'practice-range' : 'hole-1';
   const farthest = runtime.greens.reduce((best, green) => (green.yards > best.yards ? green : best), runtime.greens[0]);
   const end = farthest ? { x: farthest.x, z: farthest.z } : { x: 0, z: runtime.bounds.minZ + 20 };
-  const environment = structuredClone(rawCourse.environment);
-  environment.syntheticTrees ??= [];
+  const environment = migrateLegacyTreeEnvironment(structuredClone(rawCourse.environment));
   const project = {
     meta: {
       id: projectId,
@@ -48,6 +57,9 @@ export function migrateCourseV3(rawCourse, { projectId = 'local-course-project' 
       catalogVersion: rawCourse.catalogVersion,
       placementAlgorithmVersion: rawCourse.placementAlgorithmVersion,
       biome: rawCourse.biome,
+      groundCover: rawCourse.groundCover ?? 'turf',
+      forestFloorAreas: structuredClone(rawCourse.forestFloorAreas ?? []),
+      surfaceMaterials: structuredClone(rawCourse.surfaceMaterials ?? DEFAULT_SURFACE_MATERIALS),
       biomeTransitions: structuredClone(rawCourse.biomeTransitions),
       environmentSeed: rawCourse.environmentSeed,
       atmosphere: defaultAtmosphere(),
@@ -83,53 +95,199 @@ export function migrateCourseV3(rawCourse, { projectId = 'local-course-project' 
   return normalizeCourseProject(project);
 }
 
+export function migrateCourseProjectV4(rawProject) {
+  const project = structuredClone(rawProject);
+  if (project?.meta?.schema !== 4) fail('v4 migration requires project.meta.schema 4');
+  project.meta.schema = COURSE_PROJECT_SCHEMA_VERSION;
+  project.site.environment = migrateLegacyTreeEnvironment(project.site.environment);
+  return normalizeCourseProject(project);
+}
+
+function migrateLegacyTreeEnvironment(rawEnvironment) {
+  const environment = structuredClone(rawEnvironment ?? {});
+  const definitions = [...(environment.proceduralTreeDefinitions ?? [])];
+  const placements = [...(environment.proceduralTrees ?? [])];
+  const known = new Set(definitions.map(({ id }) => id));
+  const addDefinition = (archetype) => {
+    const definition = legacyTreeDefinition(archetype);
+    if (!known.has(definition.id)) { definitions.push(definition); known.add(definition.id); }
+    return definition.id;
+  };
+  for (const tree of environment.syntheticTrees ?? []) {
+    placements.push({
+      id: tree.id, definitionId: addDefinition(tree.archetype), x: tree.x, z: tree.z,
+      rotationY: tree.rotationY, scale: tree.scale, seed: tree.seed,
+      age: tree.age, health: tree.health, windExposure: tree.windExposure,
+    });
+  }
+  const aliases = environment.foliageAliases ?? (environment.foliageAlias ? [environment.foliageAlias] : []);
+  for (const alias of aliases) {
+    const archetype = alias.includes('douglas-fir') ? 'douglas-fir'
+      : alias.includes('loblolly') ? 'loblolly-pine'
+        : alias.includes('monterey') || alias.includes('italian-cypress') ? 'monterey-cypress'
+          : alias.includes('sugar-maple') ? 'maple'
+            : alias.includes('live-oak') ? 'live-oak'
+              : alias.includes('oak') ? 'broadleaf-oak' : null;
+    if (!archetype) fail(`cannot migrate unknown foliage alias "${alias}"`);
+    addDefinition(archetype);
+  }
+  delete environment.syntheticTrees; delete environment.foliageAlias; delete environment.foliageAliases;
+  environment.proceduralTreeDefinitions = definitions;
+  environment.proceduralTrees = placements;
+  return environment;
+}
+
 export function normalizeCourseProject(raw) {
   const project = cloneObject(raw, 'project');
   exactKeys(project, ['meta', 'activeHoleId', 'site', 'holes'], 'project');
   project.meta = validateMeta(project.meta);
   project.site = validateSite(project.site);
   const ids = new Set([project.meta.id]);
-  project.site.environment.syntheticTrees = project.site.environment.syntheticTrees.map((tree, index) => {
-    const path = `project.site.environment.syntheticTrees[${index}]`; const value = validateSyntheticTree(tree, path, project.site.bounds);
+  project.site.environment.proceduralTreeDefinitions = project.site.environment.proceduralTreeDefinitions.map((definition, index) => {
+    const path = `project.site.environment.proceduralTreeDefinitions[${index}]`; let value;
+    try { value = normalizeTreeDefinition(definition, path); } catch (error) { fail(String(error.message).replace(/^Procedural tree schema invalid:\s*/, '')); }
+    uniqueId(value.id, `${path}.id`, ids); return value;
+  });
+  const definitionIds = new Set(project.site.environment.proceduralTreeDefinitions.map(({ id }) => id));
+  project.site.environment.proceduralTrees = project.site.environment.proceduralTrees.map((tree, index) => {
+    const path = `project.site.environment.proceduralTrees[${index}]`; let value;
+    try { value = normalizeTreePlacement(tree, definitionIds, project.site.bounds, path); } catch (error) { fail(String(error.message).replace(/^Procedural tree schema invalid:\s*/, '')); }
     uniqueId(value.id, `${path}.id`, ids); return value;
   });
   project.holes = array(project.holes, 'project.holes');
   if (project.holes.length < 1 || project.holes.length > 18) fail('project.holes must contain 1..18 holes');
-  project.holes = project.holes.map((hole, index) => validateHole(hole, index, project.site.bounds, ids));
+  const holeBounds = project.site.routing === undefined ? project.site.bounds : ROUTED_LOCAL_BOUNDS;
+  project.holes = project.holes.map((hole, index) => validateHole(hole, index, holeBounds, ids));
+  if (!project.site.routing && project.holes.some(hole => hole.route.fairwayStartMeters > 0)) fail('fairwayStartMeters requires shared-site routing');
+  const holeNumbers = project.holes.map((hole) => hole.number).sort((a, b) => a - b);
+  if (new Set(holeNumbers).size !== holeNumbers.length || holeNumbers.some((number, index) => number !== index + 1)) fail('project.holes must use unique contiguous numbers beginning at 1');
   identifier(project.activeHoleId, 'project.activeHoleId');
   if (!project.holes.some((hole) => hole.id === project.activeHoleId)) fail('project.activeHoleId must reference a hole');
+  if (project.site.routing !== undefined) project.site.routing = validateSiteRouting(project.site.routing, project.holes, project.site.bounds, ids);
   return deepFreeze(project);
 }
 
 export function compileActiveCourse(rawProject, { catalogAssetIds } = {}) {
   const project = normalizeCourseProject(rawProject);
   const hole = project.holes.find((candidate) => candidate.id === project.activeHoleId);
-  const tee = hole.tees[0];
+  const shared = project.site.routing ? compileSharedSite(project) : null;
+  const tee = shared?.activeTee ?? hole.tees[0];
   const runtime = {
     meta: {
       name: `${project.meta.name} — ${hole.name}`,
       mode: project.meta.mode === 'realistic' ? 'realistic' : 'realistic',
-      schema: 3,
+      schema: shared ? 4 : 3,
       ...(project.meta.notes ? { notes: project.meta.notes } : {}),
     },
     catalogVersion: project.site.catalogVersion,
     placementAlgorithmVersion: project.site.placementAlgorithmVersion,
     biome: project.site.biome,
+    groundCover: project.site.groundCover,
+    forestFloorAreas: structuredClone(project.site.forestFloorAreas),
+    surfaceMaterials: structuredClone(project.site.surfaceMaterials),
     biomeTransitions: structuredClone(project.site.biomeTransitions),
     environmentSeed: project.site.environmentSeed,
     bounds: structuredClone(project.site.bounds),
-    tee: stripId(tee, ['label']),
+    tee: stripId(tee, ['label', 'shape', 'holeId']),
     corridor: structuredClone(hole.runtime.corridor),
-    fringeW: hole.fringeWidth,
-    greens: hole.greens.map((entry) => stripId(entry)),
-    bunkers: hole.bunkers.map((entry) => stripId(entry)),
-    ponds: hole.ponds.map((entry) => stripId(entry)),
-    landforms: hole.landforms.map((entry) => stripId(entry)),
+    fringeW: shared?.fringeWidth ?? hole.fringeWidth,
+    greens: shared?.greens ?? hole.greens.map((entry) => stripId(entry)),
+    bunkers: shared?.bunkers ?? hole.bunkers.map((entry) => stripId(entry)),
+    ponds: shared?.ponds ?? hole.ponds.map((entry) => stripId(entry)),
+    landforms: shared?.landforms ?? hole.landforms.map((entry) => stripId(entry)),
+    ...(shared ? { routing: shared.routing } : {}),
     atmosphere: structuredClone(project.site.atmosphere),
     environment: structuredClone(project.site.environment),
   };
   const normalized = normalizeCourse(runtime, { ...(catalogAssetIds ? { catalogAssetIds } : {}) });
   return { project, hole, runtime, normalized };
+}
+
+function compileSharedSite(project) {
+  const placementByHole = new Map(project.site.routing.placements.map((placement) => [placement.holeId, placement]));
+  const greens = [];
+  const bunkers = [];
+  const ponds = [];
+  const landforms = [];
+  const routingHoles = [];
+  let activeTee = null;
+  for (const hole of [...project.holes].sort((a, b) => a.number - b.number)) {
+    const placement = placementByHole.get(hole.id);
+    const routePoints = hole.route.points.map((point) => transformLocalPoint(point, placement));
+    const tees = hole.tees.map((tee) => ({ holeId: hole.id, ...transformTee(tee, placement) }));
+    const greenStart = greens.length;
+    greens.push(...hole.greens.map((feature) => transformFeature(feature, placement)));
+    const bunkerStart = bunkers.length;
+    bunkers.push(...hole.bunkers.map((feature) => transformFeature(feature, placement)));
+    const pondStart = ponds.length;
+    ponds.push(...hole.ponds.map((feature) => transformFeature(feature, placement)));
+    const landformStart = landforms.length;
+    landforms.push(...hole.landforms.map((landform) => ({
+      ...stripId(landform),
+      points: landform.points.map((point) => transformLocalPoint(point, placement)),
+    })));
+    if (hole.id === project.activeHoleId) activeTee = tees[0];
+    routingHoles.push({
+      holeId: hole.id,
+      name: hole.name,
+      number: hole.number,
+      par: hole.par,
+      route: {
+        points: routePoints,
+        c0: hole.runtime.corridor.c0,
+        k: hole.runtime.corridor.k,
+        rough: hole.runtime.corridor.rough,
+        ...(hole.route.fairwayStartMeters === undefined ? {} : {fairwayStartMeters: hole.route.fairwayStartMeters}),
+      },
+      tees,
+      greenStart,
+      greenCount: hole.greens.length,
+      bunkerStart,
+      bunkerCount: hole.bunkers.length,
+      pondStart,
+      pondCount: hole.ponds.length,
+      landformStart,
+      landformCount: hole.landforms.length,
+      fringeWidth: hole.fringeWidth,
+    });
+  }
+  const transitions = project.site.routing.transitions.map((transition) => ({
+    id: transition.id,
+    fromHoleId: transition.fromHoleId,
+    toHoleId: transition.toHoleId,
+    points: structuredClone(transition.points),
+    width: transition.width,
+  }));
+  return {
+    activeTee,
+    fringeWidth: project.holes.find((hole) => hole.id === project.activeHoleId).fringeWidth,
+    greens,
+    bunkers,
+    ponds,
+    landforms,
+    routing: {
+      activeHoleId: project.activeHoleId,
+      clubhouse: structuredClone(project.site.routing.clubhouse),
+      holes: routingHoles,
+      transitions,
+    },
+  };
+}
+
+function transformFeature(feature, placement) {
+  const point = transformLocalPoint(feature, placement);
+  const gradeDirection = feature.grade ? transformLocalPoint({x:feature.grade.slopeX,z:feature.grade.slopeZ}, {...placement,origin:{x:0,z:0}}) : null;
+  return {
+    ...stripId(feature),
+    x: point.x,
+    z: point.z,
+    ...(feature.shape ? { shape: feature.shape.map((entry) => transformLocalPoint(entry, placement)) } : {}),
+    ...(feature.pin ? { pin: transformLocalPoint(feature.pin, placement) } : {}),
+    ...(gradeDirection ? { grade:{...feature.grade,slopeX:gradeDirection.x,slopeZ:gradeDirection.z} } : {}),
+    ...(feature.contours ? { contours: feature.contours.map(contour => ({
+      ...contour, points: contour.points.map(point => transformLocalPoint(point, placement)),
+    })) } : {}),
+  };
 }
 
 export function projectRevision(project) {
@@ -139,7 +297,7 @@ export function projectRevision(project) {
     hash ^= source.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
-  return `v4-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+  return `v5-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 export function applyCourseMutations(rawProject, mutations) {
@@ -154,6 +312,7 @@ export function findCourseEntity(rawProject, entityType, entityId) {
   if (entityType === 'project') return project.meta.id === entityId ? project : null;
   if (entityType === 'site') return entityId === 'site' ? project.site : null;
   if (entityType === 'atmosphere') return entityId === 'atmosphere' ? project.site.atmosphere : null;
+  if (entityType === 'surface-materials') return entityId === 'surface-materials' ? project.site.surfaceMaterials : null;
   if (entityType === 'route') {
     return project.holes.map((hole) => hole.route).find((route) => route.id === entityId) ?? null;
   }
@@ -173,7 +332,9 @@ export function findCourseEntity(rawProject, entityType, entityId) {
       const found = hole[descriptor[1]].find((entry) => entry.id === entityId);
       if (found) return found;
     }
-  } else return project.site.environment.syntheticTrees.find((entry) => entry.id === entityId) ?? null;
+  } else if (descriptor[0] === 'site') {
+    return project.site[descriptor[1]].find((entry) => entry.id === entityId) ?? null;
+  } else return project.site.environment[descriptor[2]].find((entry) => entry.id === entityId) ?? null;
   return null;
 }
 
@@ -182,7 +343,7 @@ function applyMutation(project, rawMutation, index) {
   const mutation = cloneObject(rawMutation, path);
   exactKeys(mutation, ['op', 'entityType', 'entityId', 'parentId', 'value'], path, ['parentId', 'value']);
   oneOf(mutation.op, ['create', 'replace', 'delete'], `${path}.op`);
-  oneOf(mutation.entityType, ['project', 'site', 'atmosphere', 'hole', 'route', 'tee', 'green', 'bunker', 'pond', 'landform', 'environment-object', 'synthetic-tree'], `${path}.entityType`);
+  oneOf(mutation.entityType, ['project', 'site', 'atmosphere', 'surface-materials', 'hole', 'route', 'tee', 'green', 'bunker', 'pond', 'landform', 'forest-floor-area', 'environment-object', 'procedural-tree-definition', 'procedural-tree'], `${path}.entityType`);
   identifier(mutation.entityId, `${path}.entityId`);
   const located = locateMutable(project, mutation.entityType, mutation.entityId, mutation.parentId);
   if (mutation.op === 'create') {
@@ -218,8 +379,14 @@ function locateMutable(project, type, id, parentId) {
     if (id !== 'atmosphere') fail('atmosphere mutation must target "atmosphere"');
     return { singleton: true, parent: project.site, key: 'atmosphere' };
   }
+  if (type === 'surface-materials') {
+    if (id !== 'surface-materials') fail('surface-materials mutation must target "surface-materials"');
+    return { singleton: true, parent: project.site, key: 'surfaceMaterials' };
+  }
   if (type === 'hole') return locateArray(project.holes, id);
-  if (type === 'synthetic-tree') return locateArray(project.site.environment.syntheticTrees, id);
+  if (type === 'forest-floor-area') return locateArray(project.site.forestFloorAreas, id);
+  if (type === 'procedural-tree-definition') return locateArray(project.site.environment.proceduralTreeDefinitions, id);
+  if (type === 'procedural-tree') return locateArray(project.site.environment.proceduralTrees, id);
   if (type === 'environment-object') {
     const collectionName = mutationCollectionForValue(project.site.environment, id, parentId);
     return locateArray(project.site.environment[collectionName], id);
@@ -252,7 +419,7 @@ function validateMeta(raw) {
 
 function validateSite(raw) {
   const site = cloneObject(raw, 'project.site');
-  exactKeys(site, ['bounds', 'catalogVersion', 'placementAlgorithmVersion', 'biome', 'biomeTransitions', 'environmentSeed', 'atmosphere', 'environment'], 'project.site');
+  exactKeys(site, ['bounds', 'catalogVersion', 'placementAlgorithmVersion', 'biome', 'groundCover', 'forestFloorAreas', 'surfaceMaterials', 'biomeTransitions', 'environmentSeed', 'atmosphere', 'environment', 'routing'], 'project.site', ['forestFloorAreas', 'surfaceMaterials', 'routing']);
   const bounds = cloneObject(site.bounds, 'project.site.bounds');
   exactKeys(bounds, ['minX', 'maxX', 'minZ', 'maxZ'], 'project.site.bounds');
   for (const key of ['minX', 'maxX', 'minZ', 'maxZ']) finite(bounds[key], `project.site.bounds.${key}`);
@@ -260,13 +427,160 @@ function validateSite(raw) {
   if (!Number.isInteger(site.catalogVersion) || site.catalogVersion < 1) fail('project.site.catalogVersion must be a positive integer');
   if (!Number.isInteger(site.placementAlgorithmVersion) || site.placementAlgorithmVersion < 1) fail('project.site.placementAlgorithmVersion must be a positive integer');
   nonEmpty(site.biome, 'project.site.biome');
+  oneOf(site.groundCover, ['turf', 'pine-needle-litter', 'native-grasslands'], 'project.site.groundCover');
+  site.forestFloorAreas = array(site.forestFloorAreas ?? [], 'project.site.forestFloorAreas')
+    .map((area, index) => validateForestFloorArea(area, index, bounds));
+  if (new Set(site.forestFloorAreas.map(({ id }) => id)).size !== site.forestFloorAreas.length) {
+    fail('project.site.forestFloorAreas must use unique IDs');
+  }
+  try {
+    site.surfaceMaterials = normalizeSurfaceMaterials(site.surfaceMaterials, { path: 'project.site.surfaceMaterials' });
+  } catch (error) {
+    fail(String(error?.message || error).replace(/^Course schema invalid:\s*/, ''));
+  }
   array(site.biomeTransitions, 'project.site.biomeTransitions');
   uint32(site.environmentSeed, 'project.site.environmentSeed');
   site.atmosphere = validateAtmosphere(site.atmosphere);
   site.environment = cloneObject(site.environment, 'project.site.environment');
-  site.environment.syntheticTrees ??= [];
-  array(site.environment.syntheticTrees, 'project.site.environment.syntheticTrees');
+  site.environment.proceduralTreeDefinitions ??= [];
+  site.environment.proceduralTrees ??= [];
+  array(site.environment.proceduralTreeDefinitions, 'project.site.environment.proceduralTreeDefinitions');
+  array(site.environment.proceduralTrees, 'project.site.environment.proceduralTrees');
   return site;
+}
+
+function validateForestFloorArea(raw, index, bounds) {
+  const path = `project.site.forestFloorAreas[${index}]`;
+  const area = cloneObject(raw, path);
+  exactKeys(area, ['id', 'shape'], path);
+  identifier(area.id, `${path}.id`);
+  area.shape = array(area.shape, `${path}.shape`)
+    .map((point, pointIndex) => validatePoint(point, `${path}.shape[${pointIndex}]`, bounds));
+  if (area.shape.length < 4 || area.shape.length > 32) fail(`${path}.shape must contain 4..32 control points`);
+  if (polygonSelfIntersects(area.shape)) fail(`${path}.shape must not self-intersect`);
+  if (Math.abs(polygonArea(area.shape)) < 20) fail(`${path}.shape must enclose at least 20 square metres`);
+  return area;
+}
+
+function validateSiteRouting(raw, holes, bounds, ids) {
+  const path = 'project.site.routing';
+  const routing = cloneObject(raw, path);
+  exactKeys(routing, ['clubhouse', 'placements', 'transitions'], path);
+  routing.clubhouse = validatePoint(cloneObject(routing.clubhouse, `${path}.clubhouse`), `${path}.clubhouse`, bounds);
+  routing.placements = array(routing.placements, `${path}.placements`).map((rawPlacement, index) => {
+    const placementPath = `${path}.placements[${index}]`;
+    const placement = cloneObject(rawPlacement, placementPath);
+    exactKeys(placement, ['holeId', 'origin', 'bearingDegrees'], placementPath);
+    identifier(placement.holeId, `${placementPath}.holeId`);
+    placement.origin = validatePoint(cloneObject(placement.origin, `${placementPath}.origin`), `${placementPath}.origin`, bounds);
+    bounded(placement.bearingDegrees, 0, 359.999999, `${placementPath}.bearingDegrees`);
+    return placement;
+  });
+  if (routing.placements.length !== holes.length) fail(`${path}.placements must contain exactly one record per hole`);
+  const placementByHole = new Map();
+  for (const placement of routing.placements) {
+    if (placementByHole.has(placement.holeId)) fail(`${path}.placements duplicates hole "${placement.holeId}"`);
+    if (!holes.some((hole) => hole.id === placement.holeId)) fail(`${path}.placements references unknown hole "${placement.holeId}"`);
+    placementByHole.set(placement.holeId, placement);
+  }
+  for (const hole of holes) {
+    const placement = placementByHole.get(hole.id);
+    if (!placement) fail(`${path}.placements is missing hole "${hole.id}"`);
+    const authoredPoints = [
+      ...hole.route.points,
+      ...hole.tees.flatMap((tee) => [{ x: tee.x - tee.boxHalfX, z: tee.z0 }, { x: tee.x + tee.boxHalfX, z: tee.z1 }]),
+      ...hole.greens.flatMap((feature) => [feature, ...(feature.shape ?? []), ...(feature.pin ? [feature.pin] : [])]),
+      ...hole.bunkers.flatMap((feature) => [feature, ...(feature.shape ?? [])]),
+      ...hole.ponds.flatMap((feature) => [feature, ...(feature.shape ?? [])]),
+      ...hole.landforms.flatMap((landform) => landform.points),
+    ];
+    for (const point of authoredPoints) {
+      const transformed = transformLocalPoint(point, placement);
+      if (!insideBounds(transformed, bounds)) fail(`${path} places ${hole.id} outside project.site.bounds`);
+    }
+  }
+  const ordered = [...holes].sort((a, b) => a.number - b.number);
+  routing.transitions = array(routing.transitions, `${path}.transitions`).map((rawTransition, index) => {
+    const transitionPath = `${path}.transitions[${index}]`;
+    const transition = cloneObject(rawTransition, transitionPath);
+    exactKeys(transition, ['id', 'fromHoleId', 'toHoleId', 'points', 'width'], transitionPath);
+    uniqueId(transition.id, `${transitionPath}.id`, ids);
+    identifier(transition.fromHoleId, `${transitionPath}.fromHoleId`);
+    identifier(transition.toHoleId, `${transitionPath}.toHoleId`);
+    bounded(transition.width, 1, 8, `${transitionPath}.width`);
+    transition.points = array(transition.points, `${transitionPath}.points`).map((point, pointIndex) => validatePoint(point, `${transitionPath}.points[${pointIndex}]`, bounds));
+    if (transition.points.length < 2 || transition.points.length > 16) fail(`${transitionPath}.points must contain 2..16 points`);
+    if (polylineLength(transition.points) > 240) fail(`${transitionPath} is too long to read as an intentional green-to-tee transition`);
+    return transition;
+  });
+  if (routing.transitions.length !== Math.max(0, ordered.length - 1)) fail(`${path}.transitions must connect each consecutive pair of holes exactly once`);
+  for (let index = 0; index < ordered.length - 1; index += 1) {
+    const from = ordered[index];
+    const to = ordered[index + 1];
+    const transition = routing.transitions.find((entry) => entry.fromHoleId === from.id && entry.toHoleId === to.id);
+    if (!transition) fail(`${path}.transitions must connect ${from.id} to ${to.id}`);
+    const fromPlacement = placementByHole.get(from.id);
+    const toPlacement = placementByHole.get(to.id);
+    const green = transformLocalPoint(from.greens[0], fromPlacement);
+    const tee = transformLocalPoint(to.tees[0], toPlacement);
+    if (Math.hypot(transition.points[0].x - green.x, transition.points[0].z - green.z) > 30) fail(`${path}.${transition.id} must begin within 30 m of ${from.id}'s primary green`);
+    if (Math.hypot(transition.points.at(-1).x - tee.x, transition.points.at(-1).z - tee.z) > 30) fail(`${path}.${transition.id} must end within 30 m of ${to.id}'s primary tee`);
+    validateAdjacentTeeSafety(from, to, fromPlacement, toPlacement, path);
+  }
+  const routed = ordered.map((hole) => {
+    const points = hole.route.points.map((point) => transformLocalPoint(point, placementByHole.get(hole.id)));
+    const length = polylineLength(points);
+    return {
+      hole, points,
+      envelope: hole.runtime.corridor.c0 + length * hole.runtime.corridor.k + hole.runtime.corridor.rough,
+    };
+  });
+  for (let first = 0; first < routed.length; first += 1) {
+    for (let second = first + 1; second < routed.length; second += 1) {
+      const a = routed[first]; const b = routed[second];
+      if (polylinesCross(a.points, b.points)) fail(`${path} routes for ${a.hole.id} and ${b.hole.id} cross`);
+      // Consecutive holes intentionally approach through a connector. Non-neighboring
+      // playing envelopes need a real forest buffer, not merely non-crossing lines.
+      if (second > first + 1) {
+        const clearance = polylineDistance(a.points, b.points) - a.envelope - b.envelope;
+        if (clearance < 12) fail(`${path} routes for ${a.hole.id} and ${b.hole.id} need at least 12 m between rough envelopes`);
+      }
+    }
+  }
+  return routing;
+}
+
+// A walk can connect neighboring holes without putting the next tee inside the
+// normal long-shot dispersion beyond the previous green. Adjacent holes are
+// intentionally exempt from whole-envelope separation, so this is the safety
+// invariant that prevents that exemption from hiding a green-to-tee conflict.
+function validateAdjacentTeeSafety(from, to, fromPlacement, toPlacement, path) {
+  const green = transformLocalPoint(from.greens[0], fromPlacement);
+  const tee = transformLocalPoint(to.tees[0], toPlacement);
+  const dx = tee.x - green.x;
+  const dz = tee.z - green.z;
+  const centerDistance = Math.hypot(dx, dz);
+  const greenRadius = from.greens[0].r;
+  const minimumCenterDistance = greenRadius + 32;
+  if (centerDistance < minimumCenterDistance) {
+    fail(`${path} places ${to.id}'s primary tee only ${centerDistance.toFixed(1)} m from ${from.id}'s primary green; adjacent tees require at least ${minimumCenterDistance.toFixed(1)} m center clearance`);
+  }
+
+  const route = from.route.points.map((point) => transformLocalPoint(point, fromPlacement));
+  let tangent = null;
+  for (let index = route.length - 1; index > 0 && !tangent; index -= 1) {
+    const tx = route[index].x - route[index - 1].x;
+    const tz = route[index].z - route[index - 1].z;
+    const length = Math.hypot(tx, tz);
+    if (length > 1e-9) tangent = { x: tx / length, z: tz / length };
+  }
+  if (!tangent) return;
+  const forward = dx * tangent.x + dz * tangent.z;
+  const lateral = Math.abs(dx * tangent.z - dz * tangent.x);
+  const missConeHalfWidth = greenRadius + 18 + Math.max(0, forward) * 0.22;
+  if (forward >= -12 && forward <= 95 && lateral < missConeHalfWidth) {
+    fail(`${path} places ${to.id}'s primary tee inside ${from.id}'s long-shot miss cone (${forward.toFixed(1)} m forward, ${lateral.toFixed(1)} m lateral)`);
+  }
 }
 
 function validateAtmosphere(raw) {
@@ -306,17 +620,28 @@ function validateHole(raw, index, bounds, ids) {
   bounded(corridor.k, 0, 1, `${path}.runtime.corridor.k`);
   bounded(corridor.rough, 0, 100, `${path}.runtime.corridor.rough`);
   hole.runtime.corridor = corridor;
+  const primaryTee = hole.tees[0];
+  const primaryGreen = hole.kind === 'practice'
+    ? hole.greens.reduce((farthest, green) => green.yards > farthest.yards ? green : farthest, hole.greens[0])
+    : hole.greens[0];
+  if (Math.hypot(hole.route.points[0].x - primaryTee.x, hole.route.points[0].z - primaryTee.z) > 12) fail(`${path}.route must begin within 12 m of its primary tee`);
+  if (Math.hypot(hole.route.points.at(-1).x - primaryGreen.x, hole.route.points.at(-1).z - primaryGreen.z) > 35) fail(`${path}.route must end within 35 m of its primary green`);
+  const routeYards = polylineLength(hole.route.points) / 0.9144;
+  if (Math.abs(routeYards - primaryGreen.yards) > Math.max(18, primaryGreen.yards * 0.12)) fail(`${path}.route arc length must agree with its primary green yardage`);
   return hole;
 }
 
 function validateRoute(raw, path, bounds, ids) {
   const route = cloneObject(raw, path);
-  exactKeys(route, ['id', 'points', 'fairwayHalfWidth', 'roughWidth'], path);
+  exactKeys(route, ['id', 'points', 'fairwayHalfWidth', 'roughWidth', 'fairwayStartMeters'], path, ['fairwayStartMeters']);
   uniqueId(route.id, `${path}.id`, ids);
   route.points = array(route.points, `${path}.points`).map((point, index) => validatePoint(point, `${path}.points[${index}]`, bounds));
   if (route.points.length < 2 || route.points.length > 24) fail(`${path}.points must contain 2..24 points`);
+  for (let index = 1; index < route.points.length; index += 1) if (Math.hypot(route.points[index].x - route.points[index - 1].x, route.points[index].z - route.points[index - 1].z) < 1) fail(`${path}.points contains a degenerate segment`);
+  if (polylineSelfIntersects(route.points)) fail(`${path}.points must not self-intersect`);
   bounded(route.fairwayHalfWidth, 4, 80, `${path}.fairwayHalfWidth`);
   bounded(route.roughWidth, 0, 80, `${path}.roughWidth`);
+  if (route.fairwayStartMeters !== undefined) bounded(route.fairwayStartMeters, 0, polylineLength(route.points), `${path}.fairwayStartMeters`);
   return route;
 }
 
@@ -331,10 +656,17 @@ function validateTee(raw, path, bounds) {
 
 function validateFeature(raw, path, bounds, kind) {
   const value = cloneObject(raw, path);
-  const allowed = kind === 'green' ? ['id', 'yards', 'x', 'z', 'r', 'contour', 'shape']
+  const allowed = kind === 'green' ? ['id', 'yards', 'x', 'z', 'r', 'contour', 'shape', 'pin', 'contours', 'grade']
     : kind === 'bunker' ? ['id', 'x', 'z', 'r', 'depth', 'pot', 'shape']
       : ['id', 'x', 'z', 'r', 'depth', 'shape'];
-  exactKeys(value, allowed, path, ['shape']); validatePoint(value, path, bounds); bounded(value.r, kind === 'green' ? 3 : 1.5, 80, `${path}.r`);
+  exactKeys(value, allowed, path, ['shape', 'pin', 'contours', 'grade']); validatePoint(value, path, bounds); bounded(value.r, kind === 'green' ? 3 : 1.5, 80, `${path}.r`);
+  if (value.pin !== undefined) {
+    value.pin = cloneObject(value.pin, `${path}.pin`);
+    exactKeys(value.pin, ['x', 'z'], `${path}.pin`);
+    value.pin = validatePoint(value.pin, `${path}.pin`, bounds);
+  }
+  if (kind === 'green' && value.grade !== undefined) value.grade = normalizeGreenGrade(value.grade, `${path}.grade`);
+  if (kind === 'green' && value.contours !== undefined) value.contours = normalizeGreenContours(value.contours, bounds, `${path}.contours`);
   if (kind === 'green') { finite(value.yards, `${path}.yards`); nonEmpty(value.contour, `${path}.contour`); }
   else { bounded(value.depth, 0.3, 6, `${path}.depth`); if (kind === 'bunker' && typeof value.pot !== 'boolean') fail(`${path}.pot must be boolean`); }
   if (value.shape !== undefined) value.shape = array(value.shape, `${path}.shape`).map((point, index) => validatePoint(point, `${path}.shape[${index}]`, bounds));
@@ -351,15 +683,6 @@ function validateLandform(raw, path, bounds) {
   return value;
 }
 
-function validateSyntheticTree(raw, path, bounds) {
-  const value = cloneObject(raw, path);
-  exactKeys(value, ['id', 'archetype', 'x', 'z', 'rotationY', 'scale', 'seed', 'age', 'health', 'windExposure'], path);
-  oneOf(value.archetype, SYNTHETIC_TREE_ARCHETYPES, `${path}.archetype`); validatePoint(value, path, bounds);
-  bounded(value.rotationY, -Math.PI * 4, Math.PI * 4, `${path}.rotationY`); bounded(value.scale, 0.36, 2.5, `${path}.scale`);
-  uint32(value.seed, `${path}.seed`); bounded(value.age, 0, 1, `${path}.age`); bounded(value.health, 0.25, 1, `${path}.health`); bounded(value.windExposure, 0, 1, `${path}.windExposure`);
-  return value;
-}
-
 function validateIdArray(raw, path, ids, validate) {
   return array(raw, path).map((entry, index) => {
     const itemPath = `${path}[${index}]`; const value = cloneObject(entry, itemPath);
@@ -369,8 +692,26 @@ function validateIdArray(raw, path, ids, validate) {
 
 function validatePoint(raw, path, bounds) {
   finite(raw.x, `${path}.x`); finite(raw.z, `${path}.z`);
-  if (raw.x < bounds.minX || raw.x > bounds.maxX || raw.z < bounds.minZ || raw.z > bounds.maxZ) fail(`${path} is outside site bounds`);
+  if (!insideBounds(raw, bounds)) fail(`${path} is outside site bounds`);
   return raw;
+}
+
+function insideBounds(point, bounds) {
+  return point.x >= bounds.minX && point.x <= bounds.maxX && point.z >= bounds.minZ && point.z <= bounds.maxZ;
+}
+
+function polylineSelfIntersects(points) {
+  for (let first = 0; first < points.length - 1; first += 1) {
+    for (let second = first + 2; second < points.length - 1; second += 1) {
+      if (segmentsCross(points[first], points[first + 1], points[second], points[second + 1])) return true;
+    }
+  }
+  return false;
+}
+
+function segmentsCross(a, b, c, d) {
+  const orientation = (p, q, r) => Math.sign((q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x));
+  return orientation(a, b, c) * orientation(a, b, d) < 0 && orientation(c, d, a) * orientation(c, d, b) < 0;
 }
 
 function defaultAtmosphere() {

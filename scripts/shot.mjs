@@ -9,12 +9,15 @@
 // black shader. That failure mode cost a whole debugging session.
 //
 // So: launch our own Chrome with backgrounding disabled, wait for frames the app has
-// ACTUALLY drawn (viewer.frames), and screenshot the canvas. The window is parked
-// off-screen rather than headless because headless Chrome's WebGPU support is the thing
-// most likely to differ from what ships.
+// ACTUALLY drawn (viewer.frames), and screenshot the canvas. Keep headful Chrome
+// fitted to the display; normal captures resize naturally, while explicit --size
+// benchmarks preserve their pixel dimensions with a scaled presentation.
 //
 //   node scripts/shot.mjs --asset "turf: rough" --out shots/rough.png
 //   node scripts/shot.mjs --asset "turf: fairway" --cam 1.5,12,26 --look 0,0,0
+//   node scripts/shot.mjs --game --route=/creator.html --authored-course \
+//     --presentation-mode=balanced --presentation-scale=1 --gpu-live \
+//     --cam=-300,0,308 --terrain-lift=2.1 --look=-291,0,59 --look-terrain-lift=1
 //
 // In viewer mode, --cam/--look are metres relative to the asset focus point (see
 // setCamera in src/viewer/main.js). In --game mode they are exact world-space metres
@@ -27,6 +30,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deflateSync } from 'node:zlib';
 import { decodePNG } from './lib/png.mjs';
+import { fitBrowserViewport } from './lib/browser-viewport.mjs';
 
 // Minimal RGB PNG writer, for the flicker heatmap.
 function encodePNG(W, H, rgb) {
@@ -52,10 +56,15 @@ function encodePNG(W, H, rgb) {
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => {
-  const i = argv.indexOf(`--${name}`);
-  return i === -1 ? dflt : (argv[i + 1]?.startsWith('--') ? true : argv[i + 1]);
+  const flag = `--${name}`;
+  const i = argv.indexOf(flag);
+  if (i !== -1) return argv[i + 1]?.startsWith('--') ? true : argv[i + 1];
+  const assignment = argv.find((value) => value.startsWith(`${flag}=`));
+  return assignment === undefined ? dflt : assignment.slice(flag.length + 1);
 };
-const has = (name) => argv.includes(`--${name}`);
+const has = (name) => argv.includes(`--${name}`)
+  || argv.some((value) => value.startsWith(`--${name}=`));
+const qaReportPath = typeof arg('qa-report') === 'string' ? resolve(arg('qa-report')) : null;
 
 const asset = arg('asset', 'turf: fairway');
 const out = resolve(arg('out', `shots/${asset.replace(/\W+/g, '-')}.png`));
@@ -69,6 +78,13 @@ const chrome = process.env.CHROME || '/Applications/Google Chrome.app/Contents/M
 // sky aliases in a way one silhouetted against more ground does not. So an artifact seen
 // at the patch edge has to be re-checked on the real course before it is believed.
 const game = has('game');
+const authoredCourse = game && has('authored-course');
+const liveGpuCapture = game && has('gpu-live');
+const targetHoleId = game && typeof arg('hole') === 'string' ? String(arg('hole')) : null;
+const benchmarkPresentationMode = game && typeof arg('presentation-mode') === 'string'
+  ? String(arg('presentation-mode'))
+  : null;
+const benchmarkPresentationScale = Number(arg('presentation-scale', 1));
 const waitRest = game && has('wait-rest');
 const shotTransitionSequence = game && has('shot-transition-seq');
 const shotFlightSequence = game && has('shot-flight-seq');
@@ -82,16 +98,31 @@ const parseTriple = (value, name) => {
 };
 const cameraPose = parseTriple(arg('cam'), 'cam');
 const cameraLook = parseTriple(arg('look'), 'look');
+const terrainCameraLift = arg('terrain-lift') === undefined ? null : Number(arg('terrain-lift'));
+const terrainLookLift = arg('look-terrain-lift') === undefined ? null : Number(arg('look-terrain-lift'));
+const terrainCameraLiftTo = arg('terrain-lift-to') === undefined ? null : Number(arg('terrain-lift-to'));
+const terrainLookLiftTo = arg('look-terrain-lift-to') === undefined ? null : Number(arg('look-terrain-lift-to'));
+if ((terrainCameraLift !== null && !Number.isFinite(terrainCameraLift))
+    || (terrainLookLift !== null && !Number.isFinite(terrainLookLift))
+    || (terrainCameraLiftTo !== null && !Number.isFinite(terrainCameraLiftTo))
+    || (terrainLookLiftTo !== null && !Number.isFinite(terrainLookLiftTo))) {
+  throw new Error('Terrain-relative lift arguments must be finite.');
+}
 const cameraSweepPose = parseTriple(arg('cam-to'), 'cam-to');
 const cameraSweepLook = parseTriple(arg('look-to'), 'look-to');
 if ((cameraSweepPose || cameraSweepLook) && (!cameraPose || !cameraLook || !cameraSweepPose || !cameraSweepLook)) {
   throw new Error('A camera sweep requires --cam, --look, --cam-to, and --look-to together.');
+}
+if (cameraSweepPose && ((terrainCameraLift === null) !== (terrainCameraLiftTo === null)
+    || (terrainLookLift === null) !== (terrainLookLiftTo === null))) {
+  throw new Error('A terrain-relative sweep requires both start and end lift arguments.');
 }
 const url = new URL(game ? arg('route', '/index.html') : '/viewer.html', base);
 if (game) {
   url.searchParams.set('view', arg('view', 'practice'));   // skip the landing menu
 }
 else url.searchParams.set('asset', asset);
+if (authoredCourse) url.searchParams.set('authored', '1');
 if (!game && cameraPose) url.searchParams.set('cam', cameraPose.join(','));
 if (!game && cameraLook) url.searchParams.set('look', cameraLook.join(','));
 
@@ -107,8 +138,8 @@ try {
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
-      '--window-position=-4000,-4000',
-      `--window-size=${w},${h + 90}`,
+      '--window-position=8,40',
+      '--window-size=960,640',
       '--enable-unsafe-webgpu',
       '--hide-scrollbars',
       '--mute-audio',
@@ -120,14 +151,21 @@ try {
   throw error;
 }
 
-const page = await browser.newPage();
+let page = null;
 const logs = [];
-page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
-page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
-page.on('requestfailed', (r) => logs.push(`[requestfailed] ${r.url()} — ${r.failure()?.errorText || 'request failed'}`));
-page.on('response', (r) => { if (r.status() >= 400) logs.push(`[http] ${r.status()} ${r.url()}`); });
-
+let evaluationResult = null;
+let gpuResult = null;
+let frameTiming = null;
+let cpuMetrics = null;
+let baselineSentinel = null;
+let benchmarkPresentationLockId = null;
 try {
+  page = await browser.newPage();
+  console.log('browser-fit', JSON.stringify(await fitBrowserViewport(page, w, h, { benchmark: has('size') })));
+  page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
+  page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
+  page.on('requestfailed', (r) => logs.push(`[requestfailed] ${r.url()} — ${r.failure()?.errorText || 'request failed'}`));
+  page.on('response', (r) => { if (r.status() >= 400) logs.push(`[http] ${r.status()} ${r.url()}`); });
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
   // Wait for the scene, then let --eval run against it before we start counting frames,
@@ -135,9 +173,17 @@ try {
   // rather than a temporary source edit.
   try {
     await page.waitForFunction(
-      (g) => (g ? window.golfBootstrap?.ready === true : window.viewer?.current?.terrain),
+      (g) => (g
+        ? window.golfBootstrap?.ready === true || window.golfBootstrap?.stage === 'failed'
+        : window.viewer?.current?.terrain),
       { timeout: 90000, polling: 100 }, game,
     );
+    if (game) {
+      const bootstrapFailure = await page.evaluate(() => window.golfBootstrap?.stage === 'failed'
+        ? window.golfBootstrap?.diagnostics?.error || 'unknown bootstrap failure'
+        : null);
+      if (bootstrapFailure) throw new Error(`Application bootstrap failed: ${bootstrapFailure}`);
+    }
   } catch (error) {
     const state = await page.evaluate((g) => g ? ({
       stage: window.golfBootstrap?.stage ?? null,
@@ -158,6 +204,8 @@ try {
         error: window.golfBootstrap?.diagnostics?.error ?? null,
       } : null,
       renderer: {
+        outputWidth: sm?.renderer?.domElement?.width,
+        outputHeight: sm?.renderer?.domElement?.height,
         webgpuRenderer: sm?.renderer?.isWebGPURenderer === true,
         webgpuBackend: backend?.isWebGPUBackend === true,
         webglBackend: backend?.isWebGLBackend === true,
@@ -174,23 +222,160 @@ try {
       || (game && (!qaPreflight.bootstrap?.ready || qaPreflight.evaluatorCamera !== '1.0'))) {
     throw new Error(`Strict WebGPU preflight failed: ${JSON.stringify(qaPreflight)}`);
   }
+  if (has('size') && (qaPreflight.renderer.outputWidth !== w || qaPreflight.renderer.outputHeight !== h)) {
+    throw new Error(`Benchmark output must be ${w}x${h}, got ${qaPreflight.renderer.outputWidth}x${qaPreflight.renderer.outputHeight}`);
+  }
+
+  // The Creator intentionally boots into its disposable regulation-green canvas.
+  // Performance and visual QA for the routed course must activate that production
+  // scene before evaluator-camera ownership; buildCourse() resets the address camera,
+  // so doing this through --eval after setPose silently measures the wrong view.
+  if (authoredCourse) {
+    const activated = await page.evaluate(async () => {
+      const golf = window.golf;
+      if (location.pathname !== '/creator.html') {
+        throw new Error('--authored-course is only valid on /creator.html.');
+      }
+      if (typeof golf?.showAuthoredCreatorCourse !== 'function') {
+        throw new Error('Authored Creator course activation API is unavailable.');
+      }
+      if (golf.creatorCanvasActive) await golf.showAuthoredCreatorCourse();
+      await golf.environmentReady;
+      const trees = golf.range?.treeWorkloadDiagnostics?.() ?? null;
+      return {
+        creatorCanvasActive: golf.creatorCanvasActive,
+        course: golf.range?.course?.meta?.name ?? null,
+        routed: Boolean(golf.range?.course?.routing),
+        treeSourceCount: trees?.sourceCount ?? 0,
+      };
+    });
+    if (activated.creatorCanvasActive || !activated.routed || activated.treeSourceCount < 1) {
+      throw new Error(`Authored Creator course activation failed: ${JSON.stringify(activated)}`);
+    }
+    console.log(`authored-course ${JSON.stringify(activated)}`);
+  }
+  if (targetHoleId) {
+    const selectedHole = await page.evaluate((holeId) => {
+      if (typeof window.golf?.selectHole !== 'function') {
+        throw new Error('Hole selection API is unavailable.');
+      }
+      const selected = window.golf.selectHole(holeId);
+      return { holeId: selected?.holeId ?? null, number: selected?.number ?? null };
+    }, targetHoleId);
+    if (selectedHole.holeId !== targetHoleId) {
+      throw new Error(`Requested hole ${targetHoleId} did not become active: ${JSON.stringify(selectedHole)}`);
+    }
+    console.log(`benchmark-hole ${JSON.stringify(selectedHole)}`);
+  }
   if (game && (cameraPose || cameraLook)) {
     if (!cameraPose || !cameraLook) throw new Error('Game capture requires --cam and --look together.');
-    await page.evaluate(({ position, lookAt, fov }) => {
+    await page.evaluate(({ position, lookAt, fov, cameraLift, lookLift }) => {
       const evaluator = window.golf?.evaluatorCamera;
       if (!evaluator || evaluator.version !== '1.0') throw new Error('Evaluator camera API v1.0 is unavailable.');
+      const terrain = window.golf?.range?.terrain;
+      const resolvedPosition = [...position];
+      const resolvedLookAt = [...lookAt];
+      if (cameraLift !== null) {
+        if (typeof terrain?.heightAt !== 'function') throw new Error('Terrain-relative camera requires range.terrain.heightAt.');
+        resolvedPosition[1] = terrain.heightAt(position[0], position[2]) + cameraLift;
+      }
+      if (lookLift !== null) {
+        if (typeof terrain?.heightAt !== 'function') throw new Error('Terrain-relative look target requires range.terrain.heightAt.');
+        resolvedLookAt[1] = terrain.heightAt(lookAt[0], lookAt[2]) + lookLift;
+      }
       evaluator.enter();
-      evaluator.setPose({ position, lookAt, fov });
+      evaluator.setPose({ position: resolvedPosition, lookAt: resolvedLookAt, fov });
       evaluator.freeze();
-    }, { position: cameraPose, lookAt: cameraLook, fov: Number(arg('fov', 40)) });
+    }, {
+      position: cameraPose,
+      lookAt: cameraLook,
+      fov: Number(arg('fov', 40)),
+      cameraLift: terrainCameraLift,
+      lookLift: terrainLookLift,
+    });
+  }
+  if (benchmarkPresentationMode) {
+    if (!Number.isFinite(benchmarkPresentationScale) || benchmarkPresentationScale <= 0) {
+      throw new Error('--presentation-scale must be a positive finite number.');
+    }
+    const lock = await page.evaluate(({ mode, renderScale }) => {
+      const quality = window.golf?.quality;
+      if (typeof quality?.acquirePresentationLock !== 'function') {
+        throw new Error('Quality presentation-lock API is unavailable.');
+      }
+      return quality.acquirePresentationLock({ mode, renderScale });
+    }, { mode: benchmarkPresentationMode, renderScale: benchmarkPresentationScale });
+    benchmarkPresentationLockId = lock.presentationLock?.id ?? null;
+    if (!benchmarkPresentationLockId) throw new Error('Presentation lock did not return a token.');
+    console.log(`benchmark-presentation-lock ${JSON.stringify(lock.presentationLock)}`);
+    // Settle render-target allocation, temporal history, and the one legitimate
+    // shadow refresh before any diagnostic mutation or timing interval begins.
+    await page.evaluate(() => new Promise((resolve) => {
+      let settled = 0;
+      const tick = () => (++settled >= 8 ? resolve() : requestAnimationFrame(tick));
+      requestAnimationFrame(tick);
+    }));
   }
   if (typeof arg('eval') === 'string') {
     const evaluation = await page.evaluate(arg('eval'));
+    evaluationResult = evaluation;
     // The evaluator hook is also our narrow engine-level diagnostic API. Printing
     // its return value lets a capture prove renderer/range/viewport state instead
     // of relying on a PNG alone. Existing mutating snippets normally return
     // undefined, so they retain their quiet output.
     if (evaluation !== undefined) console.log(`eval ${JSON.stringify(evaluation)}`);
+  }
+  const readPerformanceSentinel = async () => page.evaluate(() => {
+    const golf = window.golf;
+    const renderer = golf?.sm?.renderer;
+    const drawingBuffer = renderer?.domElement
+      ? [renderer.domElement.width, renderer.domElement.height]
+      : null;
+    return {
+      courseName: golf?.range?.course?.meta?.name ?? null,
+      scene: {
+        constructor: golf?.range?.constructor?.name ?? null,
+        sceneKind: golf?.range?.sceneKind ?? null,
+        creatorCanvasActive: golf?.creatorCanvasActive ?? null,
+        routed: Boolean(golf?.range?.course?.routing),
+      },
+      routingSignature: JSON.stringify((golf?.range?.course?.routing?.holes ?? []).map((hole) => ({
+        holeId: hole.holeId,
+        number: hole.number,
+        par: hole.par,
+        route: hole.route?.points,
+        tees: hole.tees,
+        greenStart: hole.greenStart,
+        greenCount: hole.greenCount,
+      }))),
+      activeHoleId: golf?.range?.activeHoleId ?? null,
+      evaluatorCamera: golf?.evaluatorCamera?.getState?.() ?? null,
+      treeWorkload: golf?.range?.treeWorkloadDiagnostics?.() ?? null,
+      quality: golf?.quality?.snapshot?.() ?? null,
+      visualAssets: golf?.visualAssets?.diagnostics?.() ?? null,
+      drawingBuffer,
+      rendererFrame: renderer?.info?.frame ?? null,
+    };
+  });
+  if (game && (qaReportPath || liveGpuCapture)) {
+    const assetReadiness = await page.evaluate(() => Promise.race([
+      window.golf.visualAssets.ready(window.golf.quality.snapshot().activeMode),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Active visual-asset readiness deadline exceeded.')),
+        120000,
+      )),
+    ]));
+    if (!assetReadiness?.ready || !assetReadiness?.requiredReady) {
+      throw new Error(`Active visual assets are not ready: ${JSON.stringify(assetReadiness)}`);
+    }
+    await page.evaluate(() => new Promise((resolveWait, rejectWait) => {
+      const timer = setTimeout(() => rejectWait(new Error('Evaluator settle deadline exceeded.')), 15000);
+      window.golf.evaluatorCamera.waitForFrames(4).then(
+        (value) => { clearTimeout(timer); resolveWait(value); },
+        (error) => { clearTimeout(timer); rejectWait(error); },
+      );
+    }));
+    baselineSentinel = await readPerformanceSentinel();
   }
   const canvas = await page.$('canvas');
 
@@ -343,9 +528,15 @@ try {
   // the render loop, so this cannot pass on a stalled device. The game has no such
   // counter, so fall back to counting rAF ticks there.
   if (game) {
-    await page.evaluate((n) => new Promise((res) => {
+    await page.evaluate((n) => new Promise((res, reject) => {
+      const deadline = setTimeout(() => reject(new Error('Game warmup frame deadline exceeded.')), 90000);
       let i = 0;
-      const tick = () => (++i >= n ? res() : requestAnimationFrame(tick));
+      const tick = () => {
+        if (++i >= n) {
+          clearTimeout(deadline);
+          res();
+        } else requestAnimationFrame(tick);
+      };
       requestAnimationFrame(tick);
     }), frames);
   } else {
@@ -355,10 +546,91 @@ try {
     );
   }
 
+  if (game && (has('frame-timing') || qaReportPath)) {
+    const cpuBefore = await page.metrics();
+    frameTiming = await page.evaluate((sampleCount) => new Promise((resolveTiming, rejectTiming) => {
+      const deadline = setTimeout(() => rejectTiming(new Error('rAF frame-timing deadline exceeded.')), 90000);
+      const timestamps = [];
+      const evaluatorStartFrame = window.golf?.evaluatorCamera?.getState?.().frame ?? null;
+      const tick = (timestamp) => {
+        timestamps.push(timestamp);
+        if (timestamps.length <= sampleCount) requestAnimationFrame(tick);
+        else {
+          const deltas = timestamps.slice(1).map((value, index) => value - timestamps[index]).sort((a, b) => a - b);
+          const percentile = (fraction) => deltas[Math.min(deltas.length - 1, Math.floor(deltas.length * fraction))];
+          clearTimeout(deadline);
+          resolveTiming({
+            samples: deltas.length,
+            evaluatorFramesPresented: Number.isFinite(evaluatorStartFrame)
+              ? window.golf.evaluatorCamera.getState().frame - evaluatorStartFrame
+              : null,
+            meanMs: deltas.reduce((sum, value) => sum + value, 0) / deltas.length,
+            p50Ms: percentile(0.5),
+            p95Ms: percentile(0.95),
+            maxMs: deltas.at(-1),
+          });
+        }
+      };
+      requestAnimationFrame(tick);
+    }), Number(arg('frame-timing', 120)) || 120);
+    const cpuAfter = await page.metrics();
+    cpuMetrics = {
+      samples: frameTiming.samples,
+      taskDurationMsPerFrame: ((cpuAfter.TaskDuration - cpuBefore.TaskDuration) * 1000) / frameTiming.samples,
+      scriptDurationMsPerFrame: ((cpuAfter.ScriptDuration - cpuBefore.ScriptDuration) * 1000) / frameTiming.samples,
+    };
+    console.log(`frame-timing ${JSON.stringify(frameTiming)}`);
+    console.log(`cpu ${JSON.stringify(cpuMetrics)}`);
+  }
+
   if (has('gpu')) {
     const requested = Math.max(1, Math.min(30, Number(arg('gpu', 12)) || 12));
-    const gpu = await page.evaluate(async (frameCount) => {
+    gpuResult = await page.evaluate(async ({ frameCount, live }) => {
       const { sm } = window.golf;
+      if (live) {
+        const evaluator = window.golf?.evaluatorCamera;
+        if (!evaluator?.waitForFrames) throw new Error('Evaluator camera frame wait hook is unavailable.');
+        const bounded = (promise, message) => new Promise((resolveBounded, rejectBounded) => {
+          const timer = setTimeout(() => rejectBounded(new Error(message)), 90000);
+          Promise.resolve(promise).then(
+            (value) => { clearTimeout(timer); resolveBounded(value); },
+            (error) => { clearTimeout(timer); rejectBounded(error); },
+          );
+        });
+        await bounded(sm.renderer.backend.device.queue.onSubmittedWorkDone(), 'GPU queue fence deadline exceeded.');
+        const capture = sm.gpuProfiler.capture(frameCount);
+        await bounded(evaluator.waitForFrames(frameCount + 2), 'Live GPU frame deadline exceeded.');
+        const result = await bounded(capture, 'Live GPU capture deadline exceeded.');
+        const summarize = (values) => {
+          const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+          const at = (fraction) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] ?? null;
+          return sorted.length ? {
+            samples: sorted.length,
+            meanMs: sorted.reduce((sum, value) => sum + value, 0) / sorted.length,
+            p50Ms: at(0.5),
+            p95Ms: at(0.95),
+            maxMs: sorted.at(-1),
+          } : null;
+        };
+        return {
+          available: result.available,
+          complete: result.complete,
+          reason: result.reason,
+          framesRequested: result.framesRequested,
+          framesPlanned: result.framesPlanned,
+          framesCaptured: result.framesCaptured,
+          unavailablePassCount: result.unavailablePassCount,
+          trackedGpuMsPerFrame: result.captureThroughput?.trackedGpuMsPerFrame,
+          completionP95Ms: result.captureThroughput?.completionDeltaP95Ms,
+          activeGpu: summarize(result.frames?.map((frame) => frame.gpuUnionMs) ?? []),
+          activeRender: summarize(result.frames?.map((frame) => frame.renderUnionMs) ?? []),
+          activeCompute: summarize(result.frames?.map((frame) => frame.computeUnionMs) ?? []),
+          liveProductionFrames: true,
+          passes: result.passes?.map(({ label, type, mean, p95, max }) => (
+            { label, type, mean, p95, max }
+          )),
+        };
+      }
       sm.freezeSimulation = true;
       sm.pauseRendering();
       try {
@@ -369,7 +641,10 @@ try {
           available: result.available,
           complete: result.complete,
           reason: result.reason,
+          framesRequested: result.framesRequested,
+          framesPlanned: result.framesPlanned,
           framesCaptured: result.framesCaptured,
+          unavailablePassCount: result.unavailablePassCount,
           trackedGpuMsPerFrame: result.captureThroughput?.trackedGpuMsPerFrame,
           completionP95Ms: result.captureThroughput?.completionDeltaP95Ms,
           passes: result.passes?.map(({ label, type, mean, p95, max }) => (
@@ -380,8 +655,8 @@ try {
         sm.freezeSimulation = false;
         sm.resumeRendering();
       }
-    }, requested);
-    console.log(`gpu ${JSON.stringify(gpu)}`);
+    }, { frameCount: requested, live: liveGpuCapture });
+    console.log(`gpu ${JSON.stringify(gpuResult)}`);
   }
 
   const err = await page.$eval('#err', (el) => el.textContent).catch(() => '');
@@ -412,8 +687,59 @@ try {
   const luminanceStdDev = Math.sqrt(Math.max(0, luminanceSq / pixelCount - meanLuminance ** 2));
   const nonBlank = nearBlack / pixelCount < 0.99 && luminanceStdDev > 1;
   const healthErrors = logs.filter((entry) => /^\[(pageerror|requestfailed|http|error)\]/.test(entry));
-  console.log(`qa ${JSON.stringify({
+  const qaResult = {
     ...qaPreflight,
+    semantic: game ? await page.evaluate(async () => {
+      const golf = window.golf;
+      const evaluatorCamera = golf?.evaluatorCamera?.getState?.() ?? null;
+      const terrain = golf?.range?.terrain;
+      const clearanceAt = (point) => point && typeof terrain?.heightAt === 'function'
+        ? point[1] - terrain.heightAt(point[0], point[2])
+        : null;
+      return {
+        courseName: golf?.range?.course?.meta?.name ?? null,
+        activeHoleId: golf?.range?.activeHoleId ?? null,
+        scene: {
+          constructor: golf?.range?.constructor?.name ?? null,
+          sceneKind: golf?.range?.sceneKind ?? null,
+          creatorCanvasActive: golf?.creatorCanvasActive ?? null,
+          routed: Boolean(golf?.range?.course?.routing),
+        },
+        evaluatorCamera,
+        terrainClearance: {
+          camera: clearanceAt(evaluatorCamera?.position),
+          lookAt: clearanceAt(evaluatorCamera?.lookAt),
+        },
+        treeWorkload: golf?.range?.treeWorkloadDiagnostics?.() ?? null,
+        environment: {
+          timeline: golf?.timeline?.snapshot?.() ?? null,
+          sunDirection: golf?.range?.environment?.sunDirection?.value?.toArray?.() ?? null,
+          sunColor: golf?.range?.environment?.sunColor?.value?.toArray?.() ?? null,
+          horizonColor: golf?.range?.environment?.horizonColor?.value?.toArray?.() ?? null,
+          daylightSkyEnvelope: golf?.range?.environment?.daylightSkyEnvelope?.value?.toArray?.() ?? null,
+          lighting: {
+            pmremIntensity: golf?.sm?.scene?.environmentIntensity ?? null,
+            pmremTexture: golf?.sm?.scene?.environment?.name ?? null,
+            hemisphereIntensity: golf?.lighting?.hemi?.intensity ?? null,
+            keyIntensity: golf?.lighting?.sun?.intensity ?? null,
+            exposure: golf?.sm?.renderer?.toneMappingExposure ?? null,
+          },
+        },
+        builder: golf?.builder ? {
+          readOnlyReason: golf.builder.readOnlyReason,
+          promptDisabled: golf.builder.promptEl.disabled,
+          submitDisabled: golf.builder.buildBtn.disabled,
+          authoringRegionsInert: [...golf.builder.el.querySelectorAll('.gb-sidebar, .gb-thread, .gb-composer, #gb-question')]
+            .every(region=>region.inert),
+        } : null,
+        grass: golf?.range?.grass ? {
+          groundCover: terrain?.groundCover,
+          nativeGrasslands: golf.range.grass.nativeGrasslands,
+          bladeHeight: golf.range.grass._bladeHeight,
+          gpu: await golf.range.grass.readDiagnostics(),
+        } : null,
+      };
+    }) : null,
     content: {
       width: rendered.width,
       height: rendered.height,
@@ -423,7 +749,81 @@ try {
       luminanceStdDev: +luminanceStdDev.toFixed(2),
     },
     health: { consoleNetworkErrors: healthErrors },
-  })}`);
+  };
+  const finalSentinel = game && baselineSentinel ? await readPerformanceSentinel() : null;
+  if (liveGpuCapture && finalSentinel) {
+    const immutable = (sentinel) => ({
+      courseName: sentinel.courseName,
+      scene: sentinel.scene,
+      routingSignature: sentinel.routingSignature,
+      activeHoleId: sentinel.activeHoleId,
+      evaluatorPosition: sentinel.evaluatorCamera?.position ?? null,
+      evaluatorQuaternion: sentinel.evaluatorCamera?.quaternion ?? null,
+      evaluatorFov: sentinel.evaluatorCamera?.fov ?? null,
+      treeWorkload: sentinel.treeWorkload,
+      qualityMode: sentinel.quality?.activeMode ?? null,
+      presentationLock: sentinel.quality?.presentationLock ?? null,
+      runtimeWorkloads: {
+        grass: sentinel.quality?.runtimeWorkloads?.grass ?? null,
+        water: sentinel.quality?.runtimeWorkloads?.waterReflections ? {
+          mode: sentinel.quality.runtimeWorkloads.waterReflections.mode,
+          requestedMode: sentinel.quality.runtimeWorkloads.waterReflections.requestedMode,
+          source: sentinel.quality.runtimeWorkloads.waterReflections.source,
+          strictWebGPU: sentinel.quality.runtimeWorkloads.waterReflections.strictWebGPU,
+          disabled: sentinel.quality.runtimeWorkloads.waterReflections.disabled,
+        } : null,
+        weather: sentinel.quality?.runtimeWorkloads?.weatherSky ? {
+          workloadId: sentinel.quality.runtimeWorkloads.weatherSky.workloadId,
+          workload: sentinel.quality.runtimeWorkloads.weatherSky.workload,
+          representation: sentinel.quality.runtimeWorkloads.weatherSky.representation,
+          usesVolumetricClouds: sentinel.quality.runtimeWorkloads.weatherSky.usesVolumetricClouds,
+          cloudsEnabled: sentinel.quality.runtimeWorkloads.weatherSky.cloudsEnabled,
+          graphRevision: sentinel.quality.runtimeWorkloads.weatherSky.graphRevision,
+        } : null,
+      },
+      renderScale: sentinel.quality?.renderScale ?? null,
+      renderResolution: sentinel.quality?.renderResolution ? {
+        revision: sentinel.quality.renderResolution.revision,
+        outputPixelCap: sentinel.quality.renderResolution.outputPixelCap,
+        internalRenderScale: sentinel.quality.renderResolution.internalRenderScale,
+        output: sentinel.quality.renderResolution.output,
+        internal: sentinel.quality.renderResolution.internal,
+      } : null,
+      visualAssets: sentinel.visualAssets ? {
+        manifest: sentinel.visualAssets.manifest,
+        startup: sentinel.visualAssets.startup,
+        active: {
+          mode: sentinel.visualAssets.active?.mode,
+          variant: sentinel.visualAssets.active?.variant,
+          ready: sentinel.visualAssets.active?.readiness?.ready,
+          requiredReady: sentinel.visualAssets.active?.readiness?.requiredReady,
+          allReady: sentinel.visualAssets.active?.readiness?.allReady,
+          profile: sentinel.visualAssets.active?.readiness?.profile,
+        },
+      } : null,
+      drawingBuffer: sentinel.drawingBuffer,
+    });
+    if (JSON.stringify(immutable(baselineSentinel)) !== JSON.stringify(immutable(finalSentinel))) {
+      throw new Error(`Performance sentinel changed during capture: ${JSON.stringify({ before: immutable(baselineSentinel), after: immutable(finalSentinel) })}`);
+    }
+  }
+  console.log(`qa ${JSON.stringify(qaResult)}`);
+  if (qaReportPath) {
+    await mkdir(dirname(qaReportPath), { recursive: true });
+    await writeFile(qaReportPath, `${JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      route: url.href,
+      screenshot: out,
+      qa: qaResult,
+      evaluation: evaluationResult,
+      frameTiming,
+      cpu: cpuMetrics,
+      gpu: gpuResult,
+      sentinels: { before: baselineSentinel, after: finalSentinel },
+    }, null, 2)}\n`);
+    console.log(`qa-report ${qaReportPath}`);
+  }
+  // Preserve diagnostic evidence even when the production renderer fails QA.
   if (!nonBlank) throw new Error('Rendered screenshot is blank or lacks meaningful image variation.');
   if (healthErrors.length) throw new Error(`Console/network health failed: ${healthErrors.join('; ')}`);
 
@@ -544,11 +944,21 @@ try {
     for (let i = 0; i < n; i++) {
       if (cameraSweepPose) {
         const t = n <= 1 ? 1 : i / (n - 1);
-        await page.evaluate(({ fromPosition, toPosition, fromLookAt, toLookAt, alpha, fov, gameView }) => {
+        await page.evaluate(({
+          fromPosition, toPosition, fromLookAt, toLookAt, alpha, fov, gameView,
+          fromCameraLift, toCameraLift, fromLookLift, toLookLift,
+        }) => {
           const lerp = (a, b) => a.map((value, index) => value + (b[index] - value) * alpha);
           const position = lerp(fromPosition, toPosition);
           const lookAt = lerp(fromLookAt, toLookAt);
-          if (gameView) window.golf.evaluatorCamera.setPose({ position, lookAt, fov });
+          if (gameView && fromCameraLift !== null) {
+            const terrain = window.golf.range.terrain;
+            const cameraLift = fromCameraLift + (toCameraLift - fromCameraLift) * alpha;
+            const targetLift = fromLookLift + (toLookLift - fromLookLift) * alpha;
+            position[1] = terrain.heightAt(position[0], position[2]) + cameraLift;
+            lookAt[1] = terrain.heightAt(lookAt[0], lookAt[2]) + targetLift;
+          }
+          if (gameView) window.golf.evaluatorCamera.movePose({ position, lookAt, fov });
           else window.viewer.setCamera(position, lookAt);
         }, {
           fromPosition: cameraPose,
@@ -558,16 +968,27 @@ try {
           alpha: t,
           fov: Number(arg('fov', 40)),
           gameView: game,
+          fromCameraLift: terrainCameraLift,
+          toCameraLift: terrainCameraLiftTo,
+          fromLookLift: terrainLookLift,
+          toLookLift: terrainLookLiftTo,
         });
       }
-      await page.evaluate(() => new Promise((r) => {
-        let k = 0; const t = () => (++k >= 3 ? r() : requestAnimationFrame(t)); requestAnimationFrame(t);
-      }));
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(r)));
       const [b, state] = await Promise.all([
         canvas.screenshot(),
         page.evaluate((gameView) => gameView ? {
           cameraPosition: window.golf.sm.camera.position.toArray(),
-          diagnostics: null,
+          diagnostics: (() => {
+            const evaluator = window.golf.evaluatorCamera.getState();
+            const terrain = window.golf.range.terrain;
+            return {
+              evaluator,
+              shadows: window.golf.lighting.diagnostics(),
+              cameraClearance: evaluator.position[1] - terrain.heightAt(evaluator.position[0], evaluator.position[2]),
+              lookAtClearance: evaluator.lookAt[1] - terrain.heightAt(evaluator.lookAt[0], evaluator.lookAt[2]),
+            };
+          })(),
         } : {
           cameraPosition: window.viewer.sm.camera.position.toArray(),
           diagnostics: window.viewer.treeDiagnostics(),
@@ -601,19 +1022,38 @@ try {
       heat[p * 3] = v; heat[p * 3 + 1] = Math.max(0, v - 128) * 2; heat[p * 3 + 2] = 0;
     }
     await writeFile(out.replace(/\.png$/, '-flicker.png'), encodePNG(W, H, heat));
+    const sequenceQa = game ? await page.evaluate(() => ({
+      courseName: window.golf?.range?.course?.meta?.name ?? null,
+      activeHoleId: window.golf?.range?.activeHoleId ?? null,
+      creatorCanvasActive: window.golf?.creatorCanvasActive ?? null,
+      sceneKind: window.golf?.range?.sceneKind ?? null,
+      routed: Boolean(window.golf?.range?.course?.routing),
+      evaluatorCamera: window.golf?.evaluatorCamera?.getState?.() ?? null,
+    })) : null;
+    const sequenceHealthErrors = logs.filter((entry) => /^\[(pageerror|requestfailed|http|error)\]/.test(entry));
     await writeFile(`${dir}/report.json`, `${JSON.stringify({
       asset: game ? 'production-range' : asset,
       camera: { from: cameraPose, to: cameraSweepPose, lookFrom: cameraLook, lookTo: cameraSweepLook },
       frames: sequenceStates,
       meanDelta: Number(mean.toFixed(4)),
       pctPixelsUnstable: Number((100 * hot / (W * H)).toFixed(4)),
+      qa: sequenceQa,
+      health: { consoleNetworkErrors: sequenceHealthErrors },
     }, null, 2)}\n`);
+    if (sequenceHealthErrors.length) {
+      throw new Error(`Sequence console/network health failed: ${sequenceHealthErrors.join('; ')}`);
+    }
     console.log(`wrote ${dir}/ and -flicker.png`);
   }
 
   console.log(`wrote ${out}`);
 } finally {
-  if (game) {
+  if (game && page) {
+    if (benchmarkPresentationLockId !== null) {
+      try {
+        await page.evaluate((lockId) => window.golf?.quality?.releasePresentationLock?.(lockId), benchmarkPresentationLockId);
+      } catch { /* page may be gone */ }
+    }
     try { await page.evaluate(() => window.golf?.evaluatorCamera?.exit()); } catch { /* page may be gone */ }
   }
   const noise = /Autofill|DevTools|Download the React|has been renamed/;

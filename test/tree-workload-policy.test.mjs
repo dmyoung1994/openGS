@@ -46,8 +46,8 @@ test('tree workload modes only scale the existing authored LOD policy', () => {
 
 test('production authored trees keep every source and promote through uniform LOD thresholds', () => {
   assert.match(source, /setWorkloadPolicy\(policy = undefined\)/);
-  assert.match(source, /const lodNear = this\._baseLodNear \* policy\.lodNearScale/);
-  assert.match(source, /const lodFar = this\._baseLodFar \* policy\.lodFarScale/);
+  assert.match(source, /const lodNear = this\._baseLodNear\s*\* Math\.max\(policy\.lodNearScale, this\.residencyThresholds\.lodNearPolicyFloor\)\s*\* this\.residencyThresholds\.lodNearMultiplier/);
+  assert.match(source, /const lodFar = this\._baseLodFar\s*\* Math\.max\(policy\.lodFarScale, this\.residencyThresholds\.lodFarPolicyFloor\)\s*\* this\.residencyThresholds\.lodFarMultiplier/);
   assert.match(source, /const transitionDistance = this\._baseLodTransitionDistance \* policy\.transitionScale/);
   assert.match(source, /this\.uLodNear\.value = lodNear/);
   assert.match(source, /this\.uLodFar\.value = lodFar/);
@@ -55,7 +55,8 @@ test('production authored trees keep every source and promote through uniform LO
   assert.match(source, /uPolicyProjectedLod0Scale/);
   assert.match(source, /const projectedLod0Threshold = float\(residency\.lod0\)\.mul\(projectedLod0Scale\)/);
   assert.match(source, /const lod0Visible = forceFull\.or\(/);
-  assert.match(source, /const lod1Visible = lod0Visible\.not\(\)/);
+  assert.match(source, /const lod2Visible = this\.useFarLod/);
+  assert.match(source, /lod0Visible\.not\(\)\.and\(lod2Visible\.not\(\)\)/);
   assert.doesNotMatch(source, /authoredMeshFade|transitionMask/);
   assert.doesNotMatch(source, /policyDistanceAllowed/);
   assert.doesNotMatch(source, /lod0BudgetDistance|lod1BudgetDistance/);
@@ -72,13 +73,26 @@ test('LOD0-only authored species retain complete geometry and report unsupported
 
 test('authored shadow residency is complete and independent of beauty-camera compaction', () => {
   assert.match(source, /beauty\._shadowPolicyOwner = this/);
-  assert.match(source, /shadowResidency: 'complete-authored-lod1'/);
+  assert.match(source, /complete-authored-lod2/);
   assert.match(source, /shadowResidency: this\.authoredMeshOnly/);
   assert.match(source, /new InstancedMesh\(part\.geometry, material, this\.sourceCount\)/);
   assert.match(source, /shadowMesh\.setMatrixAt\(index, matrix\)/);
   assert.match(source, /shadowMesh\.layers\.set\(1\)/);
   assert.match(source, /shadowMesh\.castShadow = true/);
   assert.match(source, /this\.beauty\.setWorkloadPolicy\(policy\)/);
+  const authoredBeautyPolicy = source.slice(
+    source.indexOf('export class TreeBeautyLod'),
+    source.indexOf('export class TreeShadowLod'),
+  );
+  assert.doesNotMatch(authoredBeautyPolicy, /shadow\.needsUpdate/,
+    'beauty-only policy changes must not invalidate the static authored shadow caster map');
+  for (const shadowClass of ['TreeShadowLod0', 'TreeShadowLod']) {
+    const start = source.indexOf(`export class ${shadowClass}`);
+    const policyStart = source.indexOf('setWorkloadPolicy(policy = undefined)', start);
+    const policyEnd = source.indexOf('setQualityPolicy', policyStart);
+    assert.doesNotMatch(source.slice(policyStart, policyEnd), /shadow\.needsUpdate/,
+      `${shadowClass} beauty policy facade must not invalidate static casters`);
+  }
 });
 
 test('workload policy does not replace authored geometry or PBR resources', () => {

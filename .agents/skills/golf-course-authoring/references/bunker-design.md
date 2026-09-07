@@ -10,6 +10,8 @@ Record the bunker role before drawing it:
 role: strategic | directional | recovery | penal | framing
 shot_context: tee shot | layup | approach | recovery
 target_players: casual | skilled | tour
+stable_id: authored bunker ID
+route_progress_band: intended shot interval along the routed centerline
 risk_line: carry and benefit when successful
 bailout: width, lie, and next-shot cost
 visibility: edge and floor visible from relevant origins
@@ -20,6 +22,13 @@ sand_character: color, grain scale, moisture, firmness, provenance
 Remove a bunker that does not change aim, angle, club, trajectory, or recovery.
 Avoid hazard rows at arbitrary yardages and avoid stacking sand beside water
 unless the combination expresses one deliberate choice.
+
+Before shaping, pass the hazard-intent gate in `hazard-design.md`. In particular,
+do not use a bunker as decorative foreground beside a tee. Record its owning hole,
+route progress, lateral offset, carry-to-front/clear from each tee, bailout, and the
+advantage earned by challenging it. When a strategic drive bunker looks tee-side,
+verify the active scene, site transform, and decision-camera origin before changing
+the bunker.
 
 ## Placement and shape
 
@@ -74,3 +83,6 @@ unless the combination expresses one deliberate choice.
   fairway edge and the target line.
 - Review the running sim from tee, landing areas, approach, bunker floor, and green.
   The player must read the carry, edge, floor, bailout, and recovery.
+- Put landing/decision review cameras before the bunker interaction band. Fail the
+  review if the camera stands on the bunker shoulder or makes a distant drive bunker
+  read as sand beside a tee-like foreground pad.

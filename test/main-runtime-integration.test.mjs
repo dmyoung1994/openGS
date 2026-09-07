@@ -13,7 +13,7 @@ test('production entrypoint integrates adaptive quality and the continuous timel
   assert.match(mainSource, /import \{ VisualQualityController \} from ['"]\.\/scene\/VisualQualityController\.js['"]/);
   assert.match(mainSource, /import \{\s*ENVIRONMENT_TIMELINE_ALGORITHM_VERSION[\s\S]*EnvironmentTimeline[\s\S]*toEnvironmentFrameStateConfig/);
   assert.match(mainSource, /sm\.setRenderResolution\(\{ outputPixelCap, internalRenderScale: snapshot\.renderScale \}\)/);
-  assert.match(mainSource, /qualityController\.ingestSample\(\{\s*frameMs,\s*atMs:/);
+  assert.match(mainSource, /qualityController\.ingestSample\(\{\s*frameMs, cpuMs: sm\.cpuFrameMs,\s*atMs:/);
   assert.match(mainSource, /_qualityLastFrameAt/);
   assert.match(mainSource, /sm\.renderingPaused/,
     'manually stepped profiler frames must not train adaptive presentation quality');
@@ -40,7 +40,7 @@ test('production entrypoint integrates adaptive quality and the continuous timel
   assert.match(mainSource, /policySnapshot: \(\) => qualityController\.snapshot\(\)/);
   assert.match(mainSource, /return environmentState\?\.config \?\? environmentTimeline\.frameStateConfig\(\)/);
   assert.match(mainSource, /get ready\(\) \{ return bootstrapDiagnostics\.stage === 'ready'; \}/);
-  assert.match(mainSource, /new MetricsPanel\(\{ onHit: hit, onEnvironmentChange: previewEnvironment \}\)/);
+  assert.match(mainSource, /new MetricsPanel\(\{ onHit: hit, onEnvironmentChange: previewEnvironment, onContinue: continuePlay,/);
 });
 
 test('quality modes apply scalable scene workloads and disclose their owners', () => {

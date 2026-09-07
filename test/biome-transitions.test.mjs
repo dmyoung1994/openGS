@@ -9,7 +9,20 @@ import {
 
 function coastalCourse(profile = 'natural-resort-beach') {
   const course = structuredClone(shippedCourse);
-  course.environment = { ...course.environment, placements: [], scatter: [], assembly: [], edgeDressing: [], exclusions: [], objectBudget: 0 };
+  course.meta.schema = 3;
+  course.meta.name = 'Biome transition fixture';
+  course.biome = 'temperate-maritime';
+  course.bounds = { minX: -110, maxX: 110, minZ: -340, maxZ: 30 };
+  course.tee = { x: 0, z: 2, boxHalfX: 4, z0: -3, z1: 7 };
+  course.corridor = { c0: 28, k: 0.02, rough: 14 };
+  course.fringeW = 5;
+  course.greens = [{ yards: 200, x: 0, z: -182.88, r: 10, contour: 'tilt' }];
+  course.bunkers = [];
+  course.ponds = [];
+  course.forestFloorAreas = [];
+  course.landforms = [];
+  delete course.routing;
+  course.environment = { ...course.environment, placements: [], proceduralTrees: [], scatter: [], assembly: [], edgeDressing: [], exclusions: [], objectBudget: 0 };
   course.biomeTransitions = [{
     id: 'ocean-edge', from: 'temperate-maritime', to: 'marine-ocean',
     boundary: { kind: 'course-edge', sides: ['min-x', 'min-z'] },
@@ -30,25 +43,26 @@ test('schema v3 requires explicit migration and preserves empty-transition behav
   assert.equal(classifyBiomeAt(normalized, 0, 0).weights.primary, 1);
 });
 
-test('shipped range authors one restrained three-sided resort shoreline', () => {
-  const normalized = normalizeCourse(structuredClone(shippedCourse));
+test('coastal fixture authors a restrained two-sided resort shoreline', () => {
+  const normalized = normalizeCourse(coastalCourse());
   assert.deepEqual(normalized.biomeTransitions, [{
-    id: 'resort-ocean-edge',
+    id: 'ocean-edge',
     from: 'temperate-maritime',
     to: 'marine-ocean',
-    boundary: { kind: 'course-edge', sides: ['min-x', 'max-x', 'min-z'] },
+    boundary: { kind: 'course-edge', sides: ['min-x', 'min-z'] },
     profile: 'natural-resort-beach',
     seed: 1843021,
-    widthScale: 0.5,
+    widthScale: 1,
     priority: 100,
   }]);
   assert.equal(classifyBiomeAt(normalized, 0, normalized.bounds.maxZ).transitionId, null,
     'the landward edge behind the tee must not become coastline');
 });
 
-test('shipped shoreline keeps protected play authoritative and orders every coastal band', () => {
-  const normalized = normalizeCourse(structuredClone(shippedCourse));
-  const withoutTransition = structuredClone(shippedCourse);
+test('coastal fixture keeps protected play authoritative and orders every coastal band', () => {
+  const authored = coastalCourse();
+  const normalized = normalizeCourse(authored);
+  const withoutTransition = structuredClone(authored);
   withoutTransition.biomeTransitions = [];
   const baseline = normalizeCourse(withoutTransition);
 
@@ -68,10 +82,11 @@ test('shipped shoreline keeps protected play authoritative and orders every coas
       `protected feature at ${x},${z} remains dry`);
   }
 
-  const z = -160;
+  const z = -260;
+  const edgeX = normalized.bounds.minX;
   const orderedSamples = [
-    [-95, 'primary'], [-100, 'strandGrass'], [-104, 'dune'], [-112, 'drySand'],
-    [-124, 'wetSand'], [-145, 'shallowShelf'], [-180, 'deepOcean'],
+    [edgeX + 30, 'primary'], [edgeX + 10, 'strandGrass'], [edgeX, 'dune'], [edgeX - 15, 'drySand'],
+    [edgeX - 40, 'wetSand'], [edgeX - 70, 'shallowShelf'], [edgeX - 110, 'deepOcean'],
   ];
   for (const [x, expected] of orderedSamples) {
     const weights = classifyBiomeAt(normalized, x, z).weights;
@@ -81,7 +96,7 @@ test('shipped shoreline keeps protected play authoritative and orders every coas
 
   assert.deepEqual(
     classifyBiomeAt(normalized, -120, z),
-    classifyBiomeAt(normalizeCourse(structuredClone(shippedCourse)), -120, z),
+    classifyBiomeAt(normalizeCourse(coastalCourse()), -120, z),
     'authored shoreline ownership is deterministic',
   );
 });
@@ -143,6 +158,21 @@ test('transition field CPU classification matches its baked half-float texel', (
   assert.ok(Math.abs(DataUtils.fromHalfFloat(data[k]) - cpu.primary) < 0.001);
   assert.ok(Math.abs(DataUtils.fromHalfFloat(data[k + 1]) - cpu.strandGrass) < 0.001);
   field.dispose();
+});
+
+test('a course without biome boundaries uses an exact constant texel', () => {
+  for (const biome of ['temperate-maritime', 'temperate-alpine', 'marine-ocean']) {
+    const course = { biome, biomeTransitions: [], bounds: { minX: -1000, maxX: 1000, minZ: -500, maxZ: 500 } };
+    const field = compileBiomeTransitionField(course);
+    assert.equal(field.width, 1); assert.equal(field.height, 1);
+    assert.equal(field.hasTransitions, false);
+    const pixels = [...field.landTexture.image.data, ...field.waterTexture.image.data].map(DataUtils.fromHalfFloat);
+    for (const [x, z] of [[-1000, -500], [0, 0], [1000, 500], [2000, 1000]]) {
+      const cpu = field.sample(x, z).weights;
+      assert.deepEqual(pixels, TRANSITION_WEIGHT_NAMES.map(name => cpu[name]));
+    }
+    field.dispose();
+  }
 });
 
 test('transition validation rejects incompatible pairs, unsafe water polygons, widths, and ambiguous ownership', () => {

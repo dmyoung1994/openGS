@@ -18,7 +18,7 @@ const scalarArray = (text, name) => {
 test('grass LOD follows the final active render camera, not the ball or a static origin', async () => {
   const [main, range, grass] = await Promise.all([
     read('src/main.js'),
-    read('src/scene/Range.js'),
+    read('src/scene/PlayableCourseScene.js'),
     read('src/terrain/Grass.js'),
   ]);
 
@@ -42,7 +42,7 @@ test('grass tile culling encloses the authoritative terrain height and blade can
   const grass = await read('src/terrain/Grass.js');
   assert.match(grass, /const heightData = this\.terrain\.heights/,
     'tile bounds must come from the same heightfield used by terrain and grass roots');
-  assert.match(grass, /minHeight - 0\.05[\s\S]*?maxHeight \+ BLADE_H\.deepRough \+ 0\.06/,
+  assert.match(grass, /minHeight - Math\.max\(0\.05, this\._bladeHeight\.deepRough \* ROOT_BURY_FRACTION\)[\s\S]*?maxHeight \+ this\._bladeHeight\.deepRough \+ 0\.06/,
     'vertical bounds must include dipped roots and the tallest complete canopy');
   assert.match(grass, /const verticalBounds = tileHeightBounds\.element\( tile \)/,
     'GPU tile classification must consume the baked vertical interval');
@@ -219,9 +219,12 @@ test('packed surface and canopy guard is conservative and precedes zone and ecol
   const grass = await read('src/terrain/Grass.js');
   const dataFetch = grass.indexOf('const data = textureLoad( c.dataTex');
   const canopyDecode = grass.indexOf('const canopyMask = packedGround.mod', dataFetch);
-  const candidateDecode = grass.indexOf('const turfCandidate = packedGround.greaterThanEqual', canopyDecode);
-  const canopyKeep = grass.indexOf('const canopyKeep = mix( 1.0, CANOPY_DENSITY_FLOOR, canopyMask )', candidateDecode);
-  const surfaceCeiling = grass.indexOf('const surfaceDensityUpper = densityUpper.mul( canopyKeep )', canopyKeep);
+  const candidateDecode = grass.indexOf('const grassSurfaceCandidate = packedGround.greaterThanEqual', canopyDecode);
+  // Both are now shader-build branches on the ground cover, so anchor on the
+  // declaration rather than the exclusive-material spelling. The ORDERING this
+  // test exists to protect is unchanged: decode, gate, ceiling, then guard.
+  const exclusiveMaterial = grass.indexOf('const turfCandidate = ', candidateDecode);
+  const surfaceCeiling = grass.indexOf('const surfaceDensityUpper = ', exclusiveMaterial);
   const surfaceGuard = grass.indexOf('If( canReachExactDensity', surfaceCeiling);
   const zoneFetch = grass.indexOf('const zoneSD = textureLevel( c.zoneTex', surfaceGuard);
   const edgeNoise = grass.indexOf('const edgeWarp = mx_noise_float', surfaceGuard);
@@ -229,40 +232,15 @@ test('packed surface and canopy guard is conservative and precedes zone and ecol
   const patchNoise = grass.indexOf('const patchBreak = mx_noise_float', surfaceGuard);
   const exactPredicate = grass.indexOf('const keepCandidate = hC.lessThan( densityTarget )', surfaceGuard);
   assert.ok(dataFetch >= 0 && canopyDecode > dataFetch && candidateDecode > canopyDecode
-    && canopyKeep > candidateDecode && surfaceCeiling > canopyKeep && surfaceGuard > surfaceCeiling,
+    && exclusiveMaterial > candidateDecode && surfaceCeiling > exclusiveMaterial && surfaceGuard > surfaceCeiling,
   'the existing packed fetch must decode surface and canopy before the nested guard');
   assert.ok(zoneFetch > surfaceGuard && edgeNoise > surfaceGuard
     && macroNoise > surfaceGuard && patchNoise > surfaceGuard && exactPredicate > surfaceGuard,
   'zone sampling, all three ecological noises, and the unchanged exact predicate must be nested behind the guard');
   assert.match(grass, /const canReachExactDensity = inBounds\.and\( turfCandidate \)[\s\S]*?hC\.lessThan\( surfaceDensityUpper \)/,
     'out-of-bounds, non-turf, and canopy-retired lanes must all stop at one conservative guard');
-  assert.match(grass, /If\( canopyMask\.greaterThan\( 0\.0 \), \(\) => \{[\s\S]*?densityTarget\.mulAssign\( mix\( 1\.0, CANOPY_DENSITY_FLOOR, canopyMask \) \)/,
-    'the exact final density expression must remain unchanged inside the guard');
-
-  // Exhaust every seven-bit canopy code against every eight-bit upward-bound
-  // bucket, with 256 substeps through each source interval. The exact base target
-  // cannot exceed the unquantized tile analytic value; multiplying both sides by
-  // the same nonnegative canopy keep proves the nested ceiling for every packed
-  // field value, including the zero-mask bit-identical path.
-  const densityFloor = scalar(grass, 'CANOPY_DENSITY_FLOOR');
-  for (let upperBucket = 0; upperBucket < 255; upperBucket++) {
-    const decodedUpper = (upperBucket + 1) / 255;
-    for (let substep = 0; substep < 256; substep++) {
-      const exactBaseUpper = (upperBucket + substep / 256) / 255;
-      for (let canopyByte = 0; canopyByte <= 127; canopyByte++) {
-        const canopy = canopyByte / 127;
-        const keep = 1 + (densityFloor - 1) * canopy;
-        const earlyCeiling = decodedUpper * keep;
-        const exactFinalUpper = exactBaseUpper * keep;
-        if (earlyCeiling + Number.EPSILON < exactFinalUpper) {
-          assert.fail(`canopy ceiling underflow at ${upperBucket}/${substep}/${canopyByte}`);
-        }
-      }
-    }
-  }
-  for (let canopyByte = 0; canopyByte <= 127; canopyByte++) {
-    const canopy = canopyByte / 127;
-    const keep = 1 + (densityFloor - 1) * canopy;
-    assert.equal(1 * keep, 1 * keep, 'the saturated upper bucket remains exact');
-  }
+  assert.match(grass, /grassSurfaceCandidate\.and\( canopyMask\.lessThanEqual\( 0\.0 \) \)/,
+    'pine-straw habitat must be an exclusive material class, never a blade-density blend');
+  assert.doesNotMatch(grass, /densityTarget[\s\S]{0,120}canopyMask/,
+    'grass density must not reintroduce blades after exclusive surface classification');
 });

@@ -1,7 +1,12 @@
 import { deriveSeed, createRng } from '../util/random.js';
 import { getCatalogAsset } from './EnvironmentCatalog.js';
+import { signedDistanceToFeature } from '../course/featureGeometry.js';
+import { routeCorridorSignedDistance } from '../course/RouteGeometry.js';
 
 const MAX_ATTEMPTS_PER_OBJECT = 256;
+const MAINTAINED_ENVIRONMENT_SURFACES = new Set([
+  'tee', 'fairway', 'green', 'fringe', 'sand', 'water',
+]);
 
 // Resolve semantic authoring records into immutable, renderer-ready placements.
 // Every requested object must be placed or the build fails; silently shortening a
@@ -13,7 +18,13 @@ export function resolveEnvironmentPlacements(course, catalog, terrain, biomeFiel
   const result = [];
   const occupied = [];
 
-  const append = (assetId, x, z, rotationY, scale, sourceId, authoredMinSpacing = 0) => {
+  const append = (
+    assetId, x, z, rotationY, scale, sourceId, authoredMinSpacing = 0,
+    {
+      habitatGroupId = null, habitatMassId = null, semantic = null,
+      region = null, seed = null, protectMaintainedSurface = false,
+    } = {},
+  ) => {
     const asset = getCatalogAsset(catalog, assetId);
     if (!asset.biomes.includes(course.biome)) return false;
     const biomeClassification = biomeField?.sample?.(x, z) ?? null;
@@ -23,6 +34,8 @@ export function resolveEnvironmentPlacements(course, catalog, terrain, biomeFiel
     const slope = Math.acos(Math.min(1, Math.max(-1, normal.y))) * 180 / Math.PI;
     if (slope > asset.placement.maxSlopeDegrees) return false;
     const radius = asset.bounds.radius * scale;
+    if (protectMaintainedSurface
+      && environmentFootprintTouchesMaintainedSurface(course, terrain, x, z, radius)) return false;
     const minSpacing = Math.max(asset.placement.minSpacing, authoredMinSpacing);
     for (const prior of occupied) {
       const pairSpacing = requiredPairSpacing({ assetId, asset, radius, minSpacing }, prior);
@@ -49,6 +62,11 @@ export function resolveEnvironmentPlacements(course, catalog, terrain, biomeFiel
       targetHeight: asset.dimensions.height * scale,
       habitat: biomeClassification?.habitat ?? null,
       vegetationWeight: suitability.vegetationWeight,
+      ...(habitatGroupId ? { habitatGroupId } : {}),
+      ...(habitatMassId ? { habitatMassId } : {}),
+      ...(semantic ? { semantic } : {}),
+      ...(region ? { region } : {}),
+      ...(Number.isInteger(seed) ? { seed } : {}),
     });
     result.push(placement);
     occupied.push({ x, z, minSpacing, assetId, category: asset.category, radius });
@@ -67,6 +85,19 @@ export function resolveEnvironmentPlacements(course, catalog, terrain, biomeFiel
     ...course.environment.edgeDressing.map((record) => ({ ...record, kind: 'edgeDressing' })),
   ].sort(byId);
   for (const record of distributed) {
+    const habitatMetadata = record.kind === 'assembly'
+      ? {
+        habitatGroupId: record.id,
+        habitatMassId: record.semantic === 'forest-cluster' || record.semantic === 'forest-understory'
+          ? (record.habitatMassId ?? record.id)
+          : null,
+        semantic: record.semantic ?? null,
+        region: Object.freeze({ ...record.region }),
+        seed: record.seed,
+        protectMaintainedSurface: record.semantic === 'forest-cluster'
+          || record.semantic === 'forest-understory',
+      }
+      : undefined;
     const random = createRng(deriveSeed(deriveSeed(course.environmentSeed, record.id), record.seed));
     const strikeRandom = createRng(deriveSeed(deriveSeed(course.environmentSeed, record.id), `${record.seed}:strike`));
     const sharedStrike = strikeRandom() * Math.PI * 2;
@@ -77,20 +108,102 @@ export function resolveEnvironmentPlacements(course, catalog, terrain, biomeFiel
       const p = candidate(record, random, placed);
       const scale = distributedScale(record, asset, random, placed);
       const rotationY = distributedRotationY(record, asset, random, sharedStrike);
-      if (append(assetId, p.x, p.z, rotationY, scale, `${record.id}-${placed}`, record.minSpacing)) placed++;
+      if (append(
+        assetId, p.x, p.z, rotationY, scale, `${record.id}-${placed}`,
+        record.minSpacing, habitatMetadata,
+      )) placed++;
     }
     if (placed !== record.count) {
       throw new Error(`Environment record "${record.id}" placed ${placed}/${record.count}; density, slope, or spacing is invalid.`);
     }
   }
 
-  const catalogObjectCount = course.environment.syntheticTrees
-    ? course.environment.objectCount - course.environment.syntheticTrees.length
+  const catalogObjectCount = course.environment.proceduralTrees
+    ? course.environment.objectCount - course.environment.proceduralTrees.length
     : course.environment.objectCount;
   if (result.length !== catalogObjectCount) {
     throw new Error(`Catalog environment placement count mismatch: ${result.length}/${catalogObjectCount}.`);
   }
   return Object.freeze(result);
+}
+
+// Forest-cluster regions are permitted to straddle a conservative fairway
+// clearance envelope, but the resolved objects are not permitted to do so. Use
+// exact route/feature geometry for the large maintained shapes and a bounded
+// sampling grid against Terrain.surfaceAt for the production sand/zone shapes.
+// This keeps region authoring flexible without allowing random placement to
+// gamble on a trunk or mature crown landing over playable turf.
+function environmentFootprintTouchesMaintainedSurface(course, terrain, x, z, radius) {
+  const footprintRadius = Math.max(0, radius);
+  const point = { x, z };
+
+  for (const green of course.greens ?? []) {
+    if (signedDistanceToFeature(green, x, z) > -(footprintRadius + (course.fringeW ?? 0))) return true;
+  }
+  for (const pond of course.ponds ?? []) {
+    if (signedDistanceToFeature(pond, x, z) > -footprintRadius) return true;
+  }
+  for (const tee of environmentTees(course)) {
+    if (tee.shape) {
+      if (signedDistanceToFeature({ x: tee.x, z: tee.z, r: 0, shape: tee.shape }, x, z) > -footprintRadius) return true;
+    } else if (circleIntersectsRect(point, footprintRadius, {
+      minX: tee.x - tee.boxHalfX, maxX: tee.x + tee.boxHalfX,
+      minZ: tee.z0, maxZ: tee.z1,
+    })) return true;
+  }
+  if (environmentFootprintTouchesFairway(course, x, z, footprintRadius)) return true;
+
+  if (typeof terrain.surfaceAt === 'function') {
+    const diameter = footprintRadius * 2;
+    // At most 25 samples per axis. Mature crowns therefore stay cheap to reject
+    // even when a dense strip needs many deterministic candidate attempts.
+    const samplesPerAxis = footprintRadius === 0
+      ? 1
+      : Math.min(25, Math.max(5, Math.ceil(diameter / 1.25) + 1));
+    const step = samplesPerAxis === 1 ? 0 : diameter / (samplesPerAxis - 1);
+    for (let row = 0; row < samplesPerAxis; row++) {
+      const dz = samplesPerAxis === 1 ? 0 : -footprintRadius + row * step;
+      for (let column = 0; column < samplesPerAxis; column++) {
+        const dx = samplesPerAxis === 1 ? 0 : -footprintRadius + column * step;
+        if (dx * dx + dz * dz > footprintRadius * footprintRadius + 1e-9) continue;
+        if (MAINTAINED_ENVIRONMENT_SURFACES.has(terrain.surfaceAt(x + dx, z + dz))) return true;
+      }
+    }
+  } else {
+    // Headless callers without the production surface classifier fail closed on
+    // the authored bunker footprint rather than silently accepting a hazard hit.
+    for (const bunker of course.bunkers ?? []) {
+      if (signedDistanceToFeature(bunker, x, z) > -footprintRadius) return true;
+    }
+  }
+  return false;
+}
+
+function environmentTees(course) {
+  return course.routing
+    ? course.routing.holes.flatMap((hole) => hole.tees)
+    : course.tee ? [course.tee] : [];
+}
+
+function environmentFootprintTouchesFairway(course, x, z, radius) {
+  if (course.routing) {
+    const routes = [
+      ...course.routing.holes.map((hole) => hole.route),
+      ...course.routing.transitions.map((transition) => ({
+        points: transition.points, c0: transition.width, k: 0, rough: transition.width * 0.75,
+      })),
+    ];
+    return routes.some((route) => routeCorridorSignedDistance(route, x, z) > -radius);
+  }
+  if (!course.corridor) return false;
+  const widestHalfWidth = course.corridor.c0 + (-(z - radius)) * course.corridor.k;
+  return Math.abs(x) < widestHalfWidth + radius;
+}
+
+function circleIntersectsRect(point, radius, rect) {
+  const dx = Math.max(rect.minX - point.x, 0, point.x - rect.maxX);
+  const dz = Math.max(rect.minZ - point.z, 0, point.z - rect.maxZ);
+  return Math.hypot(dx, dz) <= radius;
 }
 
 // Catalog vegetation opts into semantic transition habitats. This keeps a fern or
@@ -150,6 +263,33 @@ function distributedScale(record, asset, random, placed) {
     // Keep the first anchor tallest, then taper through supports and fill.
     const nativeHeight = Math.max(0.1, asset.dimensions?.height ?? 1);
     if (record.kind === 'assembly') {
+      if (record.semantic === 'forest-cluster') {
+        if (asset.id === 'polyhaven-fir-tree-01') {
+          // The accepted Fir Tree 01 variant is a 13.95 m source specimen. In a
+          // mature separator forest it owns the closed primary canopy role, so
+          // scale within a plausible adult 18–28 m envelope rather than inheriting
+          // the shorter open-pine tiers. Geometry and age class remain authored;
+          // this only restores the physical mature height represented by the
+          // source collection and lets adjacent crowns form a forest room.
+          if (placed === 0) return (25 + random() * 3) / nativeHeight;
+          if (placed < 4) return (21 + random() * 5) / nativeHeight;
+          return (18 + random() * 6) / nativeHeight;
+        }
+        // Mature anchors must remain plausible members of their authored age
+        // class. Inflating a naturally open 14.9 m pine to 25–45 m magnifies its
+        // bare trunk and makes a complete crown read as missing geometry. Keep
+        // one emergent, several supports and a native-scale canopy tier instead.
+        if (placed === 0) return (22 + random() * 3) / nativeHeight;
+        if (placed < 4) return (18 + random() * 5) / nativeHeight;
+        return (15 + random() * 5) / nativeHeight;
+      }
+      if (record.semantic === 'forest-understory') {
+        // Understory records retain their catalog age class. They may layer
+        // below a 25–45 m overstory, but can never be scaled into substitute
+        // mature trees. The narrow native-relative range keeps fir saplings at
+        // roughly 8–14 m and 1.3 m pine regeneration near its authored stature.
+        return 0.95 + random() * 0.60;
+      }
       if (placed === 0) return (20 + random() * 4) / nativeHeight;
       if (placed < 3) return (17 + random() * 4) / nativeHeight;
       return (13 + random() * 5) / nativeHeight;
@@ -172,7 +312,8 @@ function candidate(record, random, index) {
   const r = record.region;
   const width = r.maxX - r.minX;
   const depth = r.maxZ - r.minZ;
-  if (record.kind === 'assembly' && record.semantic === 'forest-cluster') {
+  if (record.kind === 'assembly'
+    && (record.semantic === 'forest-cluster' || record.semantic === 'forest-understory')) {
     // Forest communities already have tightly authored asymmetric bounds.  A
     // single expanding spiral trapped retries at one occupied radius once the
     // first few trees were placed, so valid 7 m spacing could never fill the
@@ -241,6 +382,13 @@ function requiredPairSpacing(current, prior) {
   const isTreeDeadwoodPair = (current.asset.category === 'tree' && prior.category === 'deadwood')
     || (current.asset.category === 'deadwood' && prior.category === 'tree');
   if (isTreeDeadwoodPair) return Math.max(1.5, combinedRadius * 0.25);
+  // Boulders are an under-canopy contact layer too. A tree's catalog radius is
+  // its full crown, so the generic crown rule would cut an implausibly large
+  // clearing around every woodland outcrop. Keep trunk/stone separation while
+  // allowing the authored rocks to remain inside the forest room.
+  const isTreeRockPair = (current.asset.category === 'tree' && prior.category === 'rock')
+    || (current.asset.category === 'rock' && prior.category === 'tree');
+  if (isTreeRockPair) return Math.max(1.5, combinedRadius * 0.18);
   // Mature canopy crowns are allowed to overlap at the edges of a community;
   // clear the trunks, not every leaf tip. The old 0.62 crown rule was authored
   // for small nursery-scale trees and rejects the larger Augusta perimeter trees

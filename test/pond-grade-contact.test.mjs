@@ -7,7 +7,7 @@ import { signedDistanceToFeature } from '../src/course/featureGeometry.js';
 // imported by Node's plain test runner (Three's node-material exports are
 // browser-bundler-only). Keep these contract tests independent while checking
 // the exact pure grade equations below against the source implementation.
-const rangeSource = await readFile(new URL('../src/scene/Range.js', import.meta.url), 'utf8');
+const rangeSource = await readFile(new URL('../src/scene/PlayableCourseScene.js', import.meta.url), 'utf8');
 
 const smoothstep = (a, b, x) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));

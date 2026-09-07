@@ -1,0 +1,686 @@
+{
+  "meta": {
+    "name": "Grasslands — Evening Walk",
+    "mode": "realistic",
+    "schema": 4,
+    "notes": "User-photo interpretation, not a survey. Three descending tee shelves frame a left wetland and a right hipped-roof clubhouse. The unseen par-4 routing, dimensions and green contours are inferred. Left water affects a pulled opening shot; a generous dry right line trades a longer approach for safety. A left landing bunker rewards a challenged inside line with a clear running approach to a tilted green. No existing course is replaced."
+  },
+  "catalogVersion": 2,
+  "placementAlgorithmVersion": 1,
+  "biome": "temperate-maritime",
+  "groundCover": "native-grasslands",
+  "forestFloorAreas": [],
+  "surfaceMaterials": {
+    "version": 1,
+    "turf": {
+      "parallax": 1,
+      "detailNormal": 1,
+      "ao": 0.62,
+      "selfShadow": 0.55,
+      "roughnessBase": 0.82,
+      "roughnessRange": 0.16,
+      "specular": 0.38,
+      "grazingRoughness": 0.4,
+      "saturation": 0.86,
+      "value": 0.86
+    },
+    "forestFloor": {
+      "reliefDepthMeters": 0.028,
+      "normalStrength": 0.72,
+      "sourceColorStrength": 1,
+      "macroVariation": 0.2,
+      "canopyAffinity": 0,
+      "crownCoreGrassDensity": 0,
+      "crownFeatherMeters": 0.45
+    }
+  },
+  "biomeTransitions": [],
+  "environmentSeed": 91842,
+  "bounds": {
+    "minX": -155,
+    "maxX": 145,
+    "minZ": -65,
+    "maxZ": 410
+  },
+  "tee": {
+    "x": -1.2246467991473533e-15,
+    "z": -10,
+    "boxHalfX": 8,
+    "z0": -22,
+    "z1": 9.797174393178826e-16
+  },
+  "corridor": {
+    "c0": 6,
+    "k": 0.035,
+    "rough": 4
+  },
+  "fringeW": 1.7,
+  "greens": [
+    {
+      "x": -4.999999999999958,
+      "z": 340,
+      "yards": 386,
+      "r": 12,
+      "contour": "tilt",
+      "shape": [
+        {
+          "x": 8.00000000000004,
+          "z": 332
+        },
+        {
+          "x": 7.000000000000042,
+          "z": 344
+        },
+        {
+          "x": 4.3107567329986835e-14,
+          "z": 352
+        },
+        {
+          "x": -11.999999999999957,
+          "z": 351
+        },
+        {
+          "x": -17.999999999999957,
+          "z": 342
+        },
+        {
+          "x": -14.99999999999996,
+          "z": 331
+        },
+        {
+          "x": -4.99999999999996,
+          "z": 327
+        }
+      ]
+    }
+  ],
+  "bunkers": [
+    {
+      "x": 19.000000000000025,
+      "z": 205,
+      "r": 7,
+      "depth": 0.85,
+      "pot": false,
+      "shape": [
+        {
+          "x": 25.000000000000025,
+          "z": 199
+        },
+        {
+          "x": 25.000000000000025,
+          "z": 205
+        },
+        {
+          "x": 23.000000000000025,
+          "z": 210
+        },
+        {
+          "x": 17.000000000000025,
+          "z": 213
+        },
+        {
+          "x": 12.000000000000025,
+          "z": 205
+        },
+        {
+          "x": 15.000000000000025,
+          "z": 199
+        }
+      ]
+    },
+    {
+      "x": -22.999999999999957,
+      "z": 337,
+      "r": 6,
+      "depth": 0.8,
+      "pot": false,
+      "shape": [
+        {
+          "x": -18.99999999999996,
+          "z": 330
+        },
+        {
+          "x": -17.999999999999957,
+          "z": 335
+        },
+        {
+          "x": -18.999999999999957,
+          "z": 339
+        },
+        {
+          "x": -24.999999999999957,
+          "z": 344
+        },
+        {
+          "x": -28.999999999999957,
+          "z": 339
+        },
+        {
+          "x": -27.99999999999996,
+          "z": 331
+        }
+      ]
+    }
+  ],
+  "ponds": [
+    {
+      "x": 47.00000000000001,
+      "z": 69,
+      "r": 28,
+      "depth": 1.5,
+      "shape": [
+        {
+          "x": 74,
+          "z": 40.99999999999999
+        },
+        {
+          "x": 59.00000000000001,
+          "z": 47.99999999999999
+        },
+        {
+          "x": 40.00000000000001,
+          "z": 44.99999999999999
+        },
+        {
+          "x": 24.000000000000007,
+          "z": 60
+        },
+        {
+          "x": 27.00000000000001,
+          "z": 86
+        },
+        {
+          "x": 42.000000000000014,
+          "z": 101
+        },
+        {
+          "x": 65.00000000000001,
+          "z": 94.99999999999999
+        },
+        {
+          "x": 81.00000000000001,
+          "z": 69.99999999999999
+        }
+      ]
+    }
+  ],
+  "landforms": [
+    {
+      "kind": "shelf",
+      "points": [
+        {
+          "x": -1.7145055188062944e-15,
+          "z": -14
+        }
+      ],
+      "width": 32,
+      "height": 3.2,
+      "falloff": 20
+    },
+    {
+      "kind": "plateau",
+      "points": [
+        {
+          "x": -1.999999999999997,
+          "z": 26
+        }
+      ],
+      "width": 12,
+      "height": 1.3,
+      "falloff": 13
+    },
+    {
+      "kind": "plateau",
+      "points": [
+        {
+          "x": -3.9999999999999925,
+          "z": 60
+        }
+      ],
+      "width": 10,
+      "height": 0.5,
+      "falloff": 11
+    },
+    {
+      "kind": "plateau",
+      "points": [
+        {
+          "x": -47.99999999999999,
+          "z": 78
+        }
+      ],
+      "width": 27,
+      "height": 0.6,
+      "falloff": 18
+    },
+    {
+      "kind": "swale",
+      "points": [
+        {
+          "x": 49.00000000000001,
+          "z": 68
+        }
+      ],
+      "width": 30,
+      "height": -1.2,
+      "falloff": 38
+    },
+    {
+      "kind": "ridge",
+      "points": [
+        {
+          "x": 66.00000000000003,
+          "z": 220
+        }
+      ],
+      "width": 38,
+      "height": 2.4,
+      "falloff": 70
+    },
+    {
+      "kind": "shoulder",
+      "points": [
+        {
+          "x": -20.99999999999996,
+          "z": 311
+        }
+      ],
+      "width": 26,
+      "height": 1.1,
+      "falloff": 48
+    },
+    {
+      "kind": "shelf",
+      "points": [
+        {
+          "x": 95.00000000000004,
+          "z": 385
+        }
+      ],
+      "width": 90,
+      "height": 7,
+      "falloff": 65
+    },
+    {
+      "kind": "shelf",
+      "points": [
+        {
+          "x": -89.99999999999996,
+          "z": 388
+        }
+      ],
+      "width": 85,
+      "height": 6,
+      "falloff": 70
+    }
+  ],
+  "routing": {
+    "activeHoleId": "evening-walk-hole",
+    "clubhouse": {
+      "x": -48,
+      "z": 78
+    },
+    "holes": [
+      {
+        "holeId": "evening-walk-hole",
+        "name": "Evening Walk",
+        "number": 1,
+        "par": 4,
+        "route": {
+          "points": [
+            {
+              "x": -1.2246467991473533e-15,
+              "z": -10
+            },
+            {
+              "x": -2.9999999999999916,
+              "z": 70
+            },
+            {
+              "x": 5.00000000000002,
+              "z": 170
+            },
+            {
+              "x": -11.999999999999966,
+              "z": 270
+            },
+            {
+              "x": -4.999999999999958,
+              "z": 340
+            }
+          ],
+          "c0": 6,
+          "k": 0.035,
+          "rough": 4,
+          "fairwayStartMeters": 94
+        },
+        "tees": [
+          {
+            "holeId": "evening-walk-hole",
+            "x": -1.2246467991473533e-15,
+            "z": -10,
+            "boxHalfX": 8,
+            "z0": -22,
+            "z1": 9.797174393178826e-16,
+            "shape": [
+              {
+                "x": 8,
+                "z": -9.797174393178826e-16
+              },
+              {
+                "x": -8,
+                "z": 9.797174393178826e-16
+              },
+              {
+                "x": -8.000000000000004,
+                "z": -22
+              },
+              {
+                "x": 7.999999999999997,
+                "z": -22
+              }
+            ]
+          },
+          {
+            "holeId": "evening-walk-hole",
+            "x": -1.999999999999997,
+            "z": 26,
+            "boxHalfX": 7,
+            "z0": 18,
+            "z1": 34,
+            "shape": [
+              {
+                "x": 5.000000000000004,
+                "z": 34
+              },
+              {
+                "x": -8.999999999999996,
+                "z": 34
+              },
+              {
+                "x": -8.999999999999998,
+                "z": 18
+              },
+              {
+                "x": 5.000000000000002,
+                "z": 18
+              }
+            ]
+          },
+          {
+            "holeId": "evening-walk-hole",
+            "x": -3.9999999999999925,
+            "z": 60,
+            "boxHalfX": 6,
+            "z0": 52,
+            "z1": 68,
+            "shape": [
+              {
+                "x": 2.0000000000000084,
+                "z": 68
+              },
+              {
+                "x": -9.999999999999991,
+                "z": 68
+              },
+              {
+                "x": -9.999999999999993,
+                "z": 52
+              },
+              {
+                "x": 2.000000000000006,
+                "z": 52
+              }
+            ]
+          }
+        ],
+        "greenStart": 0,
+        "greenCount": 1,
+        "bunkerStart": 0,
+        "bunkerCount": 2,
+        "pondStart": 0,
+        "pondCount": 1,
+        "landformStart": 0,
+        "landformCount": 9,
+        "fringeWidth": 1.7
+      }
+    ],
+    "transitions": []
+  },
+  "atmosphere": {
+    "climate": "temperate-maritime",
+    "season": "summer",
+    "localTime": "19:06",
+    "weather": "partly-cloudy",
+    "cloudCoverage": 0.14,
+    "windSpeedMph": 4,
+    "windDirectionDegrees": 250
+  },
+  "environment": {
+    "objectBudget": 700,
+    "placements": [
+      {
+        "id": "evening-walk-clubhouse",
+        "assetId": "grasslands-clubhouse",
+        "x": -48,
+        "z": 78,
+        "rotationY": 2.961592653589793,
+        "scale": 1
+      },
+      {
+        "id": "evening-canopy-anchor-0",
+        "assetId": "polyhaven-jacaranda-tree",
+        "x": 54,
+        "z": 140,
+        "scale": 0.78,
+        "rotationY": 3.141592653589793
+      },
+      {
+        "id": "evening-canopy-anchor-1",
+        "assetId": "polyhaven-jacaranda-tree",
+        "x": -46,
+        "z": 135,
+        "scale": 0.8,
+        "rotationY": 4.872592653589793
+      },
+      {
+        "id": "evening-canopy-anchor-2",
+        "assetId": "polyhaven-jacaranda-tree",
+        "x": -70,
+        "z": 153,
+        "scale": 0.85,
+        "rotationY": 6.603592653589793
+      },
+      {
+        "id": "evening-broadleaf-0",
+        "assetId": "polyhaven-island-tree-02",
+        "x": 78,
+        "z": 210,
+        "scale": 1,
+        "rotationY": 3.141592653589793
+      },
+      {
+        "id": "evening-broadleaf-1",
+        "assetId": "polyhaven-island-tree-01",
+        "x": 92,
+        "z": 265,
+        "scale": 0.9,
+        "rotationY": 4.872592653589793
+      },
+      {
+        "id": "evening-broadleaf-2",
+        "assetId": "polyhaven-island-tree-01",
+        "x": -79,
+        "z": 230,
+        "scale": 1.1,
+        "rotationY": 6.603592653589793
+      },
+      {
+        "id": "evening-broadleaf-3",
+        "assetId": "polyhaven-island-tree-02",
+        "x": 48,
+        "z": 344,
+        "scale": 1.1,
+        "rotationY": 8.334592653589795
+      },
+      {
+        "id": "evening-broadleaf-4",
+        "assetId": "polyhaven-island-tree-01",
+        "x": -41,
+        "z": 367,
+        "scale": 1,
+        "rotationY": 10.065592653589793
+      },
+      {
+        "id": "evening-broadleaf-5",
+        "assetId": "polyhaven-island-tree-01",
+        "x": 106,
+        "z": 370,
+        "scale": 1,
+        "rotationY": 11.796592653589794
+      },
+      {
+        "id": "evening-broadleaf-6",
+        "assetId": "polyhaven-island-tree-02",
+        "x": -110,
+        "z": 345,
+        "scale": 0.9,
+        "rotationY": 13.527592653589794
+      },
+      {
+        "id": "evening-distant-copse-0",
+        "assetId": "polyhaven-island-tree-02",
+        "x": 126,
+        "z": 374,
+        "scale": 0.92,
+        "rotationY": 3.141592653589793
+      },
+      {
+        "id": "evening-distant-copse-1",
+        "assetId": "polyhaven-island-tree-01",
+        "x": 115,
+        "z": 386,
+        "scale": 0.9600000000000001,
+        "rotationY": 4.872592653589793
+      },
+      {
+        "id": "evening-distant-copse-2",
+        "assetId": "polyhaven-island-tree-01",
+        "x": 101,
+        "z": 390,
+        "scale": 1,
+        "rotationY": 6.603592653589793
+      },
+      {
+        "id": "evening-distant-copse-3",
+        "assetId": "polyhaven-island-tree-02",
+        "x": 88,
+        "z": 379,
+        "scale": 0.92,
+        "rotationY": 8.334592653589795
+      },
+      {
+        "id": "evening-distant-copse-4",
+        "assetId": "polyhaven-island-tree-01",
+        "x": 79,
+        "z": 393,
+        "scale": 0.9600000000000001,
+        "rotationY": 10.065592653589793
+      },
+      {
+        "id": "evening-distant-copse-5",
+        "assetId": "polyhaven-island-tree-01",
+        "x": 64,
+        "z": 387,
+        "scale": 1,
+        "rotationY": 11.796592653589794
+      },
+      {
+        "id": "evening-distant-copse-6",
+        "assetId": "polyhaven-island-tree-02",
+        "x": 53,
+        "z": 396,
+        "scale": 0.92,
+        "rotationY": 13.527592653589794
+      },
+      {
+        "id": "evening-distant-copse-7",
+        "assetId": "polyhaven-island-tree-01",
+        "x": 39,
+        "z": 388,
+        "scale": 0.9600000000000001,
+        "rotationY": 15.258592653589794
+      },
+      {
+        "id": "evening-distant-copse-8",
+        "assetId": "polyhaven-island-tree-01",
+        "x": -42,
+        "z": 388,
+        "scale": 1,
+        "rotationY": 16.989592653589796
+      },
+      {
+        "id": "evening-distant-copse-9",
+        "assetId": "polyhaven-island-tree-02",
+        "x": -54,
+        "z": 396,
+        "scale": 0.92,
+        "rotationY": 18.720592653589794
+      },
+      {
+        "id": "evening-distant-copse-10",
+        "assetId": "polyhaven-island-tree-01",
+        "x": -66,
+        "z": 386,
+        "scale": 0.9600000000000001,
+        "rotationY": 20.451592653589795
+      },
+      {
+        "id": "evening-distant-copse-11",
+        "assetId": "polyhaven-island-tree-01",
+        "x": -77,
+        "z": 394,
+        "scale": 1,
+        "rotationY": 22.182592653589793
+      },
+      {
+        "id": "evening-distant-copse-12",
+        "assetId": "polyhaven-island-tree-02",
+        "x": -88,
+        "z": 380,
+        "scale": 0.92,
+        "rotationY": 23.913592653589795
+      },
+      {
+        "id": "evening-distant-copse-13",
+        "assetId": "polyhaven-island-tree-01",
+        "x": -100,
+        "z": 391,
+        "scale": 0.9600000000000001,
+        "rotationY": 25.644592653589793
+      },
+      {
+        "id": "evening-distant-copse-14",
+        "assetId": "polyhaven-island-tree-01",
+        "x": -116,
+        "z": 382,
+        "scale": 1,
+        "rotationY": 27.375592653589795
+      },
+      {
+        "id": "evening-distant-copse-15",
+        "assetId": "polyhaven-island-tree-02",
+        "x": -128,
+        "z": 394,
+        "scale": 0.92,
+        "rotationY": 29.106592653589793
+      }
+    ],
+    "scatter": [],
+    "assembly": [],
+    "edgeDressing": [],
+    "exclusions": [],
+    "proceduralTreeDefinitions": [],
+    "proceduralTrees": []
+  }
+}

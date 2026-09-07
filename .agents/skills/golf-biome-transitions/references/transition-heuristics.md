@@ -9,6 +9,10 @@ Build a transition in physical order. Later layers must follow the earlier ones.
 5. **Catalog assets:** select only biome-compatible catalog GLBs. Use transition habitat/vegetation weights to place coherent communities, keeping tees, greens, landing areas, recovery routes, and hazard visibility clear.
 6. **Atmosphere:** match distant color, haze, exposure, wind response, and horizon composition to the same transition. Atmosphere reinforces geography; it does not conceal a seam.
 
+At a course/backdrop join, both meshes must share the exact edge substrate and depth
+ownership. Introduce outward geology through irregular semantic weights on the
+backdrop itself; never add a third filler surface or a uniform material band.
+
 ## Profile choice
 
 - Natural resort: balanced, maintained inland edge; moderate dune and beach; clean view windows.
